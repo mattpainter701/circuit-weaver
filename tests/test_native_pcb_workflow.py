@@ -101,3 +101,44 @@ def test_real_placement_route_import_and_drc(tmp_path, native_tools, case):
         destination = Path(evidence) / case
         shutil.copytree(tmp_path, destination, dirs_exist_ok=True)
         (destination / "result.json").write_text(json.dumps({"placement": placement, "routing": route}, indent=2))
+
+
+@pytest.mark.skip_category("optional-tool")
+def test_rc_fixture_saves_missing_project_sidecar_with_native_settings(tmp_path, native_tools):
+    python, root = native_tools
+    fixture = Path(__file__).parent / "fixtures" / "make_basic_pcbs.py"
+    output = tmp_path / "rc.kicad_pcb"
+    wrapper = """
+import pcbnew, runpy, sys
+from pathlib import Path
+
+save_board = pcbnew.SaveBoard
+def save_without_project(path, board):
+    result = save_board(path, board)
+    if result:
+        Path(path).with_suffix(".kicad_pro").unlink(missing_ok=True)
+    return result
+pcbnew.SaveBoard = save_without_project
+fixture, footprints, output, case = sys.argv[1:5]
+sys.argv = [fixture, footprints, output, case]
+runpy.run_path(fixture, run_name="__main__")
+"""
+    process = subprocess.run(
+        [python, "-c", wrapper, str(fixture), str(root), str(output), "rc"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert process.returncode == 0, process.stdout + process.stderr
+
+    project_path = output.with_suffix(".kicad_pro")
+    assert project_path.is_file()
+    project = json.loads(project_path.read_text())
+    assert {"board", "net_settings", "meta"}.issubset(project)
+    assert project["board"]["design_settings"]["rules"]["min_track_width"] == 0.3
+    assert project["board"]["design_settings"]["rules"]["min_clearance"] == 0.25
+    default_class = next(item for item in project["net_settings"]["classes"] if item["name"] == "Default")
+    assert default_class["track_width"] == 0.35
+    assert default_class["clearance"] == 0.25
+    assert default_class["via_diameter"] == 0.7
+    assert default_class["via_drill"] == 0.3

@@ -68,6 +68,14 @@ if case == "rc":
     # Preserve the installed KiCad version's native project/schema metadata.
     # A hand-written partial project triggers different migrations in 8/9/10.
     project_path = output.with_suffix(".kicad_pro")
+    if not project_path.is_file():
+        # Some KiCad builds do not create the sidecar as a SaveBoard effect.
+        # Ask the installed native settings manager to serialize the board's
+        # real project settings rather than synthesizing a version-specific JSON.
+        if not pcbnew.GetSettingsManager().SaveProject(str(project_path), board.GetProject()):
+            raise RuntimeError(f"KiCad could not save native project settings: {project_path}")
+        if not project_path.is_file():
+            raise RuntimeError(f"KiCad did not create native project settings: {project_path}")
     project = json.loads(project_path.read_text())
     project["board"]["design_settings"]["rules"].update(min_track_width=0.3, min_clearance=0.25)
     default_class = next(c for c in project["net_settings"]["classes"] if c["name"] == "Default")
