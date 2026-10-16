@@ -140,7 +140,9 @@ def test_native_cleanup_resolves_front_and_back_reference_collisions(tmp_path, n
     for ref in ("R1", "R2", "C1"):
         for key in ("text", "layer", "size", "uuid", "locked"):
             assert after[ref][key] == before[ref][key]
-        assert after[ref]["angle"] == 0
+        # KiCad 8 canonicalizes some mirrored back fields to 180 degrees on
+        # save. Both 0 and 180 are horizontal; 90/270 remain invalid here.
+        assert after[ref]["angle"] % 180 == pytest.approx(0)
     assert after["R1"]["x"] != before["R1"]["x"] or after["R1"]["y"] != before["R1"]["y"]
     assert after["C1"]["x"] != before["C1"]["x"] or after["C1"]["y"] != before["C1"]["y"]
 
