@@ -61,6 +61,7 @@ Verification is conservative: a capability only claims the evidence level its pu
 | `design-wizard` | experimental | CLI: `design-wizard`; Skill: `design-wizard` | `static-parse` → `static-parse` | `command-contract`, `static-parse` | 0.32.1 |
 | `build-pcb` | experimental | CLI: `build-pcb`; Python: `circuit_weaver.schematic_pcb:schematic_to_pcb`; Skill: `circuit-weaver` | `static-parse` → `kicad-load` | `command-contract`, `static-parse`, `kicad-load`, `external-tool` | 0.35.0 |
 | `place-pcb` | experimental | CLI: `place-pcb`; Skill: `circuit-weaver` | `static-parse` → `static-parse` | `command-contract`, `external-tool`, `user-supplied` | 0.32.1 |
+| `preview-pcb` | review_only | CLI: `preview-pcb`; Python: `circuit_weaver.pcb_preview:render_board_preview`; Skill: `circuit-weaver` | `static-parse` → `kicad-load` | `command-contract`, `static-parse`, `kicad-load`, `external-tool` | 0.35.0 |
 | `log-status` | beta | CLI: `log-status` | not applicable (operational) | `command-contract` | 0.32.1 |
 | `log-view` | beta | CLI: `log-view` | not applicable (operational) | `command-contract` | 0.32.1 |
 | `autoroute` | review_only | CLI: `autoroute`; Skill: `circuit-weaver` | `static-parse` → `static-parse` | `command-contract`, `external-tool`, `user-supplied` | 0.32.1 |
@@ -364,7 +365,13 @@ tracks, and check the final PCB:
 circuit-weaver place-pcb board.kicad_pcb -o board_placed.kicad_pcb --seed 7
 circuit-weaver autoroute board_placed.kicad_pcb --attempts 3 \
     --routed-board board_routed.kicad_pcb
+circuit-weaver preview-pcb board_routed.kicad_pcb -o board-preview.svg
 ```
+
+The preview draws actual board layers and footprint body geometry. Use `--side back`
+for a mirrored underside or `--render-3d` for a native assembly-model PNG on KiCad 9+
+with the declared model files installed. The [workflow demo](docs/automation-validation.md)
+includes named preview controls and full-size views.
 
 KiCad's native Python is discovered separately from your application Python.
 Freerouting and a compatible Java runtime are required for routing. The input
