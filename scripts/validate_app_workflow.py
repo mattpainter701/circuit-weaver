@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import yaml
@@ -52,6 +53,26 @@ def verify_routing(payload: dict, board: Path) -> None:
     require(drc.get("blocker_count") == 0, "Native DRC has blockers")
     require(Path(drc.get("board", "")).resolve() == board.resolve(), "DRC refers to a different board")
     require(drc.get("board_sha256") == digest(board), "DRC does not match final board bytes")
+
+
+def verify_preview(payload: dict, board: Path, svg: Path, side: str) -> None:
+    """Bind a populated native preview to the exact routed board and SVG bytes."""
+    require(payload.get("status") == "ok", "Native board preview failed")
+    require(payload.get("source_sha256") == digest(board), "Preview refers to different board bytes")
+    require(payload.get("svg_sha256") == digest(svg), "Preview hash does not match SVG bytes")
+    require(payload.get("side") == side, "Preview shows the wrong board side")
+    require(payload.get("prototype") is True, "Preview omitted its review-only classification")
+    root = ET.parse(svg).getroot()
+    require(root.tag == "{http://www.w3.org/2000/svg}svg", "Preview is not an SVG document")
+    require(payload.get("outline_count", 0) > 0, "Preview has no actual board outline")
+    require(bool(payload.get("layers")), "Preview has no native layer inventory")
+    model = payload.get("model_preview")
+    if model is not None:
+        require(model.get("status") == "ok", "Requested model preview failed")
+        require(model.get("source_sha256") == digest(board), "Model render refers to different board bytes")
+        png = Path(model.get("output_path", ""))
+        require(png.is_file() and png.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"), "Model render is not a PNG")
+        require(model.get("png_sha256") == digest(png), "Model render hash does not match PNG bytes")
 
 
 def verify_blocked_assembly_delivery(payload: dict, delivery_dir: Path) -> dict:
@@ -160,11 +181,30 @@ class Demo:
             f"<td>{s.get('seconds', '')}</td><td><a href='{s['name']}.stdout.log'>output</a> "
             f"<a href='{s['name']}.stderr.log'>diagnostics</a></td></tr>" for s in self.steps
         )
-        previews = "".join(
-            f"<figure><figcaption>{html.escape(p.name)}</figcaption>"
-            f"<object type='image/svg+xml' data='{p.relative_to(self.output).as_posix()}'></object></figure>"
-            for p in (self.output / "board-preview.svg",) if p.is_file()
+        preview_views = [
+            ("models", "Assembly models", "board-preview.png",
+             "Native KiCad model render with the library's physical component bodies."),
+            ("front", "Front layers", "board-preview.svg",
+             "Actual copper, mask openings, silkscreen and footprint body outlines from KiCad."),
+            ("back", "Back layers", "board-preview-back.svg",
+             "Back-side native geometry, mirrored as viewed from beneath the board."),
+        ]
+        available = [view for view in preview_views if (self.output / view[2]).is_file()]
+        buttons = "".join(
+            f'<button type="button" data-board-view="{key}" aria-pressed="{str(i == 0).lower()}">{label}</button>'
+            for i, (key, label, _, _) in enumerate(available)
         )
+        panels = "".join(
+            f'<figure id="board-view-{key}" class="board-view" {"" if i == 0 else "hidden"}>'
+            f'<figcaption>{caption} <a href="{filename}" target="_blank" rel="noopener">Open full size</a></figcaption>'
+            f'<img src="{filename}" alt="{label} of the routed prototype board"></figure>'
+            for i, (key, label, filename, caption) in enumerate(available)
+        )
+        previews = (
+            '<section aria-label="Board preview"><h2>Board preview</h2>'
+            '<p>Engineering preview from the routed board. These views do not grant manufacturing approval.</p>'
+            f'<div class="board-controls" role="group" aria-label="Board view">{buttons}</div>{panels}</section>'
+        ) if available else ""
         schematic = "".join(
             f"<li><a href='{p.relative_to(self.output).as_posix()}'>{html.escape(p.name)}</a></li>"
             for p in sorted((self.output / "generated").rglob("*.svg"))
@@ -172,9 +212,16 @@ class Demo:
         page = f"""<!doctype html><meta charset="utf-8"><title>Circuit Weaver workflow demo</title>
 <style>body{{font:16px system-ui;background:#101827;color:#e3ecf7;margin:32px auto;max-width:1100px}}
 a{{color:#79d3ff}}h1{{font-size:30px}}.badge{{color:#8ce8b0}}table{{width:100%;border-collapse:collapse}}
-td,th{{padding:12px;border-bottom:1px solid #33445c;text-align:left}}object{{width:100%;height:420px;background:white}}
-figure{{margin:24px 0}}code{{overflow-wrap:anywhere}}p{{line-height:1.6}}</style>
+td,th{{padding:12px;border-bottom:1px solid #33445c;text-align:left}}
+figure{{margin:24px 0}}code{{overflow-wrap:anywhere}}p{{line-height:1.6}}
+.board-controls{{display:flex;gap:8px;flex-wrap:wrap}}button{{font:inherit;padding:10px 16px;border:1px solid #4a647c;
+border-radius:8px;background:#17283b;color:#e3ecf7;cursor:pointer}}button[aria-pressed="true"]{{background:#276652}}
+.board-view img{{display:block;width:100%;height:auto;max-height:78vh;object-fit:contain;background:#0b1220;
+border-radius:10px}}figcaption{{margin:12px 0;color:#b9cbdc}}[hidden]{{display:none!important}}
+details{{padding:14px 0;border-block:1px solid #33445c}}summary{{cursor:pointer;color:#79d3ff}}
+@media(max-width:1164px){{body{{margin:20px}}}}</style>
 <h1>Circuit Weaver · automated workflow</h1><p class="badge">{html.escape(summary['status'])}</p>
+{previews}<details><summary>Workflow details and downloads</summary>
 <p>Real KiCad schematic export, library footprints, placement, Freerouting, native DRC and delivery gates.
 Manufacturing authorization remains <strong>not ready</strong>: identity evidence and placement approval
 have not been supplied. A blocked manufacturing export is an expected successful gate check.</p>
@@ -183,10 +230,18 @@ have not been supplied. A blocked manufacturing export is an expected successful
 <a href="generated/placement_editor.html">Placement review</a> ·
 <a href="generated/confidence_report.html">Confidence report</a> ·
 <a href="delivery/delivery_manifest.json">Delivery manifest</a> ·
-<a href="prototype-positions.csv">Prototype positions (review only)</a></p>
+<a href="prototype-positions.csv">Prototype positions (review only)</a></p></details>
+<h2>Workflow evidence</h2>
 <table><tr><th>Step</th><th>Check result</th><th>Seconds</th><th>Evidence</th></tr>{rows}</table>
-{previews}<h2>Schematic sheets</h2><ul>{schematic}</ul>
-<p>{html.escape(summary.get('error', ''))}</p>"""
+<h2>Schematic sheets</h2><ul>{schematic}</ul>
+<p>{html.escape(summary.get('error', ''))}</p>
+<script>document.querySelectorAll('[data-board-view]').forEach(button => {{
+button.addEventListener('click', () => {{
+document.querySelectorAll('[data-board-view]').forEach(item => {{
+item.setAttribute('aria-pressed', String(item === button)); }});
+document.querySelectorAll('.board-view').forEach(panel => {{
+panel.hidden = panel.id !== 'board-view-' + button.dataset.boardView; }});
+}}); }});</script>"""
         (self.output / "index.html").write_text(page, encoding="utf-8")
 
 
@@ -248,6 +303,7 @@ def main() -> int:
     parser.add_argument("--clearance", type=float, default=0.127,
                         help="Prototype default clearance in mm (0.127 accommodates the sample USB connector)")
     parser.add_argument("--mcp-smoke", action="store_true")
+    parser.add_argument("--render-3d", action="store_true", help="Require a native assembly-model PNG (KiCad 9+)")
     parser.add_argument("--installed", action="store_true",
                         help="Test this Python's installed package, not checkout src/")
     args = parser.parse_args()
@@ -344,15 +400,16 @@ def main() -> int:
         demo.external("prototype-positions", [str(cli), "pcb", "export", "pos", "--format", "csv",
                                                "--units", "mm", "-o", str(output / "prototype-positions.csv"),
                                                str(routed)])
-        # KiCad 8's SVG exporter always uses one output file and has no mode flag.
-        svg_mode = [] if routing["drc"].get("tool_version", "").startswith("8.") else ["--mode-single"]
-        demo.external("board-preview", [str(cli), "pcb", "export", "svg", *svg_mode,
-                                        "--exclude-drawing-sheet", "--page-size-mode", "2",
-                                        "--layers", "F.Cu,B.Cu,F.SilkS,Edge.Cuts",
-                                        "-o", str(output / "board-preview.svg"), str(routed)])
-        preview = output / "board-preview.svg"
-        require(preview.is_file() and "<svg" in preview.read_text(encoding="utf-8"),
-                "KiCad board preview SVG was not produced")
+        summary["previews"] = {}
+        for side, filename in (("front", "board-preview.svg"), ("back", "board-preview-back.svg")):
+            model_args = ["--render-3d"] if args.render_3d and side == "front" else []
+            preview = output / filename
+            payload = demo.command(f"board-preview-{side}", [
+                "preview-pcb", str(routed), "-o", str(preview), "--side", side,
+                "--kicad-cli-path", str(cli), *model_args,
+            ])
+            verify_preview(payload, routed, preview, side)
+            summary["previews"][side] = payload
         if args.mcp_smoke:
             step = {"name": "mcp", "passed": False}
             demo.steps.append(step)

@@ -33,6 +33,13 @@ python -m pip install ".[mcp]"
 python scripts/validate_app_workflow.py --output /path/to/new-mcp-demo --mcp-smoke
 ```
 
+For a physical assembly preview with the board's installed library models, add
+`--render-3d` (requires KiCad 9+ and resolvable model files). The portable default
+produces front and mirrored-back SVG views on KiCad 8–10. The report has named
+view controls and full-size links; the SVGs use actual copper/mask, silkscreen,
+footprint body geometry, and the native board outline, including cutouts.
+The optional PNG is KiCad's model render, not an illustrated substitute.
+
 The MCP pass lists all five tools, validates and generates the same design,
 discovers projects, and verifies that malformed input, an empty research query,
 and missing readiness evidence are returned as MCP tool errors.
@@ -46,7 +53,9 @@ The runner executes static validation, `generate --require-kicad`, confidence
 reporting, `build-pcb`, native placement, routing/session import, and native
 KiCad DRC on the final PCB. It checks BOM/CPL export and its identity/sourcing
 blockers, checks source preservation, exercises status/resume, and exports a
-visual board preview. Routing must be complete, DRC must have zero blockers,
+front/back board previews. Preview evidence is bound to the routed board and
+output hashes, and native geometry must include a real outline and layer inventory.
+Routing must be complete, DRC must have zero blockers,
 and its SHA-256 must match the published board bytes. An unavailable router,
 failed command, incomplete route, or mismatched DRC hash fails the run.
 The demo explicitly disables Freerouting's post-route optimizer: the tested

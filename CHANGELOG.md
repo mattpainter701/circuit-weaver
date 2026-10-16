@@ -7,6 +7,12 @@
 - Preserve functional groups and support-part ownership in native `place-pcb` with a matching `--design`. Bind intent to actual footprint/net inventory, enforce explicit connector edge and rotation, and report missing access intent and excessive board whitespace.
 - Add opt-in native reference-field cleanup with retained collision diagnostics. The automated demo uses an explicit compact board outline, carries its design constraints through placement, and retains layout and silkscreen evidence alongside routed-board DRC.
 
+### Native board and component previews
+
+- Add `preview-pcb` front/back SVG views using actual KiCad copper, mask, silkscreen, footprint body geometry, and board outlines/cutouts, with source/output hashes and a mirrored physical underside view.
+- Add optional native assembly-model PNG rendering on KiCad 9+, resolving the board's declared model files in an isolated copy and recording their coverage and hashes. Missing models fail clearly.
+- Put named board-view controls and full-size previews into the automated workflow report; validate geometry-rich front/back fixtures on KiCad 8, 9, and 10. Rendering preserves source files and does not grant manufacturing approval.
+
 ### Generated schematic to routed prototype automation
 
 - Add `build-pcb` to forward-annotate a KiCad schematic into a separate prototype board using actual library footprints and exact pin/pad reconciliation. Missing footprints or incompatible pad maps block publication; prototype generation does not grant manufacturing approval.
