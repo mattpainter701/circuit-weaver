@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Placement intent and readable board layouts
+
+- Preserve functional groups and support-part ownership in native `place-pcb` with a matching `--design`. Bind intent to actual footprint/net inventory, enforce explicit connector edge and rotation, and report missing access intent and excessive board whitespace.
+- Add opt-in native reference-field cleanup with retained collision diagnostics. The automated demo uses an explicit compact board outline, carries its design constraints through placement, and retains layout and silkscreen evidence alongside routed-board DRC.
+
 ### Generated schematic to routed prototype automation
 
 - Add `build-pcb` to forward-annotate a KiCad schematic into a separate prototype board using actual library footprints and exact pin/pad reconciliation. Missing footprints or incompatible pad maps block publication; prototype generation does not grant manufacturing approval.

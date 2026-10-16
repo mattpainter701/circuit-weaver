@@ -6,6 +6,10 @@ import json
 import math
 import sys
 
+_SILK_CLEARANCE_MM = 0.2
+_SILK_EDGE_MARGIN_MM = 0.4
+_SILK_SEARCH_STEP_MM = 0.5
+
 
 def _identity(board):
     result = {}
@@ -25,6 +29,14 @@ def _inspect(board, pcbnew):
         pads = [{"number": p.GetNumber(), "net": p.GetNetname(),
                  "x": pcbnew.ToMM(p.GetPosition().x), "y": pcbnew.ToMM(p.GetPosition().y)}
                 for p in footprint.Pads()]
+        fields = [footprint.Reference(), footprint.Value(), *list(footprint.GetFields())]
+        field_state = []
+        seen_fields = set()
+        for field in fields:
+            if id(field) in seen_fields:
+                continue
+            seen_fields.add(id(field))
+            field_state.append((field, field.GetTextPos(), field.GetTextAngleDegrees()))
         footprint.SetOrientationDegrees(0)
         for row, pad in zip(pads, footprint.Pads()):
             row["local_x"] = pcbnew.ToMM(pad.GetPosition().x - position.x)
@@ -36,12 +48,29 @@ def _inspect(board, pcbnew):
         # THT connectors; a width/height alone cannot describe such parts.
         width = 2 * max(abs(box.GetX() - position.x), abs(box.GetRight() - position.x))
         height = 2 * max(abs(box.GetY() - position.y), abs(box.GetBottom() - position.y))
+        # Keep the true courtyard shape available to placement optimizers.
+        # Width/height above intentionally remain origin-symmetric for older
+        # consumers; off-center connectors can make those legacy values much
+        # larger than the actual courtyard rectangle.
+        courtyard_width = box.GetWidth()
+        courtyard_height = box.GetHeight()
+        courtyard_center_x = (box.GetX() + box.GetRight()) // 2 - position.x
+        courtyard_center_y = (box.GetY() + box.GetBottom()) // 2 - position.y
         footprint.SetOrientationDegrees(rotation)
+        # pcbnew may rotate footprint fields as a side effect of changing the
+        # footprint angle. Inspection must not alter their authored positions.
+        for field, text_position, text_angle in field_state:
+            field.SetTextPos(text_position)
+            field.SetTextAngleDegrees(text_angle)
         footprints.append({
             "ref": footprint.GetReference(), "footprint": str(footprint.GetFPID().GetLibItemName()),
             "x": pcbnew.ToMM(position.x), "y": pcbnew.ToMM(position.y), "rotation": rotation,
             "layer": "back" if footprint.GetLayer() == pcbnew.B_Cu else "front",
             "locked": footprint.IsLocked(), "width": pcbnew.ToMM(width), "height": pcbnew.ToMM(height),
+            "courtyard_width": pcbnew.ToMM(courtyard_width),
+            "courtyard_height": pcbnew.ToMM(courtyard_height),
+            "courtyard_center_x": pcbnew.ToMM(courtyard_center_x),
+            "courtyard_center_y": pcbnew.ToMM(courtyard_center_y),
             "pads": pads,
         })
     box = board.GetBoardEdgesBoundingBox()
@@ -65,6 +94,236 @@ def _inspect(board, pcbnew):
                        "width": pcbnew.ToMM(box.GetWidth()), "height": pcbnew.ToMM(box.GetHeight())}}
 
 
+def _box(item, pcbnew, margin_mm=0.0):
+    try:
+        bounds = item.GetBoundingBox()
+    except TypeError:
+        bounds = item.GetBoundingBox(False, False)
+    margin = pcbnew.FromMM(margin_mm)
+    return (bounds.GetX() - margin, bounds.GetY() - margin,
+            bounds.GetRight() + margin, bounds.GetBottom() + margin)
+
+
+def _box_from_bounds(bounds, pcbnew, margin_mm=0.0):
+    margin = pcbnew.FromMM(margin_mm)
+    return (bounds.GetX() - margin, bounds.GetY() - margin,
+            bounds.GetRight() + margin, bounds.GetBottom() + margin)
+
+
+def _boxes_overlap(a, b):
+    return a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1]
+
+
+def _courtyard_box(footprint, pcbnew):
+    layer = pcbnew.B_CrtYd if footprint.GetLayer() == pcbnew.B_Cu else pcbnew.F_CrtYd
+    courtyard = footprint.GetCourtyard(layer)
+    if not courtyard.IsEmpty():
+        return _box_from_bounds(courtyard.BBox(), pcbnew, _SILK_CLEARANCE_MM)
+    # Some library footprints omit courtyards. Use their non-text native
+    # footprint geometry as a conservative obstacle rather than treating the
+    # missing courtyard as free space.
+    return _box(footprint, pcbnew, _SILK_CLEARANCE_MM)
+
+
+def _silk_obstacles(board, pcbnew):
+    obstacles = {pcbnew.F_SilkS: [], pcbnew.B_SilkS: []}
+    for footprint in board.GetFootprints():
+        silk_layer = pcbnew.B_SilkS if footprint.GetLayer() == pcbnew.B_Cu else pcbnew.F_SilkS
+        obstacles[silk_layer].append(("courtyard", footprint.GetReference(), _courtyard_box(footprint, pcbnew)))
+        mask_layer = pcbnew.B_Mask if silk_layer == pcbnew.B_SilkS else pcbnew.F_Mask
+        for pad in footprint.Pads():
+            # Pad bboxes are copper geometry. A small expansion represents the
+            # solder-mask opening so reference ink cannot sit on exposed pads.
+            if pad.IsOnLayer(silk_layer) or pad.IsOnLayer(mask_layer):
+                obstacles[silk_layer].append(("pad_mask", footprint.GetReference(),
+                                              _box(pad, pcbnew, _SILK_CLEARANCE_MM)))
+        for item in footprint.GraphicalItems():
+            if item.GetLayer() == silk_layer:
+                obstacles[silk_layer].append(("silkscreen_graphics", footprint.GetReference(),
+                                              _box(item, pcbnew, _SILK_CLEARANCE_MM)))
+        for field in footprint.GetFields():
+            if field.GetTextTypeDescription() == "Reference":
+                continue
+            if field.GetLayer() == silk_layer and _field_visible(field):
+                obstacles[silk_layer].append(("silkscreen_graphics", footprint.GetReference(),
+                                              _box(field, pcbnew, _SILK_CLEARANCE_MM)))
+    for drawing in board.GetDrawings():
+        layer = drawing.GetLayer()
+        if layer in obstacles:
+            obstacles[layer].append(("silkscreen_graphics", "board", _box(drawing, pcbnew,
+                                                                            _SILK_CLEARANCE_MM)))
+    return obstacles
+
+
+def _field_visible(field):
+    try:
+        return bool(field.IsVisible())
+    except AttributeError:
+        return True
+
+
+def _reference_entries(board, pcbnew):
+    entries = []
+    for footprint in board.GetFootprints():
+        field = footprint.Reference()
+        layer = field.GetLayer()
+        if layer not in (pcbnew.F_SilkS, pcbnew.B_SilkS) or not _field_visible(field):
+            continue
+        entries.append({"ref": footprint.GetReference(), "footprint": footprint, "field": field,
+                        "layer": layer, "box": _box(field, pcbnew, _SILK_CLEARANCE_MM),
+                        "locked": bool(footprint.IsLocked() or field.IsLocked())})
+    return entries
+
+
+def _board_text_bounds(board, pcbnew):
+    bounds = board.GetBoardEdgesBoundingBox()
+    margin = pcbnew.FromMM(_SILK_EDGE_MARGIN_MM)
+    return (bounds.GetX() + margin, bounds.GetY() + margin,
+            bounds.GetRight() - margin, bounds.GetBottom() - margin)
+
+
+def _inside_bounds(box, bounds):
+    return box[0] >= bounds[0] and box[1] >= bounds[1] and box[2] <= bounds[2] and box[3] <= bounds[3]
+
+
+def _candidate_centers(courtyard, text_width, text_height, initial, bounds, pcbnew):
+    """Generate nearest positions around an expanded courtyard in stable rings."""
+    step = pcbnew.FromMM(_SILK_SEARCH_STEP_MM)
+    half_width = max(0, text_width // 2) + pcbnew.FromMM(_SILK_CLEARANCE_MM)
+    half_height = max(0, text_height // 2) + pcbnew.FromMM(_SILK_CLEARANCE_MM)
+    base = (courtyard[0] - half_width, courtyard[1] - half_height,
+            courtyard[2] + half_width, courtyard[3] + half_height)
+    span = max(bounds[2] - bounds[0], bounds[3] - bounds[1])
+    max_ring = max(1, int(math.ceil(span / step)))
+    seen = set()
+    yield initial
+    seen.add(initial)
+    for ring in range(max_ring + 1):
+        left, top = base[0] - ring * step, base[1] - ring * step
+        right, bottom = base[2] + ring * step, base[3] + ring * step
+        xs = {left, right}
+        ys = {top, bottom}
+        # Include the current center's projections and a regular grid along
+        # each edge so narrow openings between neighboring footprints remain
+        # discoverable.
+        xs.add(min(right, max(left, initial[0])))
+        ys.add(min(bottom, max(top, initial[1])))
+        x = left
+        while x <= right:
+            xs.add(x)
+            x += step
+        y = top
+        while y <= bottom:
+            ys.add(y)
+            y += step
+        candidates = {(x, top) for x in xs} | {(x, bottom) for x in xs}
+        candidates |= {(left, y) for y in ys} | {(right, y) for y in ys}
+        for candidate in sorted(candidates, key=lambda point: ((point[0] - initial[0]) ** 2 +
+                                                               (point[1] - initial[1]) ** 2,
+                                                               point[1], point[0])):
+            if candidate not in seen:
+                seen.add(candidate)
+                yield candidate
+
+
+def _tidy_reference_fields(board, pcbnew):
+    """Move visible unlocked reference fields clear of native silkscreen obstacles.
+
+    This changes only each unlocked reference field's position and text angle.
+    Its text, UUID, layer, size, values, and footprint positions remain intact.
+    """
+    obstacles = _silk_obstacles(board, pcbnew)
+    entries = _reference_entries(board, pcbnew)
+    bounds = _board_text_bounds(board, pcbnew)
+    moved = 0
+    normalized = 0
+
+    # References read cleanly across a board when the movable fields use the
+    # same horizontal orientation. Locked fields retain their authored angle.
+    for entry in entries:
+        if entry["locked"]:
+            continue
+        angle = float(entry["field"].GetTextAngleDegrees()) % 180.0
+        if min(angle, 180.0 - angle) > 0.01:
+            entry["field"].SetTextAngleDegrees(0.0)
+            normalized += 1
+    # Native text bounds depend on angle, so refresh the entries after rotation.
+    entries = _reference_entries(board, pcbnew)
+
+    # Locked footprints and fields reserve their current positions first.
+    ordered = sorted(entries, key=lambda entry: (not entry["locked"], entry["ref"]))
+    for entry in ordered:
+        if entry["locked"]:
+            continue
+        field = entry["field"]
+        pos = field.GetTextPos()
+        current_box = entry["box"]
+        courtyard = _courtyard_box(entry["footprint"], pcbnew)
+        # The courtyard is in obstacles in the same coordinate system. Find
+        # its exact obstacle to derive candidates outside the component body.
+        width = current_box[2] - current_box[0] - 2 * pcbnew.FromMM(_SILK_CLEARANCE_MM)
+        height = current_box[3] - current_box[1] - 2 * pcbnew.FromMM(_SILK_CLEARANCE_MM)
+        initial_center = ((current_box[0] + current_box[2]) // 2,
+                          (current_box[1] + current_box[3]) // 2)
+        # Keep the field's native origin/justification offset while testing
+        # translated native bboxes.
+        origin_offset = (pos.x - initial_center[0], pos.y - initial_center[1])
+        fixed_obstacles = obstacles[entry["layer"]]
+        other_refs = [other for other in entries if other is not entry and other["layer"] == entry["layer"]]
+        chosen = None
+        for center in _candidate_centers(courtyard, width, height, initial_center, bounds, pcbnew):
+            dx, dy = center[0] - initial_center[0], center[1] - initial_center[1]
+            candidate_box = (current_box[0] + dx, current_box[1] + dy,
+                             current_box[2] + dx, current_box[3] + dy)
+            if not _inside_bounds(candidate_box, bounds):
+                continue
+            if any(_boxes_overlap(candidate_box, obstacle[2]) for obstacle in fixed_obstacles):
+                continue
+            if any(_boxes_overlap(candidate_box, other["box"]) for other in other_refs):
+                continue
+            chosen = (center, (center[0] + origin_offset[0], center[1] + origin_offset[1]))
+            break
+        if chosen is None:
+            continue
+        center, new_origin = chosen
+        if center != initial_center:
+            field.SetTextPos(pcbnew.VECTOR2I(new_origin[0], new_origin[1]))
+            moved += 1
+            delta = (center[0] - initial_center[0], center[1] - initial_center[1])
+            entry["box"] = (current_box[0] + delta[0], current_box[1] + delta[1],
+                            current_box[2] + delta[0], current_box[3] + delta[1])
+    return {"requested": True, "moved_count": moved, "orientation_normalized_count": normalized}
+
+
+def _reference_conflict_report(board, pcbnew, moved_count, orientation_normalized_count):
+    obstacles = _silk_obstacles(board, pcbnew)
+    entries = _reference_entries(board, pcbnew)
+    bounds = _board_text_bounds(board, pcbnew)
+    conflict_counts = {"courtyard": 0, "pad_mask": 0, "silkscreen_graphics": 0,
+                       "reference_reference": 0, "edge": 0}
+    conflicted_refs = set()
+    for entry in entries:
+        box = entry["box"]
+        if not _inside_bounds(box, bounds):
+            conflict_counts["edge"] += 1
+            conflicted_refs.add(entry["ref"])
+        for kind, _owner, obstacle in obstacles[entry["layer"]]:
+            if _boxes_overlap(box, obstacle):
+                conflict_counts[kind] += 1
+                conflicted_refs.add(entry["ref"])
+    for index, first in enumerate(entries):
+        for second in entries[index + 1:]:
+            if first["layer"] == second["layer"] and _boxes_overlap(first["box"], second["box"]):
+                conflict_counts["reference_reference"] += 1
+                conflicted_refs.update((first["ref"], second["ref"]))
+    return {"requested": True, "moved_count": moved_count,
+            "orientation_normalized_count": orientation_normalized_count,
+            "unresolved_count": len(conflicted_refs),
+            "unresolved_references": sorted(conflicted_refs),
+            "remaining_conflict_count": sum(conflict_counts.values()),
+            "conflict_counts": conflict_counts}
+
+
 def execute(request):
     import pcbnew
 
@@ -73,6 +332,7 @@ def execute(request):
         raise ValueError("KiCad could not load the board")
     identity = _identity(board)
     operation = request["operation"]
+    tidy_summary = None
     if operation == "inspect":
         return {"status": "ok", **_inspect(board, pcbnew)}
     if operation == "export_dsn":
@@ -112,8 +372,26 @@ def execute(request):
                 raise ValueError(f"{ref}: refusing to move a locked footprint")
         for ref, p in placements.items():
             f = board.FindFootprintByReference(ref)
-            f.SetPosition(pcbnew.VECTOR2I(round(p["x"] * 1_000_000), round(p["y"] * 1_000_000)))
-            f.SetOrientationDegrees(p["rotation"])
+            target = pcbnew.VECTOR2I(round(p["x"] * 1_000_000), round(p["y"] * 1_000_000))
+            current = f.GetPosition()
+            current_rotation = float(f.GetOrientationDegrees())
+            rotation_delta = abs((current_rotation - float(p["rotation"]) + 180.0) % 360.0 - 180.0)
+            if current.x != target.x or current.y != target.y or rotation_delta > 1e-6:
+                f.SetPosition(target)
+                f.SetOrientationDegrees(p["rotation"])
+        if request.get("tidy_references") is True:
+            placement_positions = {
+                footprint.GetReference(): (footprint.GetPosition().x, footprint.GetPosition().y,
+                                           footprint.GetOrientationDegrees(), footprint.GetLayer())
+                for footprint in board.GetFootprints()
+            }
+            tidy_summary = _tidy_reference_fields(board, pcbnew)
+            for footprint in board.GetFootprints():
+                expected = placement_positions[footprint.GetReference()]
+                actual = (footprint.GetPosition().x, footprint.GetPosition().y,
+                          footprint.GetOrientationDegrees(), footprint.GetLayer())
+                if actual != expected:
+                    raise ValueError(f"Reference cleanup unexpectedly moved footprint {footprint.GetReference()}")
     else:
         raise ValueError(f"Unknown KiCad operation: {operation}")
     if _identity(board) != identity:
@@ -123,7 +401,13 @@ def execute(request):
     reloaded = pcbnew.LoadBoard(request["output"])
     if reloaded is None or _identity(reloaded) != identity:
         raise ValueError("Saved board failed pad/net identity verification")
-    return {"status": "ok", "version": pcbnew.Version(), **_inspect(reloaded, pcbnew)}
+    result = {"status": "ok", "version": pcbnew.Version(), **_inspect(reloaded, pcbnew)}
+    if tidy_summary is not None:
+        result["silkscreen"] = _reference_conflict_report(
+            reloaded, pcbnew, tidy_summary["moved_count"],
+            tidy_summary["orientation_normalized_count"],
+        )
+    return result
 
 
 if __name__ == "__main__":

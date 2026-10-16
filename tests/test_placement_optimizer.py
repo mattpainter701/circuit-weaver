@@ -350,6 +350,70 @@ def test_support_passive_starts_and_stays_near_owner():
     assert result["quality"]["max_support_distance_mm"] < 6.0
 
 
+def test_parent_affinity_uses_nearest_rotated_shared_signal_pads():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        _cost_parent_affinity,
+        _parent_affinity_distance,
+    )
+
+    parent = ComponentPlacement(
+        "J1", 10, 10, rotation=90, net_pad_offsets={"VBUS": [(2, 0), (10, 0)]}
+    )
+    support = ComponentPlacement(
+        "C5", 12, 8, rotation=180, parent_ref="J1", placement_role="decoupling",
+        net_pad_offsets={"VBUS": [(2, 0)]},
+    )
+
+    distance, model = _parent_affinity_distance(parent, support)
+
+    assert distance == pytest.approx(0.0)
+    assert model == "pad_endpoints"
+    assert _cost_parent_affinity([parent, support]) == pytest.approx(0.0)
+    # Center-only affinity would see a nonzero separation despite coincident pads.
+    assert math.hypot(parent.x - support.x, parent.y - support.y) > 2.0
+
+
+def test_parent_affinity_ignores_ground_pad_coincidence_and_falls_back_to_centers():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        _parent_affinity_distance,
+    )
+
+    parent = ComponentPlacement("U1", 10, 10, net_pad_offsets={"GND": [(20, 0)]})
+    support_with_ground = ComponentPlacement(
+        "C1", 30, 10, parent_ref="U1", net_pad_offsets={"GND": [(0, 0)]}
+    )
+    support_without_metadata = ComponentPlacement("C1", 30, 10, parent_ref="U1")
+
+    ground_distance, ground_model = _parent_affinity_distance(parent, support_with_ground)
+    center_distance, center_model = _parent_affinity_distance(parent, support_without_metadata)
+
+    assert ground_distance == pytest.approx(20.0)
+    assert center_distance == pytest.approx(20.0)
+    assert ground_model == center_model == "component_centers"
+
+
+def test_support_distance_quality_reports_pad_endpoint_model_when_available():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        PlacementConfig,
+        _build_result,
+    )
+
+    parent = ComponentPlacement("U1", 10, 10, net_pad_offsets={"VBUS": [(2, 0)]})
+    support = ComponentPlacement(
+        "C1", 15, 10, parent_ref="U1", net_pad_offsets={"VBUS": [(0, 0)]}
+    )
+    result = _build_result([parent, support], PlacementConfig(), 0, 0, 0)
+
+    assert result["quality"]["support_distance_model"] == "pad_endpoints"
+    assert result["quality"]["support_distances"] == [
+        {"support_ref": "C1", "parent_ref": "U1", "distance_mm": 3.0, "model": "pad_endpoints"}
+    ]
+    assert result["quality"]["max_support_distance_mm"] == 3.0
+
+
 def test_rf_and_usb_categories_have_explicit_edge_zones():
     from circuit_weaver.placement_optimizer import PlacementConfig, optimize_placement
 
@@ -446,6 +510,137 @@ def test_machine_constraints_override_board_and_drive_fixed_edge_and_keepout_pla
     assert evaluation["applied_count"] == 4
     assert evaluation["unsupported"] == []
     assert evaluation["violations"] == []
+
+
+def test_edge_constraint_rotation_is_explicit_and_remains_independent_of_position():
+    from circuit_weaver.placement_optimizer import PlacementConfig, optimize_placement
+
+    component = _make_comp("J1", category="connector", footprint="USB-C")
+    result = optimize_placement(
+        [component],
+        config=PlacementConfig(strategy="balanced", iterations=80, seed=9),
+        constraints=[
+            {"kind": "placement", "target": "J1", "edge": "bottom", "max_distance_mm": 0.25,
+             "rotation": 270}
+        ],
+    )
+
+    placement = result["placements"]["J1"]
+    assert placement["rotation"] == 270
+    assert placement["rotation_locked"] is True
+    assert placement["constraint_locked"] is False
+    assert result["constraint_evaluation"]["violations"] == []
+    assert result["quality"]["review_required"] is False
+
+
+def test_nonorthogonal_edge_orientation_uses_rotated_footprint_extent():
+    from circuit_weaver.placement_optimizer import PlacementConfig, optimize_placement
+
+    result = optimize_placement(
+        [_make_comp("J1", category="connector", footprint="USB-C")],
+        config=PlacementConfig(strategy="simple", board_width_mm=50, board_height_mm=40),
+        constraints=[
+            {"kind": "placement", "target": "J1", "edge": "bottom", "max_distance_mm": 0,
+             "rotation": 45}
+        ],
+    )
+
+    placement = result["placements"]["J1"]
+    assert placement["rotation"] == 45
+    assert result["constraint_evaluation"]["violations"] == []
+    assert result["quality"]["outside_board"] == []
+
+
+@pytest.mark.parametrize("rotation", [None, "sideways", float("nan"), float("inf"), True])
+def test_malformed_edge_rotation_is_reported_unsupported(rotation):
+    from circuit_weaver.placement_optimizer import PlacementConfig, optimize_placement
+
+    result = optimize_placement(
+        [_make_comp("J1", category="connector")],
+        config=PlacementConfig(strategy="simple"),
+        constraints=[{"kind": "placement", "target": "J1", "edge": "bottom", "rotation": rotation}],
+    )
+
+    unsupported = result["constraint_evaluation"]["unsupported"]
+    assert len(unsupported) == 1
+    assert "rotation must be a finite number" in unsupported[0]["reason"]
+    assert result["quality"]["review_required"] is True
+
+
+def test_edge_orientation_does_not_overwrite_a_fixed_rotation():
+    from circuit_weaver.placement_optimizer import PlacementConfig, optimize_placement
+
+    result = optimize_placement(
+        [_make_comp("J1", category="connector")],
+        config=PlacementConfig(strategy="simple", board_width_mm=50, board_height_mm=40),
+        constraints=[
+            {"kind": "placement", "target": "J1", "x_mm": 20.123, "y_mm": 20.456, "rotation": 45},
+            {"kind": "placement", "target": "J1", "edge": "bottom", "rotation": 90},
+        ],
+    )
+
+    placement = result["placements"]["J1"]
+    assert (placement["x"], placement["y"], placement["rotation"]) == (20.123, 20.456, 45.0)
+    assert placement["constraint_locked"] is True
+    assert result["constraint_evaluation"]["violations"]
+    assert any(v["kind"] == "edge_orientation" for v in result["constraint_evaluation"]["violations"])
+
+
+def test_functional_grouping_uses_block_then_section_and_excludes_support_parts():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        PlacementConfig,
+        _cost_functional_grouping,
+        _functional_group_metrics,
+        _total_cost,
+    )
+
+    close = [
+        ComponentPlacement("U1", 10, 10, block_id="usb"),
+        ComponentPlacement("U2", 12, 10, block_id="USB"),
+        ComponentPlacement("U3", 80, 60, functional_section="power"),
+        ComponentPlacement("U4", 82, 60, functional_section="POWER"),
+        ComponentPlacement("C1", 11, 11, block_id="usb", parent_ref="U1"),
+    ]
+    spread = [ComponentPlacement(**{**placement.__dict__}) for placement in close]
+    spread[1].x = 50
+    spread[3].x = 30
+
+    assert _cost_functional_grouping(close) < _cost_functional_grouping(spread)
+    assert _total_cost(close, PlacementConfig(strategy="simple")) > _total_cost(
+        [ComponentPlacement(**{**placement.__dict__, "block_id": "", "functional_section": ""})
+         for placement in close],
+        PlacementConfig(strategy="simple"),
+    )
+    metrics = _functional_group_metrics(close)
+    assert {(item["grouping"], item["id"], tuple(item["refs"])) for item in metrics} == {
+        ("block_id", "usb", ("U1", "U2")),
+        ("functional_section", "power", ("U3", "U4")),
+    }
+    assert _cost_functional_grouping(spread) == _cost_functional_grouping(
+        [ComponentPlacement(**{**placement.__dict__, "x": placement.x + 1000}) for placement in spread]
+    )
+
+
+def test_result_reports_functional_group_span_and_optimizer_preserves_group_metadata():
+    from circuit_weaver.placement_optimizer import PlacementConfig, optimize_placement
+
+    left = _make_comp("U1", category="digital")
+    right = _make_comp("U2", category="digital")
+    left.block_id = right.block_id = "controller"
+    left.functional_section = right.functional_section = "communications"
+    result = optimize_placement([left, right], config=PlacementConfig(strategy="simple"))
+
+    groups = result["functional_grouping"]["groups"]
+    assert groups == [{
+        "grouping": "block_id",
+        "id": "controller",
+        "refs": ["U1", "U2"],
+        "member_count": 2,
+        "mean_pairwise_distance_mm": pytest.approx(7.5),
+        "max_pairwise_distance_mm": pytest.approx(7.5),
+    }]
+    assert result["functional_grouping"]["objective_cost"] >= 0
 
 
 def test_unmachine_readable_placement_constraint_is_never_claimed_as_applied():

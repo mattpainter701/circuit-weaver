@@ -422,6 +422,7 @@ Place actual footprints on an unrouted rectangular board and check physical DRC.
 
 ```bash
 circuit-weaver place-pcb board.kicad_pcb -o board_placed.kicad_pcb --iterations 5000 --seed 7
+circuit-weaver place-pcb board.kicad_pcb -o board_placed.kicad_pcb --design design.yaml --tidy-references
 ```
 
 Requires real pads, nets, a closed rectangular Edge.Cuts outline, and KiCad's
@@ -431,6 +432,25 @@ source. `--overwrite` allows replacement of a previous output; failures preserve
 it. `--kicad-python-path` overrides interpreter discovery. The returned DRC may
 include expected unconnected items because placement precedes routing; all other
 DRC errors block publication. Project `.kicad_pro` and `.kicad_dru` files are copied.
+
+`--design` binds matching YAML/JSON design intent to the native reference,
+footprint and net inventory. It retains functional blocks and generated support
+ownership, so bypass capacitors and terminations stay with their owning parts.
+Stale or mismatched intent fails. Board dimensions must already match Edge.Cuts;
+placement never resizes an existing board. Explicit edge constraints can include
+`rotation` while leaving the position along that edge free to optimize:
+
+```yaml
+pcb_constraints:
+  - {kind: placement, target: J1, edge: bottom, rotation: 0, max_distance_mm: 0.5}
+```
+
+The edge applies to the footprint envelope, with the configured board clearance.
+Determine the mating direction from the actual footprint drawing; a J reference
+alone cannot establish it. `layout_review` reports missing connector intent and
+sparse-board warnings separately from DRC and manufacturing approval.
+`--tidy-references` relocates native reference fields to readable positions and
+reports unresolved collisions; locked footprints retain their reference fields.
 
 ## autoroute
 
