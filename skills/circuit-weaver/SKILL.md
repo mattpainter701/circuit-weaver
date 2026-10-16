@@ -1009,6 +1009,7 @@ All Python operations accept **command-line arguments only**, no interactive pro
 - `export-dual-cpl design.yaml --pcb board.kicad_pcb --output ./export`
 - `import-placement placement.svg board.kicad_pcb [-o placed.kicad_pcb] [--allow-partial]`
 - `autoroute board.kicad_pcb -o routed.ses`
+- `preview-pcb routed.kicad_pcb -o board-preview.svg [--side front|back] [--render-3d]`
 - `confidence design.yaml [--run-sims] [--pcb file.kicad_pcb] [-o report.html] [--json]`
 - `simulate design.yaml [-o ./sims] [--type power|signal|thermal|all] [--json]`
 - `discover [--root .] [--depth 2] [--json]`
@@ -1017,6 +1018,11 @@ All Python operations accept **command-line arguments only**, no interactive pro
 - `log-view project_dir` (show recent log entries)
 
 This ensures the skill can call them without dealing with subprocess stdin/stdout complexity.
+
+`preview-pcb` draws actual board layers and footprint fabrication geometry; its
+back view is physically mirrored. Optional `--render-3d` uses the board's declared
+model files with KiCad 9+, and fails clearly if models cannot be resolved. A
+render is an engineering view and does not grant manufacturing approval.
 
 ### Validation Output Handling
 

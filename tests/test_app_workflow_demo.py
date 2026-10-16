@@ -32,6 +32,23 @@ def test_demo_rejects_partial_routing_even_with_clean_drc(tmp_path):
         _demo.verify_routing({"routing_complete": False, "drc": {"passed": True}}, tmp_path / "board.kicad_pcb")
 
 
+def test_demo_rejects_preview_for_stale_board_or_changed_svg(tmp_path):
+    board = tmp_path / "routed.kicad_pcb"
+    board.write_text("verified board")
+    svg = tmp_path / "board-preview.svg"
+    svg.write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
+    payload = {"status": "ok", "source_sha256": _demo.digest(board), "svg_sha256": _demo.digest(svg),
+               "side": "front", "prototype": True, "outline_count": 1, "layers": ["F.Cu", "F.Fab"]}
+    _demo.verify_preview(payload, board, svg, "front")
+    board.write_text("changed board")
+    with pytest.raises(RuntimeError, match="different board bytes"):
+        _demo.verify_preview(payload, board, svg, "front")
+    payload["source_sha256"] = _demo.digest(board)
+    svg.write_text('<svg xmlns="http://www.w3.org/2000/svg"><path/></svg>')
+    with pytest.raises(RuntimeError, match="SVG bytes"):
+        _demo.verify_preview(payload, board, svg, "front")
+
+
 def test_demo_retains_captured_subprocess_error_detail():
     error = subprocess.CalledProcessError(128, ["git", "rev-parse", "HEAD"],
                                          stderr="fatal: detected dubious ownership in repository")

@@ -3993,6 +3993,20 @@ def main() -> None:
     build_p.add_argument("--overwrite", action="store_true")
     build_p.add_argument("--kicad-python-path", help="Python interpreter with KiCad pcbnew installed")
 
+    preview_p = subparsers.add_parser(
+        "preview-pcb", help="Draw a board preview from actual KiCad copper and footprint geometry"
+    )
+    preview_p.add_argument("kicad_pcb", help="Source .kicad_pcb with a closed Edge.Cuts outline")
+    preview_p.add_argument("--output", "-o", required=True, help="Standalone .svg output")
+    preview_p.add_argument("--side", choices=["front", "back"], default="front")
+    preview_p.add_argument(
+        "--render-3d", action="store_true", help="Also render a native assembly-model PNG (KiCad 9+)"
+    )
+    preview_p.add_argument("--timeout", type=float, default=120)
+    preview_p.add_argument("--overwrite", action="store_true")
+    preview_p.add_argument("--kicad-cli-path", help="Explicit KiCad CLI executable")
+    preview_p.add_argument("--kicad-python-path", help="Python interpreter with KiCad pcbnew installed")
+
     place_p = subparsers.add_parser("place-pcb", help="Place real footprints on an unrouted rectangular KiCad board")
     place_p.add_argument("kicad_pcb", help="Real .kicad_pcb with footprints, pads, nets, and Edge.Cuts")
     place_p.add_argument("--output", "-o", required=True, help="Separate placed .kicad_pcb output")
@@ -5323,6 +5337,30 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
             args.schematic, args.output, width_mm=args.width, height_mm=args.height,
             clearance_mm=args.clearance, overwrite=args.overwrite, kicad_python_path=args.kicad_python_path,
         ))
+        _print_json(result)
+        raise SystemExit(0 if result["status"] == "ok" else 1)
+
+    if args.command == "preview-pcb":
+        from .pcb_preview import render_board_preview
+
+        result = _run_with_stderr_capture(lambda: render_board_preview(
+            args.kicad_pcb, args.output, side=args.side, timeout_seconds=args.timeout,
+            overwrite=args.overwrite, kicad_cli=args.kicad_cli_path, kicad_python_path=args.kicad_python_path,
+        ))
+        if result["status"] == "ok" and args.render_3d:
+            from .pcb_model_preview import render_board_model
+
+            result["model_preview"] = _run_with_stderr_capture(lambda: render_board_model(
+                args.kicad_pcb, Path(args.output).with_suffix(".png"), side=args.side,
+                timeout_seconds=args.timeout, overwrite=args.overwrite, kicad_cli=args.kicad_cli_path,
+            ))
+            if result["model_preview"]["status"] != "ok":
+                result["status"] = "error"
+                model_error = (
+                    result["model_preview"].get("message")
+                    or result["model_preview"].get("reason", "unknown error")
+                )
+                result["message"] = "SVG generated, but requested model preview failed: " + str(model_error)
         _print_json(result)
         raise SystemExit(0 if result["status"] == "ok" else 1)
 
