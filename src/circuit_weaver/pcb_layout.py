@@ -52,8 +52,9 @@ def _center_constraints(constraints: list[dict], footprints: list[dict], bounds:
 def _native_origin(placement: dict, offset: tuple[float, float], bounds: dict) -> tuple[float, float]:
     dx, dy = _rotated_offset(*offset, placement["rotation"])
     x, y = placement["x"] + bounds["x"] - dx, placement["y"] + bounds["y"] - dy
-    # KiCad's DSN uses (resolution um 10). Quantize new movable coordinates
-    # before publication so routing can retain their exact native positions.
+    # Native KiCad DSN export uses tenths of a micrometer for positions.
+    # Quantize new movable coordinates before publication so routing can retain
+    # their exact native positions (0.1 um = 0.0001 mm).
     # Authored fixed positions and existing board locks retain full precision.
     if not placement.get("constraint_locked"):
         x, y = round(x, 4), round(y, 4)
@@ -128,7 +129,7 @@ def _layout_review(placements: dict[str, dict], components: list[ComponentDef], 
     occupied_ratio = footprint_area / area if area else 0.0
     if occupied_ratio < 0.1:
         warnings.append("Sparse board: review outline size against enclosure, routing and thermal requirements.")
-    return {"status": "review_required" if warnings else "intent_checked",
+    return {"status": "review_required" if warnings else "intent_specified",
             "connectors": connectors, "courtyard_area_ratio": round(occupied_ratio, 4),
             "warnings": warnings, "fabrication_ready": False,
             "scope": "Placement intent and readability only; "

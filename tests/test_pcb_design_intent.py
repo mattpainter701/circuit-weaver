@@ -71,7 +71,7 @@ def test_layout_review_exposes_missing_connector_access_and_excess_whitespace():
     assert review["fabrication_ready"] is False
     explicit = _layout_review(placements, [component], [{"target": "J1", "edge": "bottom", "rotation": 0}],
                               {"width": 20, "height": 20})
-    assert explicit["status"] == "intent_checked"
+    assert explicit["status"] == "intent_specified"
     assert explicit["connectors"][0]["edge_and_orientation_specified"] is True
 
 
