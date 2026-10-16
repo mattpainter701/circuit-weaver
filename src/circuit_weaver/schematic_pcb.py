@@ -292,17 +292,6 @@ def schematic_to_pcb(
             raise ValueError("Clearance must be a finite positive millimeter value")
         if target.exists() and not overwrite:
             raise FileExistsError(f"Output already exists; pass overwrite=True to replace it: {target}")
-        cli_path = _kicad_cli_path()
-        cli = str(cli_path) if cli_path is not None else None
-        if cli is None:
-            raise RuntimeError("KiCad CLI was not found; install KiCad or add kicad-cli to PATH")
-        python = find_kicad_python(kicad_python_path)
-        if python is None:
-            raise RuntimeError("KiCad Python (pcbnew) is unavailable; set CIRCUIT_WEAVER_KICAD_PYTHON")
-
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists() and not overwrite:
-            raise FileExistsError(f"Output already exists; pass overwrite=True to replace it: {target}")
         target_snapshot = _target_snapshot(target)
         source_project_settings = {
             suffix: source.with_suffix(suffix)
@@ -329,6 +318,18 @@ def schematic_to_pcb(
                         "Output has unrelated project settings; choose a fresh output name: "
                         f"{destination_settings}"
                     )
+
+        # Conflicts and invalid source constraints are user-input failures and
+        # can be identified before requiring optional native KiCad executables.
+        cli_path = _kicad_cli_path()
+        cli = str(cli_path) if cli_path is not None else None
+        if cli is None:
+            raise RuntimeError("KiCad CLI was not found; install KiCad or add kicad-cli to PATH")
+        python = find_kicad_python(kicad_python_path)
+        if python is None:
+            raise RuntimeError("KiCad Python (pcbnew) is unavailable; set CIRCUIT_WEAVER_KICAD_PYTHON")
+
+        target.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix=".cw-schematic-pcb-", dir=target.parent) as tmp:
             staging = Path(tmp)
             staged_project = staging / "project"

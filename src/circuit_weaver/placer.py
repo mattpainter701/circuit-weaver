@@ -1498,7 +1498,10 @@ def _apply_topology_cc_network(layout: SheetLayout, pc: PlacedComponent, passive
         return processed
 
     left, _top, right, bottom = component_body_bounds(pc)
-    cc_x = snap(right + 10.16)
+    # Keep the pin-1 label stubs clear of the connector body. At the closer
+    # 10.16 mm offset, their 5.08 mm pin reach leaves only 5.08 mm to the body,
+    # so a standard 6.35 mm label stub runs back through it.
+    cc_x = snap(right + 15.24)
     cc_y = snap((bottom + _top) / 2.0)
     pitch = snap(5.08)
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
 import hashlib
 import html
 import json
@@ -44,6 +45,68 @@ def verify_routing(payload: dict, board: Path) -> None:
     require(drc.get("blocker_count") == 0, "Native DRC has blockers")
     require(Path(drc.get("board", "")).resolve() == board.resolve(), "DRC refers to a different board")
     require(drc.get("board_sha256") == digest(board), "DRC does not match final board bytes")
+
+
+def verify_blocked_assembly_delivery(payload: dict, delivery_dir: Path) -> dict:
+    """Verify blocked delivery still contains a complete, reconciled BOM."""
+    require(payload.get("status") == "blocked", "Prototype assembly export was unexpectedly authorized")
+    require(payload.get("fabrication_ready") is False, "Assembly export overclaimed fabrication readiness")
+
+    bom_path = delivery_dir / "bom_jlcpcb.csv"
+    assembly_path = delivery_dir / "assembly_manifest.json"
+    delivery_path = delivery_dir / "delivery_manifest.json"
+    for path in (bom_path, assembly_path, delivery_path):
+        require(path.is_file(), f"Assembly delivery artifact is missing: {path.name}")
+
+    assembly = json.loads(assembly_path.read_text(encoding="utf-8"))
+    delivery = json.loads(delivery_path.read_text(encoding="utf-8"))
+    items = assembly.get("items")
+    require(isinstance(items, list), "Assembly manifest has no item inventory")
+    references = [str(item.get("reference", "")).strip() for item in items if isinstance(item, dict)]
+    require(len(references) == len(items), "Assembly manifest contains a malformed item")
+    require(all(references), "Assembly manifest contains an empty reference")
+    require(len(references) == len(set(references)), "Assembly manifest contains duplicate references")
+
+    expected_refs = {
+        str(item["reference"]).strip()
+        for item in items
+        if not item.get("dnp") and not item.get("exclude_from_bom")
+    }
+    require(assembly.get("item_count") == len(items), "Assembly manifest item count is inconsistent")
+    require(payload.get("assembly_item_count") == len(items), "CLI assembly item count disagrees with its manifest")
+    require(delivery.get("assembly_item_count") == len(items), "Delivery item count disagrees with assembly manifest")
+    require(delivery.get("status") == "blocked", "Delivery manifest did not retain blocked status")
+    require(delivery.get("fabrication_ready") is False, "Delivery manifest overclaimed fabrication readiness")
+
+    artifacts = delivery.get("artifacts")
+    require(isinstance(artifacts, list), "Delivery manifest has no artifact inventory")
+    bom_artifacts = [item for item in artifacts if item.get("kind") == "bom"]
+    require(len(bom_artifacts) == 1 and bom_artifacts[0].get("status") == "ready",
+            "Delivery manifest does not mark exactly one BOM as ready")
+    require(Path(bom_artifacts[0].get("path", "")).name == bom_path.name,
+            "Delivery manifest points to a different BOM")
+    cpl_artifacts = [item for item in artifacts if item.get("kind") == "cpl"]
+    require(len(cpl_artifacts) == 1 and cpl_artifacts[0].get("status") == "blocked",
+            "Delivery manifest did not preserve the blocked CPL gate")
+
+    with bom_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        require(reader.fieldnames == ["Comment", "Designator", "Footprint", "LCSC Part#"],
+                "JLCPCB BOM has an unexpected header")
+        rows = list(reader)
+    actual_refs: list[str] = []
+    for row in rows:
+        designators = [reference.strip() for reference in (row.get("Designator") or "").split(",")]
+        require(all(designators), "JLCPCB BOM contains an empty designator")
+        actual_refs.extend(designators)
+    require(len(actual_refs) == len(set(actual_refs)), "JLCPCB BOM contains duplicate designators")
+    require(set(actual_refs) == expected_refs,
+            f"JLCPCB BOM designators disagree with active assembly inventory: "
+            f"missing={sorted(expected_refs - set(actual_refs))}, "
+            f"unexpected={sorted(set(actual_refs) - expected_refs)}")
+    require(len(actual_refs) == len(expected_refs), "JLCPCB BOM designator count is inconsistent")
+    require(payload.get("bom_rows") == len(rows), "CLI BOM row count disagrees with the CSV")
+    return {"assembly_items": len(items), "bom_rows": len(rows), "bom_designators": len(actual_refs)}
 
 
 class Demo:
@@ -231,14 +294,13 @@ def main() -> int:
         summary["drc"] = routing["drc"]
         delivery = demo.command("assembly-gate", ["export-jlcpcb", str(spec), "--pcb", str(routed),
                                             "-o", str(output / "delivery")], exit_code=(0, 1))
-        require(delivery.get("status") == "blocked", "Prototype assembly export was unexpectedly authorized")
-        require(delivery.get("fabrication_ready") is False, "Assembly export overclaimed fabrication readiness")
+        assembly_summary = verify_blocked_assembly_delivery(delivery, output / "delivery")
         reasons = delivery.get("blocked_reasons", [])
         require(bool(reasons) and all("identity handoff bundle" in r or "no LCSC part number" in r
                                      for r in reasons), f"Unexpected assembly blocker: {reasons}")
         require(not delivery.get("cpl") and not list((output / "delivery").glob("cpl*.csv")),
                 "Unapproved assembly export published a CPL")
-        summary["assembly_delivery"] = delivery
+        summary["assembly_delivery"] = {**delivery, "verified_inventory": assembly_summary}
         refused = demo.command("manufacturing-gate", ["export-gerbers", str(routed),
                                                      "-o", str(output / "manufacturing")], exit_code=1)
         require(refused.get("status") == "blocked", "Unapproved manufacturing export was not blocked")

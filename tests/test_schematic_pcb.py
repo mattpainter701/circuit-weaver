@@ -141,7 +141,11 @@ def test_failed_netlist_export_preserves_overwrite_target_and_settings(tmp_path,
     assert not list(tmp_path.glob(".cw-schematic-pcb-*"))
 
 
-def test_unrelated_output_project_settings_are_rejected(tmp_path):
+def test_unrelated_output_project_settings_are_rejected_before_kicad_probe(tmp_path, monkeypatch):
+    import circuit_weaver.schematic_pcb as module
+
+    monkeypatch.setattr(module, "_kicad_cli_path", lambda: None)
+    monkeypatch.setattr(module, "find_kicad_python", lambda _path=None: None)
     schematic = tmp_path / "input.kicad_sch"
     schematic.write_text("schematic", encoding="utf-8")
     output = tmp_path / "output.kicad_pcb"
@@ -161,7 +165,11 @@ def test_clearance_must_be_finite_positive_mm(tmp_path, clearance):
     assert "finite positive" in result["message"]
 
 
-def test_explicit_clearance_rejects_existing_source_board_rules(tmp_path):
+def test_explicit_clearance_rejects_existing_source_board_rules_before_kicad_probe(tmp_path, monkeypatch):
+    import circuit_weaver.schematic_pcb as module
+
+    monkeypatch.setattr(module, "_kicad_cli_path", lambda: None)
+    monkeypatch.setattr(module, "find_kicad_python", lambda _path=None: None)
     schematic = tmp_path / "input.kicad_sch"
     schematic.write_text("schematic", encoding="utf-8")
     schematic.with_suffix(".kicad_pro").write_text(
@@ -173,7 +181,11 @@ def test_explicit_clearance_rejects_existing_source_board_rules(tmp_path):
     assert "already defines board rules" in result["message"]
 
 
-def test_explicit_clearance_rejects_source_design_rules_file(tmp_path):
+def test_explicit_clearance_rejects_source_design_rules_file_before_kicad_probe(tmp_path, monkeypatch):
+    import circuit_weaver.schematic_pcb as module
+
+    monkeypatch.setattr(module, "_kicad_cli_path", lambda: None)
+    monkeypatch.setattr(module, "find_kicad_python", lambda _path=None: None)
     schematic = tmp_path / "input.kicad_sch"
     schematic.write_text("schematic", encoding="utf-8")
     schematic.with_suffix(".kicad_dru").write_text("(version 1)", encoding="utf-8")

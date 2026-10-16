@@ -8,7 +8,8 @@
 - Add a repeatable CLI and optional MCP workflow demo with retained command logs, native ERC, placement, Freerouting, final-board SHA-256-bound DRC, visual previews, and checked assembly/manufacturing-export gates. Run the generated-design workflow in the KiCad 8/9/10 CI matrix.
 - Default native-board routing to skip post-route optimization unless explicitly requested; Freerouting 2.4.1's optimizer can narrow fine-pitch traces below imported width rules even with neckdown disabled. Native DRC continues to block invalid results.
 - Keep inline MCP generation state inside its explicit output directory, so nearby projects cannot make a new generation ambiguous or acquire its artifacts. Isolate router subprocess working directories to prevent source-tree logging side effects.
-- Correct hierarchical instance paths and power/flag annotation for KiCad netlist export. Represent every USB-C power connector pad, including duplicated supply contacts and explicitly unused contacts. Resolve CH340G and AMS1117 to qualified standard footprints, and correct agent instructions for Windows sample copying, MCP installation, and manufacturing-readiness interpretation.
+- Verify the requested KiCad major before native CI and release validation, and fail on incomplete package-index updates instead of silently installing an older distribution package. Cancel superseded branch CI runs.
+- Correct hierarchical instance paths and power/flag annotation for KiCad netlist export. Represent every USB-C power connector pad, including duplicated supply contacts and explicitly unused contacts, and keep CC resistor label wires outside the connector body. Resolve CH340G and AMS1117 to qualified standard footprints, and correct agent instructions for Windows sample copying, MCP installation, and manufacturing-readiness interpretation.
 
 ### Real-board placement and routing completion
 
