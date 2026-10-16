@@ -65,7 +65,7 @@ def test_render_uses_isolated_board_and_preserves_sources(tmp_path, monkeypatch)
         staged_board_seen = Path(command[-1])
         staged_text = staged_board_seen.read_text(encoding="utf-8")
         assert str(model.resolve()).replace("\\", "/") in staged_text
-        assert str(model) not in staged_text
+        assert '(model "models/body.step")' not in staged_text
         staged_png = Path(command[command.index("--output") + 1])
         staged_png.write_bytes(PNG)
         return SimpleNamespace(returncode=0, stdout="Successfully created 3D render image", stderr="")
