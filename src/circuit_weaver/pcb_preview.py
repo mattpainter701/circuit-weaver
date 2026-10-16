@@ -301,6 +301,21 @@ def _publish_staged_file(staging: Path, destination: Path, *, overwrite: bool) -
     os.link(staging, destination)
 
 
+def _remove_fabrication_text(element: ET.Element) -> None:
+    """Keep native body geometry without duplicate assembly text overlays.
+
+    KiCad plots glyph strokes in explicitly marked groups alongside invisible
+    text nodes. Only fabrication layers use this filter; printed silkscreen
+    references remain native and visible.
+    """
+    for child in list(element):
+        if (child.tag.rsplit("}", 1)[-1] == "text"
+                or "stroked-text" in child.get("class", "").split()):
+            element.remove(child)
+        else:
+            _remove_fabrication_text(child)
+
+
 def _build_svg_export_command(
     cli: str, board: Path, layer: str, output: Path, major: int,
 ) -> list[str]:
@@ -466,6 +481,14 @@ def render_board_preview(
                     if child.tag.rsplit("}", 1)[-1] in {"title", "desc"}:
                         continue
                     cloned = ET.fromstring(ET.tostring(child, encoding="unicode"))
+                    if layer in {"F.Fab", "B.Fab"}:
+                        # Wrap the child so a top-level text/glyph group can
+                        # be filtered just like a nested native plot group.
+                        wrapper = ET.Element("wrapper")
+                        wrapper.append(cloned)
+                        _remove_fabrication_text(wrapper)
+                        if not len(wrapper):
+                            continue
                     _style_element(cloned, fill, stroke, white_is_drill=white_is_drill,
                                    mark_drill=mark_drill)
                     group.append(cloned)
@@ -514,6 +537,7 @@ def render_board_preview(
             "prototype": True,
             "kicad_version": version,
             "layers": layers,
+            "fabrication_text": "omitted; native silkscreen references preserved",
             "board_bounds_mm": polygon["bounds"],
             "native_svg_offset_mm": {"x": offset_x, "y": offset_y},
             "side": side,
