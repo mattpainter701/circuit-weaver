@@ -901,6 +901,46 @@ def component_explanation_lines(comp: ComponentDef, ref: str = "") -> list[str]:
     return lines
 
 
+def _bind_builtin_connector_shield(comp: ComponentDef) -> ComponentDef:
+    """Use the installed USB4085 library's explicit unused shield pin name.
+
+    KiCad 8/9 call the four shield pads S1; newer libraries call them SH.
+    Resolve that known library spelling before schematic generation, while
+    leaving connected pins and unknown footprint variants unchanged. The PCB
+    importer still requires exact symbol-pin/physical-pad reconciliation.
+    """
+    if (
+        comp.mpn != "USB-C-PWR"
+        or comp.footprint != "Connector_USB:USB_C_Receptacle_GCT_USB4085"
+        or "SH" not in comp.explicit_no_connects
+        or "SH" in comp.pin_nets
+        or "SH" in comp.power_pins
+    ):
+        return comp
+    from .footprint_lib import KiCadFootprintLibrary
+
+    path = KiCadFootprintLibrary().resolve(comp.footprint)
+    if path is None:
+        return comp
+    numbers = {
+        quoted if quoted else unquoted
+        for quoted, unquoted in re.findall(r'\(pad\s+(?:"([^"]*)"|([^\s()]+))', path.read_text(encoding="utf-8"))
+        if quoted or unquoted
+    }
+    symbol_numbers = {pin.number for pin in comp.pins}
+    if "SH" not in symbol_numbers or numbers != (symbol_numbers - {"SH"}) | {"S1"}:
+        return comp
+
+    import copy
+
+    bound = copy.deepcopy(comp)
+    for pin in bound.pins:
+        if pin.number == "SH":
+            pin.number = "S1"
+    bound.explicit_no_connects = (bound.explicit_no_connects - {"SH"}) | {"S1"}
+    return bound
+
+
 class ComponentRegistry:
     """Registry of known components, queryable by MPN."""
 
@@ -920,17 +960,19 @@ class ComponentRegistry:
 
         comp = self._components.get(mpn)
         if comp:
-            return comp
+            return _bind_builtin_connector_shield(comp)
         canonical = self._aliases.get(mpn)
         if canonical:
-            return self._components.get(canonical)
+            comp = self._components.get(canonical)
+            return _bind_builtin_connector_shield(comp) if comp else None
         stripped = _re.sub(r"[-/:](?:7|ND|P|TR|REEL7?|NOPB|CT)$", "", mpn)
         if stripped != mpn:
-            return self._components.get(stripped)
+            comp = self._components.get(stripped)
+            return _bind_builtin_connector_shield(comp) if comp else None
         return None
 
     def find_by_category(self, category: str) -> list[ComponentDef]:
-        return [c for c in self._components.values() if c.category == category]
+        return [_bind_builtin_connector_shield(c) for c in self._components.values() if c.category == category]
 
     def all_mpns(self):
         return list(self._components.keys())
@@ -2034,7 +2076,7 @@ def _builtin_components():
         )
     )
 
-    # --- USB-C power-only connector (4-pin simplified) ---
+    # --- USB-C power-only connector ---
     reg.register(
         ComponentDef(
             mpn="USB-C-PWR",
@@ -2046,13 +2088,34 @@ def _builtin_components():
             pins=[
                 PinDef("A4", "VBUS", "power_out", "R"),
                 PinDef("A1", "GND", "power_in", "B"),
-                PinDef("B4", "VBUS2", "passive", "R"),
-                PinDef("B1", "GND2", "power_in", "B"),
                 PinDef("A5", "CC1", "bidirectional", "L"),
-                PinDef("B5", "CC2", "bidirectional", "L"),
+                PinDef("A6", "D+1", "bidirectional", "L"),
+                PinDef("A7", "D-1", "bidirectional", "L"),
+                PinDef("A8", "SBU1", "bidirectional", "L"),
+                PinDef("A9", "VBUS2", "passive", "R"),
+                PinDef("A12", "GND2", "power_in", "B"),
+                PinDef("B1", "GND3", "power_in", "B"),
+                PinDef("B4", "VBUS3", "passive", "R"),
+                PinDef("B5", "CC2", "bidirectional", "T"),
+                PinDef("B6", "D+2", "bidirectional", "L"),
+                PinDef("B7", "D-2", "bidirectional", "L"),
+                PinDef("B8", "SBU2", "bidirectional", "L"),
+                PinDef("B9", "VBUS4", "passive", "R"),
+                PinDef("B12", "GND4", "power_in", "B"),
+                PinDef("SH", "SHIELD", "passive", "B"),
             ],
             pin_nets={"A5": "USB_CC1", "B5": "USB_CC2"},
-            power_pins={"A4": "VBUS_5V", "A1": "GND", "B4": "VBUS_5V", "B1": "GND"},
+            power_pins={
+                "A4": "VBUS_5V",
+                "A9": "VBUS_5V",
+                "B4": "VBUS_5V",
+                "B9": "VBUS_5V",
+                "A1": "GND",
+                "A12": "GND",
+                "B1": "GND",
+                "B12": "GND",
+            },
+            explicit_no_connects={"A6", "A7", "A8", "B6", "B7", "B8", "SH"},
             straps=[
                 StrapConfig(
                     "A5",

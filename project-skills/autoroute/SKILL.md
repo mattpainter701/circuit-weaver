@@ -5,9 +5,10 @@ description: Route non-critical nets on a real KiCad PCB or Specctra DSN through
 
 # PCB Autorouting
 
-Produce a validated Specctra `.ses` session for later import into KiCad. Never
-describe the output as a routed `.kicad_pcb`, and never treat successful
-autorouting as final DRC or fabrication approval.
+Produce a validated Specctra `.ses` session, or use `--routed-board` with a real
+PCB to import the session and publish a separate `.kicad_pcb` only after native
+KiCad DRC passes. Verify final-board hashes and surface all warnings. Successful
+autorouting does not grant fabrication approval.
 
 ## 1. Establish the routing source
 
@@ -37,8 +38,9 @@ circuit-weaver autoroute board.kicad_pcb \
   --timeout 300
 ```
 
-If the installed `kicad-cli` does not advertise Specctra export, do not attempt
-direct PCB routing. Export DSN in KiCad PCB Editor and route that file:
+To publish a real PCB after native DRC, add `--routed-board final.kicad_pcb`.
+The native KiCad Python bridge exports DSN when the CLI cannot. If neither
+native Python nor CLI export is available, export DSN in KiCad PCB Editor:
 
 ```bash
 circuit-weaver autoroute board.dsn \

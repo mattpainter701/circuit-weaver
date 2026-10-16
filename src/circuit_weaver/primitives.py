@@ -353,7 +353,7 @@ def sexpr_power_instance(
     value_y = snap(y + value_dy)
 
     inst_uuid = uid(f"power:{net_name}:{x:.2f}:{y:.2f}")
-    inst_path = f"/{root_uuid}/{sheet_uuid}/" if root_uuid and sheet_uuid else "/"
+    inst_path = f"/{root_uuid}/{sheet_uuid}" if root_uuid and sheet_uuid else "/"
 
     return f'''  (symbol (lib_id "{net_name}") (at {x:.2f} {y:.2f} {rotation})
     (uuid "{inst_uuid}")
@@ -405,7 +405,7 @@ def sexpr_pwr_flag_instance(
     """Place a PWR_FLAG instance at (x, y) to satisfy KiCad ERC."""
     x, y = snap(x), snap(y)
     inst_uuid = uid(f"pwr_flag:{x:.2f}:{y:.2f}")
-    inst_path = f"/{root_uuid}/{sheet_uuid}/" if root_uuid and sheet_uuid else "/"
+    inst_path = f"/{root_uuid}/{sheet_uuid}" if root_uuid and sheet_uuid else "/"
 
     return f'''  (symbol (lib_id "PWR_FLAG") (at {x:.2f} {y:.2f} 0)
     (uuid "{inst_uuid}")
@@ -908,7 +908,7 @@ def place_component(
     value = sexpr_safe(value)
     ref = sexpr_safe(ref)
     inst_uuid = uid()
-    inst_path = f"/{root_uuid}/{sheet_uuid}/" if root_uuid and sheet_uuid else "/"
+    inst_path = f"/{root_uuid}/{sheet_uuid}" if root_uuid and sheet_uuid else "/"
 
     props = []
     passive_variant = None
@@ -1782,7 +1782,7 @@ def assemble_sheet(
         parts.append(extras)
 
     if root_uuid and sheet_uuid:
-        path = f"/{root_uuid}/{sheet_uuid}/"
+        path = f"/{root_uuid}/{sheet_uuid}"
         parts.append(f'  (sheet_instances\n    (path "{path}" (page "{page_num}"))\n  )\n')
     else:
         parts.append(f'  (sheet_instances\n    (path "/" (page "{page_num}"))\n  )\n')

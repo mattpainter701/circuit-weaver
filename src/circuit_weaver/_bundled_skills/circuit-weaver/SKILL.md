@@ -232,8 +232,9 @@ range; never hard-code a 13-item range when those files are absent.
 
 On selection:
 1. Ask for the destination before copying.
-2. For a repo-local sample, copy the existing directory:
-   `cp -r samples/<sample>/ <user-chosen-destination>/`.
+2. For a repo-local sample, use the platform's filesystem tools to copy the
+   complete sample directory to the chosen destination. If only Python is
+   available, use `shutil.copytree`; do not assume a POSIX shell command.
 3. For the packaged `iot_sensor` example, create the destination and copy the
    resource bytes from
    `importlib.resources.files("circuit_weaver").joinpath("examples", "iot_sensor.yaml")`
@@ -684,12 +685,17 @@ HTML report: output/confidence_report.html
 ```
 
 **Interpretation guidance for user:**
-- **ready_for_fab** (80+, no blockers): Design is ready to order
-- **needs_review** (60-80): Design works but has issues worth addressing
-- **not_ready** (<60 or has blockers): Must fix blockers before ordering
+The confidence score and grade summarize the checks in this report. They do not
+determine manufacturing readiness. Read the canonical state and report its
+blockers and next actions:
 
-If score is below 80, ask the user if they want to address the action items
-before proceeding. Offer to loop back to the relevant step.
+```bash
+python -m circuit_weaver manufacturing-readiness "${PROJECT_NAME}"
+```
+
+Use the `state` in `manufacturing_readiness.json` as the canonical manufacturing readiness authority. Do not infer
+`fabrication_ready` from a confidence score or describe a design as ready to fabricate from the score alone. Review the
+confidence report's action items with the user and address the relevant ones.
 
 **Log:** `[Step 6] Confidence: {score}/100 ({grade}), readiness: {readiness}`
 
@@ -734,12 +740,24 @@ python -m circuit_weaver placement-viewer "${PROJECT_NAME}/design.yaml" \
 Present both the visual proposal and its blockers/context. Never equate an
 attractive diagram with electrical or manufacturing readiness.
 
-#### 7c. Create the Electrical PCB in KiCad
+#### 7c. Create the Electrical PCB
 
-Open the generated schematic in KiCad, assign and verify footprints, and run
-**Update PCB from Schematic**. Save the resulting electrically annotated board
-under a user-confirmed path. Only that board has the pads and nets required by
-routing, DFM, and fabrication commands.
+For automated prototype work, take the exact `root_schematic` returned by
+generation and run `build-pcb` into a separate output, followed by `place-pcb`:
+
+```bash
+python -m circuit_weaver build-pcb "${ROOT_SCHEMATIC}" -o "${ELECTRICAL_PCB}"
+python -m circuit_weaver place-pcb "${ELECTRICAL_PCB}" -o "${PLACED_PCB}"
+```
+
+This loads real library footprints and requires exact pin/pad numbering. Missing
+footprints, incomplete symbol pad coverage, annotation errors, or physical DRC
+block publication. Review any explicit prototype clearance assumption before
+passing `--clearance`; it cannot weaken existing source board rules. The board
+remains a prototype without identity evidence or manufacturing approval.
+
+Alternatively, open the generated schematic in KiCad, assign and verify
+footprints, run **Update PCB from Schematic**, and save the electrical board.
 
 Dry-run the edited SVG against that board. Exact SVG↔PCB reference matching is
 the default; use `--allow-partial` only when the user explicitly intends a
@@ -757,19 +775,20 @@ python -m circuit_weaver import-placement \
 #### 7d. Autorouting an Electrical PCB (Optional)
 
 Offer autorouting only for a real pad-bearing, named-net board or a user-exported
-Specctra `.dsn`. Output is always a validated `.ses` session, never a routed
-`.kicad_pcb`:
+Specctra `.dsn`. For a real PCB, request a separately published routed board:
 
 ```bash
-python -m circuit_weaver autoroute "${ELECTRICAL_PCB}" \
-  -o "${PROJECT_NAME}/output/${PROJECT_NAME}.ses"
+python -m circuit_weaver autoroute "${PLACED_PCB}" --routed-board "${ROUTED_PCB}" --attempts 3
 ```
 
-If `kicad-cli` does not advertise Specctra export, export a `.dsn` in KiCad PCB
-Editor and pass that file to `autoroute`. Freerouting must be installed
-separately. Treat exit code 2 / `status: partial` as incomplete routing. Import
-the SES in KiCad and run DRC. Route power, switching loops, differential pairs,
-clocks, crystals, RF, and other critical nets manually.
+KiCad's native Python can export DSN and import SES automatically when the CLI
+cannot. The app publishes the routed board only after native DRC passes;
+verify its exact board hash and surface warnings. Without `--routed-board`,
+output remains a validated `.ses` requiring import and DRC. Freerouting must be
+installed separately. Treat exit code 2 / `status: partial` as incomplete.
+Review power, switching loops, differential pairs, clocks, crystals, RF, and
+other critical nets against engineering constraints. Native DRC does not grant
+manufacturing readiness.
 
 **Claude Code / Codex / OpenCode:** Present choices:
 - **[1] Optimize placement** (recommended)

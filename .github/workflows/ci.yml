@@ -2,7 +2,12 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: ci-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -186,34 +191,39 @@ jobs:
   kicad-validation:
     name: KiCad ${{ matrix.kicad-major }} final-artifact validation
     runs-on: ubuntu-24.04
+    container:
+      image: ${{ matrix.container-image }}
+      options: --user 0
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        kicad-major: ["8", "9", "10"]
+        include:
+          - kicad-major: "8"
+            container-image: ghcr.io/kicad/kicad:8.0@sha256:5716d82aa247abdbe512650eb4e8fce5a4031cbbef0a2c8df83208a69fef87b2
+          - kicad-major: "9"
+            container-image: ghcr.io/kicad/kicad:9.0@sha256:e638b79b0321f29395a5b783e94bb9f3c73303e8da15da27b8f5cb4b67a37729
+          - kicad-major: "10"
+            container-image: ghcr.io/kicad/kicad:10.0@sha256:18693567392b80da435f9fa952ce3a3e534c66eb5a6033f5b9c80aa3b19dd3ec
 
     steps:
+      - name: Install checkout and validation prerequisites in the KiCad container
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update -o Acquire::Retries=3 -o APT::Update::Error-Mode=any
+          DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends -o Acquire::Retries=3 \
+            python3-venv curl git ca-certificates
+
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.13"
+      - name: Prepare official KiCad container and runtime
+        shell: bash
+        run: bash scripts/prepare_kicad_ci_container.sh "${{ matrix.kicad-major }}"
 
       - name: Install Circuit Weaver
         run: python -m pip install . pytest
-
-      - name: Install official KiCad stable PPA
-        run: |
-          sudo add-apt-repository --yes ppa:kicad/kicad-${{ matrix.kicad-major }}.0-releases
-          sudo apt-get update
-          sudo apt-get install --yes kicad
-          test -s /usr/share/kicad/template/fp-lib-table
-          install -D --mode=0644 \
-            /usr/share/kicad/template/fp-lib-table \
-            "$HOME/.config/kicad/${{ matrix.kicad-major }}.0/fp-lib-table"
-          kicad-cli version
 
       - name: Generate and verify representative final schematics
         run: |
@@ -246,6 +256,12 @@ jobs:
           curl --fail --location --retry 3 https://github.com/freerouting/freerouting/releases/download/v2.4.1/freerouting-2.4.1.jar -o /tmp/freerouting-2.4.1.jar
           echo '251101c3eeac22d7e7dfcf6796603279e5d1000283eb82d8f093780f7afc6aa9  /tmp/freerouting-2.4.1.jar' | sha256sum --check
           python -m pytest tests/test_native_pcb_workflow.py -q
+
+      - name: Validate generated schematic through routed prototype and export gate
+        env:
+          CIRCUIT_WEAVER_KICAD_PYTHON: /usr/bin/python3
+          CIRCUIT_WEAVER_FREEROUTING: /tmp/freerouting-2.4.1.jar
+        run: python scripts/validate_app_workflow.py --output .ci-kicad/native-pcb/generated-workflow
 
       - name: Preserve real PCB validation artifacts
         if: always()

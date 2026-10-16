@@ -195,6 +195,12 @@ CAPABILITIES: Final[tuple[CapabilityRecord, ...]] = (
         **_NON_DESIGN,
     ),
     _record("design-wizard", "design-wizard", maturity="experimental", skill="design-wizard"),
+    _record(
+        "build-pcb", "build-pcb", maturity="experimental", skill="circuit-weaver",
+        python="circuit_weaver.schematic_pcb:schematic_to_pcb",
+        evidence_kinds=("command-contract", "static-parse", "kicad-load", "external-tool"),
+        output_guarantee="kicad-load", since_version="0.35.0",
+    ),
     _record("place-pcb", "place-pcb", maturity="experimental", skill="circuit-weaver",
             evidence_kinds=("command-contract", "external-tool", "user-supplied")),
     _record("log-status", "log-status", **_NON_DESIGN),

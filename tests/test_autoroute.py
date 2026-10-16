@@ -11,6 +11,8 @@ from unittest import mock
 import pytest
 
 from circuit_weaver.autoroute import (
+    _apply_specctra_clearance_margin,
+    _effective_optimization_threads,
     _find_freerouting_command,
     _find_freerouting_jar,
     _find_kicad_cli,
@@ -23,6 +25,25 @@ from circuit_weaver.autoroute import (
     export_dsn,
     preflight_pcb,
 )
+
+
+@pytest.mark.parametrize(
+    ("suffix", "routed", "attempts", "requested", "expected"),
+    [
+        (".kicad_pcb", True, 1, None, 0),
+        (".kicad_pcb", True, 3, None, 0),
+        (".kicad_pcb", True, 3, 2, 2),
+        (".kicad_pcb", False, 3, None, 1),
+        (".dsn", False, 3, None, 1),
+        (".dsn", False, 1, None, None),
+    ],
+)
+def test_routed_native_board_defaults_to_optimizer_disabled_but_respects_explicit_threads(
+    suffix, routed, attempts, requested, expected,
+):
+    assert _effective_optimization_threads(
+        source_suffix=suffix, routed_board=routed, attempts=attempts, requested=requested,
+    ) == expected
 
 ROUTABLE_PCB = """(kicad_pcb (version 20240108) (generator "pcbnew")
   (general (thickness 1.6))
@@ -62,10 +83,12 @@ PREVIEW_PCB = """(kicad_pcb (version 20240108) (generator "schematic_engine plac
 VALID_DSN = """(pcb "sensor-board"
   (parser (string_quote ")"))
   (resolution mil 1000)
+  (unit mil)
   (structure
     (layer "F.Cu" (type signal))
     (layer "B.Cu" (type signal))
     (boundary (path pcb 0 0 0 20000 0 20000 15000 0 15000 0 0))
+    (rule (clearance 5) (clearance 1.25 (type smd_smd)))
   )
   (placement
     (component "Resistor_SMD:R_0402_1005Metric" (place R1 10000 10000 front 0))
@@ -74,7 +97,9 @@ VALID_DSN = """(pcb "sensor-board"
   (network
     (net GND (pins R1-1 J1-2))
     (net VDD_3P3 (pins R1-2 J1-1))
+    (class kicad_default GND VDD_3P3 (rule (clearance 5)))
   )
+  (comment "(clearance 99) is quoted data, not a rule")
 )
 """
 
@@ -103,6 +128,67 @@ def _write_dsn(tmp_path: Path, name: str = "sensor-board.dsn", text: str = VALID
     path = tmp_path / name
     path.write_text(text, encoding="utf-8")
     return path
+
+
+def test_router_only_clearance_margin_updates_general_rules_and_preserves_typed_exceptions(tmp_path):
+    dsn = _write_dsn(tmp_path)
+
+    result = _apply_specctra_clearance_margin(dsn, 0.01)
+    text = dsn.read_text(encoding="utf-8")
+
+    assert result == {
+        "applied": True,
+        "margin_mm": 0.01,
+        "dsn_unit": "mil",
+        "declarations_adjusted": 2,
+        "typed_exceptions_unchanged": 1,
+        "native_board_rules_changed": False,
+    }
+    assert text.count("(clearance 5.393700787401574803149606299)") == 2
+    assert "(clearance 1.25 (type smd_smd))" in text
+    assert '(comment "(clearance 99) is quoted data, not a rule")' in text
+
+
+@pytest.mark.parametrize(
+    ("unit", "clearance", "expected"),
+    [
+        ("um", "127", "137"),
+        ("mm", "0.127", "0.137"),
+        ("inch", "0.005", "0.005393700787401574803149606299"),
+        ("cm", "0.0127", "0.0137"),
+    ],
+)
+def test_router_clearance_margin_converts_declared_dsn_units(tmp_path, unit, clearance, expected):
+    dsn = _write_dsn(
+        tmp_path,
+        text=f'(pcb "b" (unit {unit}) (structure (rule (clearance {clearance}))))',
+    )
+
+    result = _apply_specctra_clearance_margin(dsn, 0.01)
+
+    assert result["dsn_unit"] == unit
+    assert f"(clearance {expected})" in dsn.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "dsn_text",
+    [
+        '(pcb "b" (structure (rule (clearance 127))))',
+        '(pcb "b" (unit um) (structure (rule (clearance unknown))))',
+        '(pcb "b" (unit um) (structure (rule (clearance 127junk))))',
+        '(pcb "b" (unit furlong) (structure (rule (clearance 127))))',
+    ],
+)
+def test_router_clearance_margin_fails_closed_without_changing_ambiguous_dsn(tmp_path, dsn_text):
+    from circuit_weaver.autoroute import _apply_specctra_clearance_margin
+
+    dsn = _write_dsn(tmp_path, text=dsn_text)
+    original = dsn.read_bytes()
+
+    with pytest.raises(ValueError, match="Cannot safely apply routing margin"):
+        _apply_specctra_clearance_margin(dsn, 0.01)
+
+    assert dsn.read_bytes() == original
 
 
 def _routing_output(
@@ -153,6 +239,9 @@ def _portfolio_runner(outputs, seen, *, after_attempt=None):
     def run(command, **kwargs):
         if "-help" in command:
             return mock.Mock(returncode=0, stdout="Freerouting v2.2.4\n-random_seed seed", stderr="")
+        assert Path(kwargs["cwd"]).is_dir()
+        assert Path(command[command.index("-de") + 1]).is_absolute()
+        assert Path(command[command.index("-do") + 1]).is_absolute()
         seen.append((command, kwargs))
         output = outputs[len(seen) - 1]
         if isinstance(output, Exception):
@@ -396,7 +485,8 @@ class TestArtifactValidation:
         dsn = _write_dsn(
             tmp_path,
             text=VALID_DSN.replace(
-                "(network\n    (net GND (pins R1-1 J1-2))\n    (net VDD_3P3 (pins R1-2 J1-1))\n  )",
+                "(network\n    (net GND (pins R1-1 J1-2))\n    (net VDD_3P3 (pins R1-2 J1-1))\n"
+                "    (class kicad_default GND VDD_3P3 (rule (clearance 5)))\n  )",
                 "(network)",
             ),
         )
@@ -589,6 +679,7 @@ class TestAutoroute:
 
     def test_user_dsn_routes_to_truthful_staged_ses_with_supported_controls(self, tmp_path):
         dsn = _write_dsn(tmp_path)
+        original_dsn = dsn.read_bytes()
         with mock.patch("circuit_weaver.autoroute._find_freerouting_command", return_value=["freerouting"]):
             with mock.patch("subprocess.run", side_effect=_fake_freerouting_success()) as run:
                 result = autoroute_pcb(
@@ -606,6 +697,8 @@ class TestAutoroute:
         assert result["output_path"] == str(tmp_path / "sensor-board.ses")
         assert result["artifact"]["path"] == result["output_path"]
         assert result["router"]["version"] == "2.2.4"
+        assert "routing_clearance_guardband" not in result
+        assert dsn.read_bytes() == original_dsn
         command = run.call_args.args[0]
         assert command[command.index("-mp") + 1] == "0"
         assert command[command.index("-mt") + 1] == "4"
@@ -684,6 +777,11 @@ class TestAutoroute:
                         result = autoroute_pcb(board)
 
         assert result["status"] == "ok"
+        assert result["routing_clearance_guardband"]["margin_mm"] == 0.01
+        assert result["routing_clearance_guardband"]["native_board_rules_changed"] is False
+        dsn_text = (tmp_path / "sensor-board_autoroute.dsn").read_text(encoding="utf-8")
+        assert dsn_text.count("(clearance 5.393700787401574803149606299)") == 2
+        assert "(clearance 1.25 (type smd_smd))" in dsn_text
         assert (tmp_path / "sensor-board_autoroute.dsn").exists()
         assert result["output_path"] == str(tmp_path / "sensor-board.ses")
         assert any("specctra" in command for command in calls)

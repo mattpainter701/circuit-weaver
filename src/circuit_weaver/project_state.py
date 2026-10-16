@@ -505,6 +505,7 @@ def record_generation_state(
     validation_report: str | Path | None = None,
     placement_review: str | Path | None = None,
     error: str = "",
+    project_root: str | Path | None = None,
 ) -> Path:
     """Atomically record a restartable generate workflow transition.
 
@@ -515,9 +516,11 @@ def record_generation_state(
     if phase not in {"running", "generated", "failed"}:
         raise ValueError(f"Unsupported generation phase: {phase}")
 
-    root = resolve_project_root(project_dir)
-    state = ensure_project_state(root, name=project_name)
+    root = _absolute(project_root) if project_root is not None else resolve_project_root(project_dir)
     output = _absolute(output_dir)
+    if project_root is not None and not output.is_relative_to(root):
+        raise ValueError("Generation output must be inside its explicit project root")
+    state = ensure_project_state(root, name=project_name)
     spec = _absolute(spec_path) if spec_path is not None else None
 
     if spec is not None:

@@ -1016,10 +1016,12 @@ If mechanical constraints were captured in Step 1a-mech, incorporate them now:
 
 ### 7b. Create the Electrical PCB
 
-Open the manifest returned by `generate`, then open its `root_schematic`, assign
-and verify footprints, and run **Update PCB from Schematic** in KiCad. Save the resulting
-electrically annotated `.kicad_pcb` under a user-confirmed path. Record that path
-as `${ELECTRICAL_PCB}` for routing, DFM, and fabrication steps.
+Open the manifest returned by `generate` and resolve its `root_schematic`.
+For automated prototypes, run `build-pcb "${ROOT_SCHEMATIC}" -o "${ELECTRICAL_PCB}"`
+then `place-pcb "${ELECTRICAL_PCB}" -o "${PLACED_PCB}"`. Exact pin/pad mapping,
+real library footprints, and physical DRC are required. Review explicit prototype
+clearance assumptions; this path does not grant identity or manufacturing approval.
+Alternatively, assign footprints and run **Update PCB from Schematic** in KiCad.
 
 Dry-run the edited SVG against the real board before applying it. Exact
 SVG↔PCB reference matching is the default; use `--allow-partial` only for an
@@ -1045,16 +1047,18 @@ Based on the design:
 
 If the user has Freerouting installed, offer to auto-route only a real
 pad-bearing named-net PCB or a user-exported Specctra DSN. Output is a validated
-Specctra session, not a routed PCB:
+Specctra session by default. For a real PCB, request automatic SES import and
+native DRC before publishing a separate routed board:
 
 ```bash
-circuit-weaver autoroute "${ELECTRICAL_PCB}" -o "${OUTPUT_DIR}/routed.ses"
+circuit-weaver autoroute "${PLACED_PCB}" --routed-board "${ROUTED_PCB}" --attempts 3
 ```
 
-If `kicad-cli` does not advertise Specctra export, export a DSN in KiCad PCB
-Editor and route that file. Treat exit code 2 / `status: partial` as incomplete.
-Import the SES in KiCad and run DRC. Route power, switching loops,
-differential/high-speed pairs, RF, clocks, and crystals manually.
+The native KiCad Python bridge can export DSN when the CLI cannot. Without
+`--routed-board`, import the SES and run DRC separately. Treat exit code 2 /
+`status: partial` as incomplete. Verify final-board DRC evidence, and review
+power, switching loops, differential/high-speed pairs, RF, clocks, and crystals
+against engineering constraints. Routing success does not grant fabrication approval.
 
 ### 7d. DFM Check (Recommended Before Ordering)
 

@@ -51,7 +51,7 @@
   "AMS1117-3.3": {
     "topology": "ldo",
     "description": "1A LDO 3.3V Fixed",
-    "footprint": "SOT-223",
+    "footprint": "Package_TO_SOT_SMD:SOT-223-3_TabPin2",
     "vout_fixed": 3.3,
     "adjustable": false,
     "iout_max": 1.0,
@@ -77,12 +77,6 @@
         "name": "IN",
         "type": "power_in",
         "side": "L"
-      },
-      {
-        "number": "4",
-        "name": "OUT",
-        "type": "power_out",
-        "side": "R"
       }
     ],
     "pin_vin": "3",

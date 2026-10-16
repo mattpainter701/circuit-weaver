@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Generated schematic to routed prototype automation
+
+- Add `build-pcb` to forward-annotate a KiCad schematic into a separate prototype board using actual library footprints and exact pin/pad reconciliation. Missing footprints or incompatible pad maps block publication; prototype generation does not grant manufacturing approval.
+- Add a repeatable CLI and optional MCP workflow demo with retained command logs, native ERC, placement, Freerouting, final-board SHA-256-bound DRC, visual previews, and checked assembly/manufacturing-export gates. Run the generated-design workflow in the KiCad 8/9/10 CI matrix.
+- Default native-board routing to skip post-route optimization unless explicitly requested; Freerouting 2.4.1's optimizer can narrow fine-pitch traces below imported width rules even with neckdown disabled. Native DRC continues to block invalid results.
+- Add a 0.01 mm routing-only margin to generic DSN clearance rules for native-board autorouting, after reproducing a router-clean result that missed KiCad's required clearance by 0.0007 mm. Preserve typed exceptions, native board/project rules, and direct DSN inputs; final native DRC remains required.
+- Keep inline MCP generation state inside its explicit output directory, so nearby projects cannot make a new generation ambiguous or acquire its artifacts. Isolate router subprocess working directories to prevent source-tree logging side effects.
+- Pin official KiCad container digests for native CI and release validation, verify matching CLI/Python versions and libraries, and retain subprocess failures for diagnosis. Cancel superseded branch CI runs.
+- Correct hierarchical instance paths and power/flag annotation for KiCad netlist export. Represent every USB-C power connector pad, including duplicated supply contacts and explicitly unused contacts, and keep CC resistor label wires outside the connector body. Bind the builtin USB4085's unused shield to the installed library's exact S1/SH pad spelling without renumbering connected pins. Resolve CH340G and AMS1117 to qualified standard footprints, and correct agent instructions for Windows sample copying, MCP installation, and manufacturing-readiness interpretation.
+
 ### Real-board placement and routing completion
 
 - Add `place-pcb` for unrouted rectangular KiCad boards. Use actual courtyard envelopes and rotated pad endpoints; preserve locked parts, board sides, pad/net identity, source files, and project rules. Publish placements only after physical DRC.

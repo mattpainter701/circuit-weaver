@@ -397,6 +397,25 @@ circuit-weaver design-wizard [--output <file>] [--dry-run] [--resume <path>] \
 
 ---
 
+## build-pcb
+
+Forward-annotate a root schematic into a separate prototype board using actual
+local library footprints, exact symbol pin/pad numbering, and native KiCad.
+
+```bash
+circuit-weaver build-pcb <root.kicad_sch> --output <prototype.kicad_pcb> \
+  [--width 80] [--height 60] [--clearance 0.127] [--overwrite] [--kicad-python-path <python>]
+```
+
+Dimensions and optional default clearance are in millimeters. Explicit clearance
+is allowed only for a new prototype project without existing board rules or
+netclass settings. Missing footprints, pin/pad mismatches, annotation errors,
+unsupported hierarchy paths, or physical DRC blockers prevent publication.
+Source files remain unchanged; existing output requires `--overwrite`.
+Repeated physical pads with the same pin number receive the same net.
+The result always reports `fabrication_ready: false`; identity evidence and
+manufacturing approval remain separate. See the [real workflow demo](automation-validation.md).
+
 ## place-pcb
 
 Place actual footprints on an unrouted rectangular board and check physical DRC.

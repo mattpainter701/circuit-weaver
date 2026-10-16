@@ -31,6 +31,26 @@ def test_engine_stdout_is_suppressed(capsys: pytest.CaptureFixture[str]) -> None
     assert capsys.readouterr().out == ""
 
 
+def test_inline_generation_keeps_sibling_projects_unchanged(tmp_path: Path) -> None:
+    import yaml
+
+    from circuit_weaver.project_state import ProjectState, save_project_state
+
+    siblings = [save_project_state(tmp_path / name, ProjectState(name=name)) for name in ("first", "second")]
+    before = {path: path.read_bytes() for path in siblings}
+    sample = Path(__file__).resolve().parents[1] / "samples/led_power_indicator/led_power_indicator.yaml"
+    spec = yaml.safe_load(sample.read_text(encoding="utf-8"))
+    output = tmp_path / "new-project"
+    for _ in range(2):
+        result = json.loads(_generate_artifacts_tool(json.dumps(spec), str(output)))
+        assert result["status"] == "ok", result
+        assert Path(result["root_schematic"]).is_file()
+    state = json.loads((output / ".circuit-weaver/project.json").read_text(encoding="utf-8"))
+    assert state["name"] == spec["project"]
+    assert state["workflow"]["generate"]["output_dir"] == str(output.resolve())
+    assert {path: path.read_bytes() for path in siblings} == before
+
+
 def test_invalid_json_has_a_stable_error_envelope() -> None:
     result = json.loads(_validate_design_tool("{not-json"))
 

@@ -2175,6 +2175,7 @@ def _persist_generation_failure(func):
                         output_dir=output_dir,
                         phase="failed",
                         error=str(exc),
+                        project_root=kwargs.get("project_root"),
                     )
                 except Exception as state_exc:
                     _logger.error("Could not persist generation failure state: %s", state_exc)
@@ -2902,18 +2903,20 @@ def _generate_artifacts_in_place(
     return result
 
 
-def _recorded_generation_paths(output_dir: Path) -> dict[str, Path]:
+def _recorded_generation_paths(output_dir: Path, *, project_root: str | Path | None = None) -> dict[str, Path]:
     """Return only previously recorded generator-owned files below output.
 
     The durable project state is the ownership boundary.  Files merely found
     beside generated output are never inferred to be ours and therefore can
     never be removed by publication.
     """
-    from .project_state import load_project_state, resolve_project_root
+    from .project_state import ensure_project_state, load_project_state, resolve_project_root
 
     output = output_dir.resolve(strict=False)
-    root = resolve_project_root(output)
-    state = load_project_state(root)
+    root = Path(project_root).expanduser().resolve() if project_root is not None else resolve_project_root(output)
+    if project_root is not None and not output.is_relative_to(root):
+        raise ValueError("Generation output must be inside its explicit project root")
+    state = ensure_project_state(root) if project_root is not None else load_project_state(root)
     if state is None:
         return {}
 
@@ -3178,6 +3181,7 @@ def generate_artifacts(
     export_pinout: bool = False,
     readiness_gate: bool = True,
     require_kicad: bool = False,
+    project_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Generate transactionally while exclusively leasing the output directory."""
     if not isinstance(spec, dict):
@@ -3213,6 +3217,7 @@ def generate_artifacts(
             export_pinout=export_pinout,
             readiness_gate=readiness_gate,
             require_kicad=require_kicad,
+            project_root=project_root,
         )
 
 
@@ -3233,6 +3238,7 @@ def _generate_artifacts_transaction_locked(
     export_pinout: bool = False,
     readiness_gate: bool = True,
     require_kicad: bool = False,
+    project_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Generate into staging, then atomically reconcile generator-owned output."""
     from .project_state import record_generation_state
@@ -3240,7 +3246,7 @@ def _generate_artifacts_transaction_locked(
     requested_output_path = Path(output_dir)
     requested_output_path.mkdir(parents=True, exist_ok=True)
     output_path = requested_output_path.resolve(strict=False)
-    previous_owned = _recorded_generation_paths(output_path)
+    previous_owned = _recorded_generation_paths(output_path, project_root=project_root)
     prior_artifact_manifest = output_path / "artifact_manifest.json"
     if prior_artifact_manifest.is_file() and not prior_artifact_manifest.is_symlink():
         previous_owned.setdefault("artifact_manifest.json", Path("artifact_manifest.json"))
@@ -3253,6 +3259,7 @@ def _generate_artifacts_transaction_locked(
             spec_path=spec_path,
             output_dir=output_path,
             phase="running",
+            project_root=project_root,
         )
     except Exception as exc:
         raise RuntimeError(f"Could not initialize durable project state: {exc}") from exc
@@ -3307,6 +3314,7 @@ def _generate_artifacts_transaction_locked(
                     artifacts=current_paths,
                     validation_report=validation_path,
                     placement_review=placement_path,
+                    project_root=project_root,
                 )
             )
 
@@ -3973,6 +3981,17 @@ def main() -> None:
         default="all",
         help="Filter by entry type (default: all)",
     )
+
+    build_p = subparsers.add_parser(
+        "build-pcb", help="Forward-annotate a schematic into a prototype PCB using real library footprints"
+    )
+    build_p.add_argument("schematic", help="Root .kicad_sch; all physical symbols need resolvable footprints")
+    build_p.add_argument("--output", "-o", required=True, help="Separate prototype .kicad_pcb output")
+    build_p.add_argument("--width", type=float, default=80.0, help="Rectangular board width in mm")
+    build_p.add_argument("--height", type=float, default=60.0, help="Rectangular board height in mm")
+    build_p.add_argument("--clearance", type=float, help="Explicit default clearance in mm for a new prototype project")
+    build_p.add_argument("--overwrite", action="store_true")
+    build_p.add_argument("--kicad-python-path", help="Python interpreter with KiCad pcbnew installed")
 
     place_p = subparsers.add_parser("place-pcb", help="Place real footprints on an unrouted rectangular KiCad board")
     place_p.add_argument("kicad_pcb", help="Real .kicad_pcb with footprints, pads, nets, and Edge.Cuts")
@@ -5296,6 +5315,16 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
         except Exception as e:
             print(f"[!] Error reading project log: {e}", file=sys.stderr)
             raise SystemExit(1)
+
+    if args.command == "build-pcb":
+        from .schematic_pcb import schematic_to_pcb
+
+        result = _run_with_stderr_capture(lambda: schematic_to_pcb(
+            args.schematic, args.output, width_mm=args.width, height_mm=args.height,
+            clearance_mm=args.clearance, overwrite=args.overwrite, kicad_python_path=args.kicad_python_path,
+        ))
+        _print_json(result)
+        raise SystemExit(0 if result["status"] == "ok" else 1)
 
     if args.command == "place-pcb":
         from .pcb_layout import place_pcb

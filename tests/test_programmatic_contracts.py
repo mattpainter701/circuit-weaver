@@ -431,6 +431,23 @@ def test_reserved_manifest_directory_fails_before_generation_mutates_output(tmp_
     assert list(tmp_path.iterdir()) == [manifest_path]
 
 
+def test_rejected_explicit_project_root_does_not_persist_failure_state(tmp_path: Path) -> None:
+    from circuit_weaver.project_state import ProjectState, project_state_path, save_project_state
+
+    declared_root = tmp_path / "declared-root"
+    state_path = save_project_state(declared_root, ProjectState(name="declared-root"))
+    original_state = state_path.read_bytes()
+    output_dir = tmp_path / "outside-output"
+
+    with pytest.raises(ValueError, match="inside its explicit project root"):
+        dispatcher.generate_artifacts(
+            {"project": "contract"}, output_dir=output_dir, project_root=declared_root
+        )
+
+    assert state_path.read_bytes() == original_state
+    assert not project_state_path(output_dir).exists()
+
+
 def test_generation_lock_path_must_be_a_regular_file(tmp_path: Path) -> None:
     output_dir = tmp_path / "out"
     output_dir.mkdir()

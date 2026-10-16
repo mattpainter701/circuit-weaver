@@ -511,6 +511,7 @@ def test_root_sheet_pins_land_exactly_on_grid_aligned_rectangle_edges(tmp_path):
             "alloc": SheetAllocation(f"section_{index}", f"Section {index}", "A4"),
             "uuid": f"00000000-0000-0000-0000-{index:012d}",
             "filename": f"section_{index}.kicad_sch",
+            "page_num": index + 2,
             "labels": set(),
             "hier_labels": {"SHARED_BUS"},
             "hier_label_shapes": {"SHARED_BUS": "bidirectional"},
@@ -533,7 +534,12 @@ def test_root_sheet_pins_land_exactly_on_grid_aligned_rectangle_edges(tmp_path):
     ]
     assert len(sheet_blocks) == len(sheet_infos)
 
-    for block in sheet_blocks:
+    for sheet_info, block in zip(sheet_infos, sheet_blocks):
+        assert (
+            f'(instances\n      (project "GridExact"\n'
+            f'        (path "/11111111-1111-1111-1111-111111111111" '
+            f'(page "{sheet_info["page_num"]}"))\n      )\n    )'
+        ) in block
         origin = re.search(r"\(sheet\s+\(at\s+([-\d.]+)\s+([-\d.]+)\)", block)
         size = re.search(r"\(size\s+([-\d.]+)\s+([-\d.]+)\)", block)
         assert origin and size
