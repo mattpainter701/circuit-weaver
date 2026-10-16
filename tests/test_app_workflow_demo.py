@@ -3,6 +3,7 @@
 import csv
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,13 @@ def test_demo_rejects_stale_final_board_evidence(tmp_path):
 def test_demo_rejects_partial_routing_even_with_clean_drc(tmp_path):
     with pytest.raises(RuntimeError, match="incomplete"):
         _demo.verify_routing({"routing_complete": False, "drc": {"passed": True}}, tmp_path / "board.kicad_pcb")
+
+
+def test_demo_retains_captured_subprocess_error_detail():
+    error = subprocess.CalledProcessError(128, ["git", "rev-parse", "HEAD"],
+                                         stderr="fatal: detected dubious ownership in repository")
+
+    assert "fatal: detected dubious ownership" in _demo.exception_message(error)
 
 
 def _assembly_delivery(tmp_path, designators="U1,R1"):

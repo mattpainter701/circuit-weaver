@@ -33,7 +33,12 @@ def require(condition: bool, message: str) -> None:
 
 def exception_message(exc: BaseException) -> str:
     nested = getattr(exc, "exceptions", ())
-    return "; ".join(exception_message(child) for child in nested) if nested else str(exc)
+    if nested:
+        return "; ".join(exception_message(child) for child in nested)
+    if isinstance(exc, subprocess.CalledProcessError):
+        detail = (exc.stderr or exc.stdout or "").strip()
+        return f"{exc}: {detail}" if detail else str(exc)
+    return str(exc)
 
 
 def verify_routing(payload: dict, board: Path) -> None:

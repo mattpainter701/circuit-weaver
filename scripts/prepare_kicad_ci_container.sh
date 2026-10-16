@@ -12,6 +12,14 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
+# Checkout's temporary HOME can hide its safe.directory entry from later
+# container steps. Trust only this job's checked-out workspace, then require
+# real Git metadata; do not substitute a revision or allow a wildcard.
+if ! git -C "$GITHUB_WORKSPACE" rev-parse --verify HEAD; then
+  git config --global --add safe.directory "$GITHUB_WORKSPACE"
+  git -C "$GITHUB_WORKSPACE" rev-parse --verify HEAD
+fi
+
 python3 -m venv --system-site-packages "$RUNNER_TEMP/kicad-python"
 printf '%s\n' "$RUNNER_TEMP/kicad-python/bin" >> "$GITHUB_PATH"
 
