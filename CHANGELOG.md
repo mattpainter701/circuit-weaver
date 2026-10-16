@@ -5,6 +5,7 @@
 ### Placement intent and readable board layouts
 
 - Preserve functional groups and support-part ownership in native `place-pcb` with a matching `--design`. Bind intent to actual footprint/net inventory, enforce explicit connector edge and rotation, and report missing access intent and excessive board whitespace.
+- Optimize real courtyard centers for off-center footprints and measure support affinity from connected non-ground pads. Preserve fixed origins, and align new movable origins with the native DSN coordinate resolution so routing retains exact positions.
 - Add opt-in native reference-field cleanup with retained collision diagnostics. The automated demo uses an explicit compact board outline, carries its design constraints through placement, and retains layout and silkscreen evidence alongside routed-board DRC.
 
 ### Native board and component previews

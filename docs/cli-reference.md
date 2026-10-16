@@ -474,6 +474,12 @@ The edge applies to the footprint envelope, with the configured board clearance.
 Determine the mating direction from the actual footprint drawing; a J reference
 alone cannot establish it. `layout_review` reports missing connector intent and
 sparse-board warnings separately from DRC and manufacturing approval.
+Native placement uses the true courtyard center even when the library footprint
+origin is at a pin. Pad offsets and fixed coordinates are transformed between
+that center and the native origin; output retains native footprint coordinates.
+Support-distance diagnostics identify whether they measured connected non-ground
+pad endpoints or used a component-center fallback. These distances are advisory,
+not a substitute for part-specific layout limits.
 `--tidy-references` relocates native reference fields to readable positions and
 reports unresolved collisions; locked footprints retain their reference fields.
 

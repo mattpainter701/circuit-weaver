@@ -200,10 +200,19 @@ class Demo:
             f'<img src="{filename}" alt="{label} of the routed prototype board"></figure>'
             for i, (key, label, filename, caption) in enumerate(available)
         )
+        quality = summary.get("placement_quality", {})
+        dimensions = summary.get("board_size_mm", [])
+        layout_summary = (
+            f'<p>{dimensions[0]:g} × {dimensions[1]:g} mm · '
+            f'{len(quality.get("support_distances", []))} owner/support links · '
+            f'{len(quality.get("overlaps", []))} courtyard overlaps · '
+            f'{summary.get("silkscreen", {}).get("unresolved_count", "unchecked")} unresolved references</p>'
+        ) if len(dimensions) == 2 else ""
         previews = (
             '<section aria-label="Board preview"><h2>Board preview</h2>'
             '<p>Engineering preview from the routed board. These views do not grant manufacturing approval.</p>'
-            f'<div class="board-controls" role="group" aria-label="Board view">{buttons}</div>{panels}</section>'
+            f'{layout_summary}<div class="board-controls" role="group" aria-label="Board view">'
+            f'{buttons}</div>{panels}</section>'
         ) if available else ""
         schematic = "".join(
             f"<li><a href='{p.relative_to(self.output).as_posix()}'>{html.escape(p.name)}</a></li>"
@@ -362,6 +371,8 @@ def main() -> int:
                                           "--design", str(spec), "--tidy-references"])
         require(placement["placement"]["quality"]["review_required"] is False, "Placement constraints were violated")
         summary["layout_review"] = placement["placement"].get("layout_review", {})
+        summary["placement_quality"] = placement["placement"]["quality"]
+        summary["board_size_mm"] = [width, height]
         summary["silkscreen"] = placement["placement"].get("silkscreen", {})
         require(summary["silkscreen"].get("unresolved_count") == 0,
                 "Native reference cleanup left unresolved collisions")

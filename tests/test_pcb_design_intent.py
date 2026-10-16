@@ -3,7 +3,13 @@ from types import SimpleNamespace
 import pytest
 
 from circuit_weaver.component_db import ComponentDef
-from circuit_weaver.pcb_layout import _center_constraints, _design_intent, _layout_review, _native_origin, _rotated_offset
+from circuit_weaver.pcb_layout import (
+    _center_constraints,
+    _design_intent,
+    _layout_review,
+    _native_origin,
+    _rotated_offset,
+)
 
 
 @pytest.fixture
