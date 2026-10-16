@@ -23,6 +23,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,10 @@ _SPECCTRA_LITERAL_STRING_QUOTE_RE = re.compile(
     r'(\(string_quote\s+)"(?=\s*\))(?!\s*\)\s*"\s*\))',
     re.IGNORECASE,
 )
+_SPECCTRA_CLEARANCE_VALUE_RE = re.compile(
+    r"(?i)(\(clearance\s+)([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)(?=\s|\))"
+)
+_NATIVE_BOARD_ROUTING_CLEARANCE_MARGIN_MM = 0.01
 
 
 def _specctra_scan_text(text: str) -> str:
@@ -66,6 +71,12 @@ def _iter_sexpr_blocks(text: str, keyword: str):
     to distinguish net declarations inside pads from board-level declarations
     without accepting arbitrary text that happens to contain ``(pad``.
     """
+    for start, end in _iter_sexpr_block_spans(text, keyword):
+        yield text[start:end]
+
+
+def _iter_sexpr_block_spans(text: str, keyword: str):
+    """Yield source offsets for balanced blocks, excluding quoted lookalikes."""
     target = keyword.casefold()
     scan_text = _specctra_scan_text(text)
     index = 0
@@ -119,7 +130,7 @@ def _iter_sexpr_blocks(text: str, keyword: str):
             elif block_char == ")":
                 depth -= 1
                 if depth == 0:
-                    yield text[block_start : block_end + 1]
+                    yield block_start, block_end + 1
                     index = block_end + 1
                     break
         else:
@@ -150,6 +161,71 @@ def _decode_specctra_token(token: str) -> str:
 def _first_payload_token(block: str, keyword: str) -> str | None:
     match = re.match(_SPECCTRA_TOKEN, _block_payload(block, keyword))
     return _decode_specctra_token(match.group(0)) if match else None
+
+
+def _apply_specctra_clearance_margin(path: Path, margin_mm: float) -> dict[str, Any]:
+    """Tighten a KiCad-exported DSN's router rules without changing board DRC.
+
+    Round-trip evidence showed a routed clearance can return slightly below
+    the router's nominal value in native DRC. This margin gives the router
+    additional headroom; source PCB geometry and native project rules remain
+    unchanged.
+    """
+    if not math.isfinite(margin_mm) or margin_mm <= 0:
+        raise ValueError("Specctra clearance margin must be finite and positive")
+    text = path.read_text(encoding="utf-8")
+    unit_spans = list(_iter_sexpr_block_spans(text, "unit"))
+    if len(unit_spans) != 1:
+        raise ValueError("Cannot safely apply routing margin: DSN must declare exactly one unit")
+    unit_start, unit_end = unit_spans[0]
+    unit_block = text[unit_start:unit_end]
+    unit = (_first_payload_token(unit_block, "unit") or "").casefold()
+    unit_scale = {
+        "um": Decimal("1000"),
+        "mm": Decimal("1"),
+        "mil": Decimal("1") / Decimal("0.0254"),
+        "inch": Decimal("1") / Decimal("25.4"),
+        "cm": Decimal("0.1"),
+    }.get(unit)
+    if unit_scale is None:
+        raise ValueError(f"Cannot safely apply routing margin: unsupported DSN unit {unit!r}")
+
+    clearance_spans = list(_iter_sexpr_block_spans(text, "clearance"))
+    if not clearance_spans:
+        raise ValueError("Cannot safely apply routing margin: DSN clearance declarations are missing or ambiguous")
+    margin = Decimal(str(margin_mm)) * unit_scale
+    replacements: list[tuple[int, int, str]] = []
+    unchanged = 0
+    for start, end in clearance_spans:
+        block = text[start:end]
+        block_match = _SPECCTRA_CLEARANCE_VALUE_RE.match(block.strip())
+        if block_match is None:
+            raise ValueError("Cannot safely apply routing margin: DSN clearance declarations are ambiguous")
+        try:
+            original = Decimal(block_match.group(2))
+        except InvalidOperation as exc:
+            raise ValueError("Cannot safely apply routing margin to a nonnumeric DSN clearance") from exc
+        if not original.is_finite() or original < 0:
+            raise ValueError("Cannot safely apply routing margin to an invalid DSN clearance")
+        if _first_sexpr_block(block, "type") is not None:
+            unchanged += 1
+            continue
+        adjusted = original + margin
+        rendered = format(adjusted.normalize(), "f")
+        replacements.append((start + block_match.start(2), start + block_match.end(2), rendered))
+    if not replacements:
+        raise ValueError("Cannot safely apply routing margin: DSN has no general clearance rules")
+    for start, end, rendered in reversed(replacements):
+        text = text[:start] + rendered + text[end:]
+    path.write_text(text, encoding="utf-8")
+    return {
+        "applied": True,
+        "margin_mm": float(margin_mm),
+        "dsn_unit": unit,
+        "declarations_adjusted": len(replacements),
+        "typed_exceptions_unchanged": unchanged,
+        "native_board_rules_changed": False,
+    }
 
 
 def _payload_tokens(payload: str) -> list[str]:
@@ -707,11 +783,19 @@ def export_dsn(
     kicad_cli_path: str | Path | None = None,
     kicad_python_path: str | Path | None = None,
     overwrite: bool = False,
+    routing_clearance_margin_mm: float = 0.0,
 ) -> dict[str, Any]:
     """Export and validate Specctra DSN through native KiCad or a capable CLI."""
     timeout_error = _validate_timeout(timeout_seconds, "Specctra export")
     if timeout_error:
         return _result_error(timeout_error)
+    if (
+        not isinstance(routing_clearance_margin_mm, (int, float))
+        or isinstance(routing_clearance_margin_mm, bool)
+        or not math.isfinite(routing_clearance_margin_mm)
+        or routing_clearance_margin_mm < 0
+    ):
+        return _result_error("routing_clearance_margin_mm must be a finite nonnegative number")
 
     destination = Path(dsn_path)
     if destination.suffix.lower() != ".dsn":
@@ -759,6 +843,15 @@ def export_dsn(
             detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
             return _result_error(f"kicad-cli Specctra export failed: {detail}")
 
+        clearance_guardband = None
+        if routing_clearance_margin_mm > 0:
+            try:
+                clearance_guardband = _apply_specctra_clearance_margin(
+                    staging, float(routing_clearance_margin_mm)
+                )
+            except (OSError, ValueError) as exc:
+                return _result_error(f"Could not apply conservative router-only clearance margin: {exc}")
+
         validation = _validate_specctra_artifact(staging, "dsn")
         if not validation["valid"]:
             return _result_error(f"kicad-cli produced an invalid DSN: {validation['reason']}", artifact=validation)
@@ -766,13 +859,16 @@ def export_dsn(
         if publish_error:
             return _result_error(publish_error)
         validation["path"] = str(destination)
-        return {
+        result_payload = {
             "status": "ok",
             "message": "Specctra DSN exported, validated, and atomically published",
             "output_path": str(destination),
             "output_kind": "specctra_dsn",
             "artifact": validation,
         }
+        if clearance_guardband is not None:
+            result_payload["routing_clearance_guardband"] = clearance_guardband
+        return result_payload
     finally:
         _remove_staging_file(staging)
 
@@ -1302,6 +1398,7 @@ def autoroute_pcb(
         )
 
     start_time = time.perf_counter()
+    routing_clearance_guardband = None
     if source_suffix != ".dsn":
         export_result = export_dsn(
             source,
@@ -1310,9 +1407,11 @@ def autoroute_pcb(
             kicad_cli_path=kicad_cli,
             kicad_python_path=kicad_python_path,
             overwrite=overwrite,
+            routing_clearance_margin_mm=_NATIVE_BOARD_ROUTING_CLEARANCE_MARGIN_MM,
         )
         if export_result["status"] != "ok":
             return {**export_result, "preflight": preflight, "input": input_validation}
+        routing_clearance_guardband = export_result.get("routing_clearance_guardband")
     route_result = _route_candidates(
         dsn_path,
         ses_path,
@@ -1338,7 +1437,13 @@ def autoroute_pcb(
 
     elapsed = time.perf_counter() - start_time
     if route_result["status"] != "ok":
-        return {**route_result, "preflight": preflight, "input": input_validation}
+        return {
+            **route_result,
+            "preflight": preflight,
+            "input": input_validation,
+            **({"routing_clearance_guardband": routing_clearance_guardband}
+               if routing_clearance_guardband is not None else {}),
+        }
 
     stats = {**route_result["stats"], "routing_time_seconds": elapsed}
     incomplete = stats["incomplete"]
@@ -1370,6 +1475,8 @@ def autoroute_pcb(
         "routing_complete": incomplete == 0,
         "fabrication_ready": False,
         "requires_kicad_drc": True,
+        **({"routing_clearance_guardband": routing_clearance_guardband}
+           if routing_clearance_guardband is not None else {}),
         **({"search": route_result["search"]} if "search" in route_result else {}),
     }
     if routed_board_path is not None and not incomplete:

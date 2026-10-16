@@ -139,3 +139,7 @@ missing via/trace counts are measured from the validated SES. Each routing proce
 gets isolated settings and disabled analytics. On Freerouting 2.4+, automatic
 necking and the default fine-pitch fanout pass are disabled so routing uses the
 imported DSN widths/vias. Final KiCad DRC remains the acceptance gate.
+Native-board autorouting adds a 0.01 mm clearance margin to generic DSN rules,
+preserving typed exceptions, to accommodate observed export/router/import
+geometry differences. The result reports the applied margin. This does not change native board/project rules or
+caller-provided DSN files; the imported board must still pass native DRC.
