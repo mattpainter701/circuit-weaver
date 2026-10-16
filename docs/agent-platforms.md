@@ -55,6 +55,23 @@ Useful flags:
 - `--force` / `-Force` resolves managed-file conflicts in favor of the release.
 - `--backup` / `-Backup` requires force and preserves each replaced file.
 
+## Optional MCP Server
+
+The package also provides a stdio MCP server. Install its optional runtime and
+launch it with:
+
+```bash
+pip install "circuit-weaver[mcp]"
+circuit-weaver-mcp
+```
+
+The server exposes five tools: `validate_design`, `generate_artifacts`,
+`discover_projects`, `research_component`, and `manufacturing_readiness`.
+These tools cover focused operations; they do not run the conversational
+design wizard or provide the full CLI project lifecycle. Use the `circuit-weaver`
+agent skill or CLI for end-to-end design, import, analysis, resume, and
+manufacturing workflows. Installing skills does not configure an MCP client.
+
 ## Upgrade and Conflict Policy
 
 Each installed skill contains `.circuit-weaver-install.json`, recording the

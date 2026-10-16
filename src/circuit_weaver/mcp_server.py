@@ -98,7 +98,7 @@ def _generate_artifacts_tool(spec_json: str, output_dir: str = "") -> str:
 
         out = Path(output_dir) if output_dir else Path.cwd() / "output"
         out.mkdir(parents=True, exist_ok=True)
-        result = _call_without_stdout(generate_artifacts, spec, output_dir=out, export_svg=False)
+        result = _call_without_stdout(generate_artifacts, spec, output_dir=out, export_svg=False, project_root=out)
         return json.dumps(
             {
                 "status": "ok",

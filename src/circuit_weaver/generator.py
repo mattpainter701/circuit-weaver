@@ -1919,6 +1919,35 @@ def _pick_root_sheet_geometry(sheet_count: int, sheet_w: float, sheet_h: float):
     return "A0", x_margin, y_start, cols, x_spacing, y_spacing
 
 
+def _annotate_power_symbols(paths: Iterable[str | Path]) -> None:
+    """Give generated power/flag instances unique project-wide references.
+
+    KiCad accepts placeholder references during ERC but reports annotation
+    errors on netlist export. Keep library definitions untouched and update
+    both the visible property and the instance record in deterministic order.
+    """
+    from .parser import _extract_blocks
+
+    counters = {"#PWR": 0, "#FLG": 0}
+    for path in sorted(Path(p) for p in paths if Path(p).suffix == ".kicad_sch"):
+        text = path.read_text(encoding="utf-8")
+        for block in _extract_blocks(text, "symbol"):
+            if not re.match(r"\(symbol\s+\(lib_id\b", block):
+                continue
+            match = re.search(r'\(property\s+"Reference"\s+"(#PWR|#FLG)\d*"', block)
+            if match is None:
+                continue
+            prefix = match.group(1)
+            counters[prefix] += 1
+            reference = f"{prefix}{counters[prefix]:04d}"
+            updated = re.sub(r'(\(property\s+"Reference"\s+")[^"]+("[^)]*)',
+                             lambda m: m.group(1) + reference + m.group(2), block, count=1)
+            updated = re.sub(r'(\(reference\s+")[^"]+("\))',
+                             lambda m: m.group(1) + reference + m.group(2), updated)
+            text = text.replace(block, updated, 1)
+        path.write_text(text, encoding="utf-8", newline="")
+
+
 def generate_from_components(
     components: list[ComponentDef],
     output_dir: str = ".",
@@ -2253,6 +2282,8 @@ def generate_from_components(
             generated_files.insert(0, str(root_file))
             _logger.info("  -> %s (root schematic)", root_file)
 
+        _annotate_power_symbols(generated_files)
+
         # 4. Generate design report
         if validate:
             from .report import generate_report
@@ -2420,6 +2451,11 @@ def _generate_root_schematic(
     (property "Sheetfile" "{filename}" (at {sx:.2f} {sy + sheet_h + 1.27:.2f} 0)
       (effects (font (size 1.0 1.0)) (justify left top))
     )
+    (instances
+      (project "{project_name}"
+        (path "/{root_uuid}" (page "{si.get('page_num', i + 2)}"))
+      )
+    )
 {pin_lines}  )
 ''')
 
@@ -2437,7 +2473,7 @@ def _generate_root_schematic(
     parts.append(sheet_title_text(f"{project_name}", f"Top-level overview — {len(sheet_infos)} sub-sheets", x=20, y=15))
 
     # Sheet instances for root
-    parts.append(f'  (sheet_instances\n    (path "/{root_uuid}/" (page "1"))\n  )\n')
+    parts.append('  (sheet_instances\n    (path "/" (page "1"))\n  )\n')
     parts.append(")")
 
     root_file = _contained_output_path(output_path, f"{project_name}.kicad_sch")

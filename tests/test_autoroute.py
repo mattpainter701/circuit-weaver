@@ -11,6 +11,7 @@ from unittest import mock
 import pytest
 
 from circuit_weaver.autoroute import (
+    _effective_optimization_threads,
     _find_freerouting_command,
     _find_freerouting_jar,
     _find_kicad_cli,
@@ -23,6 +24,25 @@ from circuit_weaver.autoroute import (
     export_dsn,
     preflight_pcb,
 )
+
+
+@pytest.mark.parametrize(
+    ("suffix", "routed", "attempts", "requested", "expected"),
+    [
+        (".kicad_pcb", True, 1, None, 0),
+        (".kicad_pcb", True, 3, None, 0),
+        (".kicad_pcb", True, 3, 2, 2),
+        (".kicad_pcb", False, 3, None, 1),
+        (".dsn", False, 3, None, 1),
+        (".dsn", False, 1, None, None),
+    ],
+)
+def test_routed_native_board_defaults_to_optimizer_disabled_but_respects_explicit_threads(
+    suffix, routed, attempts, requested, expected,
+):
+    assert _effective_optimization_threads(
+        source_suffix=suffix, routed_board=routed, attempts=attempts, requested=requested,
+    ) == expected
 
 ROUTABLE_PCB = """(kicad_pcb (version 20240108) (generator "pcbnew")
   (general (thickness 1.6))
@@ -153,6 +173,9 @@ def _portfolio_runner(outputs, seen, *, after_attempt=None):
     def run(command, **kwargs):
         if "-help" in command:
             return mock.Mock(returncode=0, stdout="Freerouting v2.2.4\n-random_seed seed", stderr="")
+        assert Path(kwargs["cwd"]).is_dir()
+        assert Path(command[command.index("-de") + 1]).is_absolute()
+        assert Path(command[command.index("-do") + 1]).is_absolute()
         seen.append((command, kwargs))
         output = outputs[len(seen) - 1]
         if isinstance(output, Exception):

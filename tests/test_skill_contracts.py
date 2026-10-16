@@ -79,7 +79,7 @@ def test_circuit_weaver_recipe_matches_cli_contract() -> None:
     assert "resume <project>" in text
     assert "export-dual-cpl design.yaml --pcb board.kicad_pcb" in text
     assert "--require-kicad" in text
-    assert "routed.kicad_pcb" not in text
+    assert "--routed-board" in text
     assert not re.search(r"autoroute[^\n]*_placement\.kicad_pcb", text)
     assert not re.search(r"(?:check-dfm|export-gerbers)[^\n]*_placement\.kicad_pcb", text)
 
@@ -92,6 +92,31 @@ def test_circuit_weaver_sample_route_works_for_pypi_installs() -> None:
     assert "full source-checkout gallery is bundled in the wheel" in text
     assert "Which sample would you like to start from? [1-13]" not in text
     assert "cp -r samples/<sample>/ ~/<user-chosen-name>/" not in text
+    assert "do not assume a POSIX shell command" in text
+
+
+def test_confidence_score_does_not_claim_manufacturing_readiness() -> None:
+    text = (REPO_ROOT / "skills" / "circuit-weaver" / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "manufacturing-readiness \"${PROJECT_NAME}\"" in text
+    assert "manufacturing readiness authority" in text
+    assert re.search(r"Do not infer\s+`fabrication_ready` from a confidence score", text)
+    assert "ready_for_fab** (80+, no blockers): Design is ready to order" not in text
+
+
+def test_agent_platform_docs_describe_optional_mcp_boundary() -> None:
+    text = (REPO_ROOT / "docs" / "agent-platforms.md").read_text(encoding="utf-8")
+
+    for tool in (
+        "validate_design",
+        "generate_artifacts",
+        "discover_projects",
+        "research_component",
+        "manufacturing_readiness",
+    ):
+        assert tool in text
+    assert 'pip install "circuit-weaver[mcp]"' in text
+    assert "Installing skills does not configure an MCP client." in text
 
 
 def test_design_wizard_does_not_route_preview_board() -> None:
@@ -103,7 +128,7 @@ def test_design_wizard_does_not_route_preview_board() -> None:
     assert "_placement.kicad_pcb" not in text
     assert "--svg-placement" not in text
     assert "--allow-partial" in text
-    assert "routed.kicad_pcb" not in text
+    assert "--routed-board" in text
     assert not re.search(r"autoroute[^\n]*_placement\.kicad_pcb", text)
 
 
@@ -157,7 +182,7 @@ def test_autoroute_project_skill_uses_validated_specctra_contract() -> None:
     assert "--output board.ses" in text
     assert "status: partial" in text
     assert "java -jar" not in text
-    assert "routed.kicad_pcb" not in text
+    assert "--routed-board" in text
 
 
 def test_kicad_skill_uses_durable_multi_artifact_analysis_flow() -> None:

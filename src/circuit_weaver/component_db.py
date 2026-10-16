@@ -2034,7 +2034,7 @@ def _builtin_components():
         )
     )
 
-    # --- USB-C power-only connector (4-pin simplified) ---
+    # --- USB-C power-only connector ---
     reg.register(
         ComponentDef(
             mpn="USB-C-PWR",
@@ -2046,13 +2046,34 @@ def _builtin_components():
             pins=[
                 PinDef("A4", "VBUS", "power_out", "R"),
                 PinDef("A1", "GND", "power_in", "B"),
-                PinDef("B4", "VBUS2", "passive", "R"),
-                PinDef("B1", "GND2", "power_in", "B"),
                 PinDef("A5", "CC1", "bidirectional", "L"),
-                PinDef("B5", "CC2", "bidirectional", "L"),
+                PinDef("A6", "D+1", "bidirectional", "L"),
+                PinDef("A7", "D-1", "bidirectional", "L"),
+                PinDef("A8", "SBU1", "bidirectional", "L"),
+                PinDef("A9", "VBUS2", "passive", "R"),
+                PinDef("A12", "GND2", "power_in", "B"),
+                PinDef("B1", "GND3", "power_in", "B"),
+                PinDef("B4", "VBUS3", "passive", "R"),
+                PinDef("B5", "CC2", "bidirectional", "T"),
+                PinDef("B6", "D+2", "bidirectional", "L"),
+                PinDef("B7", "D-2", "bidirectional", "L"),
+                PinDef("B8", "SBU2", "bidirectional", "L"),
+                PinDef("B9", "VBUS4", "passive", "R"),
+                PinDef("B12", "GND4", "power_in", "B"),
+                PinDef("SH", "SHIELD", "passive", "B"),
             ],
             pin_nets={"A5": "USB_CC1", "B5": "USB_CC2"},
-            power_pins={"A4": "VBUS_5V", "A1": "GND", "B4": "VBUS_5V", "B1": "GND"},
+            power_pins={
+                "A4": "VBUS_5V",
+                "A9": "VBUS_5V",
+                "B4": "VBUS_5V",
+                "B9": "VBUS_5V",
+                "A1": "GND",
+                "A12": "GND",
+                "B1": "GND",
+                "B12": "GND",
+            },
+            explicit_no_connects={"A6", "A7", "A8", "B6", "B7", "B8", "SH"},
             straps=[
                 StrapConfig(
                     "A5",

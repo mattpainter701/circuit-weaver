@@ -982,6 +982,26 @@ def test_ic_data_store_loads():
     assert "ldo" in topos
 
 
+def test_ch340g_uses_standard_soic16_footprint():
+    """CH340G's SOP-16 package maps to the matching standard KiCad footprint."""
+    from circuit_weaver.ic_data import get_ic_data
+
+    ch340g = get_ic_data("CH340G")
+    assert ch340g is not None
+    assert ch340g["footprint"] == "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm"
+
+
+def test_ams1117_ic_data_uses_standard_sot223_footprint():
+    """The topology factory's bundled AMS1117 data names its standard footprint."""
+    from circuit_weaver.ic_data import get_ic_data
+
+    ams1117 = get_ic_data("AMS1117-3.3")
+    assert ams1117 is not None
+    assert ams1117["footprint"] == "Package_TO_SOT_SMD:SOT-223-3_TabPin2"
+    assert {pin["number"] for pin in ams1117["pins"]} == {"1", "2", "3"}
+    assert ams1117["pin_out"] == "2"
+
+
 def test_data_driven_template_via_registry():
     """DataDrivenTemplate should be findable via the registry."""
     from circuit_weaver.subcircuits.base import DataDrivenTemplate, SubcircuitRegistry

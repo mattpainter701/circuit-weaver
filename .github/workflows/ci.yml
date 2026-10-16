@@ -247,6 +247,12 @@ jobs:
           echo '251101c3eeac22d7e7dfcf6796603279e5d1000283eb82d8f093780f7afc6aa9  /tmp/freerouting-2.4.1.jar' | sha256sum --check
           python -m pytest tests/test_native_pcb_workflow.py -q
 
+      - name: Validate generated schematic through routed prototype and export gate
+        env:
+          CIRCUIT_WEAVER_KICAD_PYTHON: /usr/bin/python3
+          CIRCUIT_WEAVER_FREEROUTING: /tmp/freerouting-2.4.1.jar
+        run: python scripts/validate_app_workflow.py --output .ci-kicad/native-pcb/generated-workflow
+
       - name: Preserve real PCB validation artifacts
         if: always()
         uses: actions/upload-artifact@v7

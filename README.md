@@ -59,6 +59,7 @@ Verification is conservative: a capability only claims the evidence level its pu
 | `status` | beta | CLI: `status`; Python: `circuit_weaver.project_state:get_project_state_summary`; Skill: `circuit-weaver` | not applicable (operational) | `command-contract` | 0.32.1 |
 | `resume` | experimental | CLI: `resume`; Python: `circuit_weaver.project_state:resume_project`; Skill: `circuit-weaver` | not applicable (operational) | `command-contract` | 0.32.1 |
 | `design-wizard` | experimental | CLI: `design-wizard`; Skill: `design-wizard` | `static-parse` → `static-parse` | `command-contract`, `static-parse` | 0.32.1 |
+| `build-pcb` | experimental | CLI: `build-pcb`; Python: `circuit_weaver.schematic_pcb:schematic_to_pcb`; Skill: `circuit-weaver` | `static-parse` → `kicad-load` | `command-contract`, `static-parse`, `kicad-load`, `external-tool` | 0.35.0 |
 | `place-pcb` | experimental | CLI: `place-pcb`; Skill: `circuit-weaver` | `static-parse` → `static-parse` | `command-contract`, `external-tool`, `user-supplied` | 0.32.1 |
 | `log-status` | beta | CLI: `log-status` | not applicable (operational) | `command-contract` | 0.32.1 |
 | `log-view` | beta | CLI: `log-view` | not applicable (operational) | `command-contract` | 0.32.1 |
@@ -128,6 +129,10 @@ circuit-weaver design-wizard
 ```
 
 The skill walks through IC selection, spec validation, schematic generation, and the electrical-PCB handoff.
+
+For a repeatable real-tool demonstration, run `python scripts/validate_app_workflow.py --output ./workflow-evidence`.
+The [automation validation guide](docs/automation-validation.md) describes native ERC/DRC evidence, optional MCP checks,
+and the prototype/manufacturing boundary.
 
 ---
 

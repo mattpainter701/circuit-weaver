@@ -890,6 +890,7 @@ def _probe_freerouting_capabilities(command: list[str], *, timeout_seconds: floa
                 capture_output=True,
                 text=True,
                 timeout=timeout_seconds,
+                cwd=user_data,
             )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"probe_ok": False, "version": None, "seed": False, "reason": str(exc)}
@@ -905,6 +906,20 @@ def _probe_freerouting_capabilities(command: list[str], *, timeout_seconds: floa
 def _modern_router(capability_probe: dict[str, Any] | None) -> bool:
     match = re.match(r"(\d+)\.(\d+)", str((capability_probe or {}).get("version") or ""))
     return bool(match and tuple(map(int, match.groups())) >= (2, 4))
+
+
+def _effective_optimization_threads(
+    *, source_suffix: str, routed_board: bool, attempts: int, requested: int | None,
+) -> int | None:
+    """Keep native-board DRC-valid routing as the default while honoring explicit choices."""
+    if requested is not None:
+        return requested
+    if source_suffix == ".kicad_pcb" and routed_board:
+        # Freerouting 2.4.1's optimizer can emit sub-class-width neck segments
+        # despite neckdown/fanout being disabled. Skip optimizer by default
+        # when the caller asks us to publish a native DRC-checked board.
+        return 0
+    return 1 if attempts > 1 else None
 
 
 def _route_specctra(
@@ -931,9 +946,9 @@ def _route_specctra(
     routing_command = [
         *command,
         "-de",
-        str(dsn_path),
+        str(dsn_path.resolve()),
         "-do",
-        str(staging),
+        str(staging.resolve()),
         "-mp",
         str(passes),
         "-l",
@@ -971,6 +986,7 @@ def _route_specctra(
                 capture_output=True,
                 text=True,
                 timeout=timeout_seconds,
+                cwd=user_data,
             )
     except subprocess.TimeoutExpired:
         _remove_staging_file(staging)
@@ -1306,7 +1322,12 @@ def autoroute_pcb(
         timeout_seconds=timeout_seconds,
         overwrite=overwrite,
         headless=headless,
-        optimization_threads=1 if attempts > 1 and optimization_threads is None else optimization_threads,
+        optimization_threads=_effective_optimization_threads(
+            source_suffix=source_suffix,
+            routed_board=routed_board_path is not None,
+            attempts=attempts,
+            requested=optimization_threads,
+        ),
         optimizer_strategy=optimizer_strategy,
         optimizer_hybrid_ratio=optimizer_hybrid_ratio,
         optimizer_item_selection=optimizer_item_selection,
