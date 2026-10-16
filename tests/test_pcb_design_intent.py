@@ -97,3 +97,34 @@ def test_movable_native_origins_survive_dsn_coordinate_resolution_and_fixed_orig
     x, y = _native_origin({**placement, "constraint_locked": True}, (2.975, 4.025), {"x": 0, "y": 0})
     assert x == pytest.approx(11.878368, abs=1e-9)
     assert y == pytest.approx(19.82)
+
+
+def test_native_placement_is_invariant_to_uuid_dependent_footprint_iteration(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from circuit_weaver.drc_runner import DrcResult
+    from circuit_weaver.pcb_layout import place_pcb
+
+    source = tmp_path / "input.kicad_pcb"
+    source.write_bytes(b"source board")
+    footprints = [{"ref": ref, "footprint": "IC", "x": x, "y": 10, "rotation": 0,
+                   "layer": "front", "locked": False, "width": 3, "height": 2,
+                   "pads": [{"number": "1", "net": "SIGNAL", "local_x": 0, "local_y": 0}]}
+                  for ref, x in (("U1", 8), ("U2", 22), ("U3", 28))]
+    monkeypatch.setattr("circuit_weaver.pcb_layout.preflight_pcb", lambda _path: {"routable": True})
+
+    def native(operation, **kwargs):
+        if operation == "inspect":
+            return {"status": "ok", "rectangular_outline": True, "track_count": 0, "zone_count": 0,
+                    "bounds": {"x": 0, "y": 0, "width": 36, "height": 30}, "footprints": footprints}
+        Path(kwargs["output"]).write_bytes(b"placed board")
+        return {"status": "ok"}
+
+    monkeypatch.setattr("circuit_weaver.pcb_layout.run_kicad", native)
+    monkeypatch.setattr("circuit_weaver.pcb_layout.run_drc", lambda *a, **k: DrcResult(status="ok", board=str(a[0])))
+    first = place_pcb(source, tmp_path / "first.kicad_pcb", iterations=40, seed=7)
+    footprints.reverse()
+    second = place_pcb(source, tmp_path / "second.kicad_pcb", iterations=40, seed=7)
+    assert first["status"] == second["status"] == "ok"
+    assert first["placement"]["placements"] == second["placement"]["placements"]
+    assert source.read_bytes() == b"source board"

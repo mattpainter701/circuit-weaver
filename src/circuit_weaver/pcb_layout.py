@@ -225,7 +225,9 @@ def place_pcb(
         constraints = _center_constraints(constraints, inspection["footprints"], bounds)
         components = []
         center_offsets = {}
-        for item in inspection["footprints"]:
+        # Native iteration order may depend on regenerated KiCad UUIDs. A seed
+        # must describe the same search when physical/electrical input is equal.
+        for item in sorted(inspection["footprints"], key=lambda footprint: footprint["ref"]):
             design_component = intent.get(item["ref"])
             component = ComponentDef(
                 mpn=item["ref"], source_ref=item["ref"], footprint=item["footprint"],
