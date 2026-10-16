@@ -80,8 +80,8 @@ SPICE behavior when ngspice or device models are missing.
 The missing schematic-to-board step can also be called directly:
 
 ```sh
-circuit-weaver build-pcb generated/Project.kicad_sch -o prototype.kicad_pcb --clearance 0.127
-circuit-weaver place-pcb prototype.kicad_pcb -o placed.kicad_pcb --seed 7
+circuit-weaver build-pcb generated/Project.kicad_sch -o prototype.kicad_pcb --width 36 --height 30 --clearance 0.127
+circuit-weaver place-pcb prototype.kicad_pcb -o placed.kicad_pcb --seed 7 --design design.yaml --tidy-references
 circuit-weaver autoroute placed.kicad_pcb --routed-board routed.kicad_pcb --attempts 3
 ```
 
@@ -93,6 +93,13 @@ The initial rectangular board uses `--width`/`--height` in millimeters and is
 unrouted. The demo explicitly requests 0.127 mm default clearance because the
 USB connector has 0.15 mm pad gaps; the native 0.2 mm default would reject it.
 This is a declared prototype assumption, not a validated fabrication profile.
+The default sample declares a 36 × 30 mm review outline and a bottom-facing J1
+edge/orientation constraint. The runner uses those dimensions (or explicit
+`--width`/`--height`) and passes the matching design into native placement.
+Functional ownership and edge intent survive placement, while native reference
+cleanup is measured after saving and reloading. Layout review warnings and
+unresolved labels are retained in the report; successful DRC alone does not
+establish connector access or readable silkscreen.
 Omitting `--clearance` preserves native defaults, and existing source board
 rules cannot be weakened by this option. Outputs remain separate from the input; replacement requires
 `--overwrite`. The prototype path supports direct sibling schematic sheets;

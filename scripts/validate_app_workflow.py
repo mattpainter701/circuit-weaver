@@ -20,6 +20,8 @@ import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import yaml
+
 REPO = Path(__file__).resolve().parents[1]
 
 
@@ -198,10 +200,19 @@ class Demo:
             f'<img src="{filename}" alt="{label} of the routed prototype board"></figure>'
             for i, (key, label, filename, caption) in enumerate(available)
         )
+        quality = summary.get("placement_quality", {})
+        dimensions = summary.get("board_size_mm", [])
+        layout_summary = (
+            f'<p>{dimensions[0]:g} × {dimensions[1]:g} mm · '
+            f'{len(quality.get("support_distances", []))} owner/support links · '
+            f'{len(quality.get("overlaps", []))} courtyard overlaps · '
+            f'{summary.get("silkscreen", {}).get("unresolved_count", "unchecked")} unresolved references</p>'
+        ) if len(dimensions) == 2 else ""
         previews = (
             '<section aria-label="Board preview"><h2>Board preview</h2>'
             '<p>Engineering preview from the routed board. These views do not grant manufacturing approval.</p>'
-            f'<div class="board-controls" role="group" aria-label="Board view">{buttons}</div>{panels}</section>'
+            f'{layout_summary}<div class="board-controls" role="group" aria-label="Board view">'
+            f'{buttons}</div>{panels}</section>'
         ) if available else ""
         schematic = "".join(
             f"<li><a href='{p.relative_to(self.output).as_posix()}'>{html.escape(p.name)}</a></li>"
@@ -293,6 +304,9 @@ def main() -> int:
     parser.add_argument("--spec", type=Path, default=REPO / "samples/led_power_indicator/led_power_indicator.yaml")
     parser.add_argument("--output", type=Path, required=True, help="New evidence directory; existing output is refused")
     parser.add_argument("--iterations", type=int, default=1500)
+    parser.add_argument("--width", type=float, help="Prototype board width in mm; defaults to design constraint or 80")
+    parser.add_argument("--height", type=float,
+                        help="Prototype board height in mm; defaults to design constraint or 60")
     parser.add_argument("--attempts", type=int, default=3)
     parser.add_argument("--route-timeout", type=int, default=180)
     parser.add_argument("--clearance", type=float, default=0.127,
@@ -332,6 +346,11 @@ def main() -> int:
         summary["runner_sha256"] = digest(Path(__file__))
         original = digest(source_spec)
         shutil.copy2(source_spec, spec)
+        design = yaml.safe_load(spec.read_text(encoding="utf-8"))
+        board_rule = next((rule for rule in design.get("pcb_constraints", [])
+                           if rule.get("target") == "board" and rule.get("kind") == "placement"), {})
+        width = args.width if args.width is not None else board_rule.get("width_mm", 80)
+        height = args.height if args.height is not None else board_rule.get("height_mm", 60)
         demo.command("doctor", ["doctor"], json_output=False)
         valid = demo.command("validate", ["validate", str(spec)])
         require(valid.get("valid") is True, "Static design validation failed")
@@ -342,11 +361,23 @@ def main() -> int:
         demo.command("confidence", ["confidence", str(spec), "--run-sims", "--json",
                                     "-o", str(output / "generated/confidence_report.html")])
         built = demo.command("build", ["build-pcb", str(root), "-o", str(output / "unplaced.kicad_pcb"),
-                                      "--clearance", str(args.clearance)])
+                                      "--clearance", str(args.clearance), "--width", str(width),
+                                      "--height", str(height)])
         require(built.get("fabrication_ready") is False, "Prototype board incorrectly claims fabrication readiness")
         summary["prototype_clearance_mm"] = args.clearance
-        demo.command("place", ["place-pcb", str(output / "unplaced.kicad_pcb"), "-o", str(output / "placed.kicad_pcb"),
-                               "--iterations", str(args.iterations), "--seed", "7"])
+        placement = demo.command("place", ["place-pcb", str(output / "unplaced.kicad_pcb"),
+                                          "-o", str(output / "placed.kicad_pcb"),
+                                          "--iterations", str(args.iterations), "--seed", "7",
+                                          "--design", str(spec), "--tidy-references"])
+        require(placement["placement"]["quality"]["review_required"] is False, "Placement constraints were violated")
+        summary["layout_review"] = placement["placement"].get("layout_review", {})
+        summary["placement_quality"] = placement["placement"]["quality"]
+        summary["board_size_mm"] = [width, height]
+        summary["silkscreen"] = placement["placement"].get("silkscreen", {})
+        require(summary["silkscreen"].get("unresolved_count") == 0,
+                "Native reference cleanup left unresolved collisions")
+        require(summary["silkscreen"].get("remaining_conflict_count") == 0,
+                "Native silkscreen conflict check did not pass")
         routed = output / "routed.kicad_pcb"
         routing = demo.command("route", ["autoroute", str(output / "placed.kicad_pcb"), "--routed-board", str(routed),
                                          "--attempts", str(args.attempts), "--timeout", str(args.route_timeout),

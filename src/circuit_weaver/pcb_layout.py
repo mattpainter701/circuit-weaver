@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
+import json
+import math
 import shutil
 import tempfile
 from pathlib import Path
@@ -14,7 +17,123 @@ from .drc_runner import run_drc
 from .evidence import EvidenceLedger
 from .kicad_bridge import run_kicad
 from .pcb_handoff import _pcb_output_lock, _publish_staged_transaction
-from .placement_optimizer import PlacementConfig, optimize_placement
+from .placement_optimizer import PlacementConfig, _position_values, optimize_placement
+
+
+def _rotated_offset(x: float, y: float, rotation: float) -> tuple[float, float]:
+    """Rotate local KiCad coordinates, whose Y axis points down."""
+    angle = math.radians(rotation)
+    cosine, sine = math.cos(angle), math.sin(angle)
+    return x * cosine + y * sine, y * cosine - x * sine
+
+
+def _center_constraints(constraints: list[dict], footprints: list[dict], bounds: dict) -> list[dict]:
+    """Translate authored footprint origins to the optimizer's courtyard centers."""
+    by_ref = {item["ref"]: item for item in footprints}
+    result = copy.deepcopy(constraints)
+    for rule in result:
+        item = by_ref.get(rule.get("target"))
+        x, y = _position_values(rule)
+        if item is None or x is None or y is None or rule.get("kind") != "placement":
+            continue
+        rotation = rule.get("rotation", 0)
+        if isinstance(rotation, bool) or not isinstance(rotation, (int, float)) or not math.isfinite(rotation):
+            raise ValueError("Fixed placement rotation must be a finite number")
+        if item["locked"] and (
+            abs(x + bounds["x"] - item["x"]) > 0.001 or abs(y + bounds["y"] - item["y"]) > 0.001
+            or abs((rotation - item["rotation"] + 180) % 360 - 180) > 0.001
+        ):
+            raise ValueError(f"{item['ref']}: design intent conflicts with a locked footprint")
+        dx, dy = _rotated_offset(item.get("courtyard_center_x", 0), item.get("courtyard_center_y", 0), rotation)
+        rule["x_mm"], rule["y_mm"] = x + dx, y + dy
+    return result
+
+
+def _native_origin(placement: dict, offset: tuple[float, float], bounds: dict) -> tuple[float, float]:
+    dx, dy = _rotated_offset(*offset, placement["rotation"])
+    x, y = placement["x"] + bounds["x"] - dx, placement["y"] + bounds["y"] - dy
+    # Native KiCad DSN export uses tenths of a micrometer for positions.
+    # Quantize new movable coordinates before publication so routing can retain
+    # their exact native positions (0.1 um = 0.0001 mm).
+    # Authored fixed positions and existing board locks retain full precision.
+    if not placement.get("constraint_locked"):
+        x, y = round(x, 4), round(y, 4)
+    return x, y
+
+
+def _design_intent(spec: dict[str, Any] | None, footprints: list[dict], bounds: dict) -> tuple[dict, list[dict]]:
+    """Bind optional design intent to real board references, footprints and nets.
+
+    The design supplies roles and constraints only. Native board geometry and
+    pad connectivity remain the source of all placement dimensions and costs.
+    """
+    if spec is None:
+        return {}, []
+    from .design_loader import compile_design_ir
+    from .placement_pipeline import build_placement_inventory
+
+    compiled = compile_design_ir(spec, enrich_parts=False)
+    inventory = build_placement_inventory(compiled.components)
+    by_ref = {component.source_ref: component for component in inventory.components}
+    if set(by_ref) != {item["ref"] for item in footprints}:
+        raise ValueError("Design intent references do not exactly match the native board inventory")
+    for item in footprints:
+        component = by_ref[item["ref"]]
+        if component.footprint.split(":")[-1] != item["footprint"].split(":")[-1]:
+            raise ValueError(f"{item['ref']}: design footprint does not match the native board")
+        actual = {str(pad["number"]): pad["net"] for pad in item["pads"] if pad["number"]}
+        expected = {**component.power_pins, **component.pin_nets}
+        # Assembly support net1/net2 describe endpoints, not symbol pin order.
+        # The schematic compiler may emit the capacitor symbol reversed. Only
+        # use unordered endpoints for two-terminal generated supports; preserve
+        # exact pad checks for primary components.
+        if (getattr(component, "placement_parent_ref", "") and len(actual) == len(expected) == 2
+                and sorted(actual.values()) == sorted(expected.values())):
+            continue
+        for pin, net in expected.items():
+            if actual.get(str(pin)) != net:
+                raise ValueError(f"{item['ref']}.{pin}: design net does not match the native board")
+    constraints = list(compiled.ir.pcb_constraints)
+    # A placement command may move parts, never resize an existing board.
+    for rule in constraints:
+        if str(rule.get("target", "")).lower() in {"board", "board_outline", "pcb", "outline"}:
+            for key, axis in (("width_mm", "width"), ("height_mm", "height")):
+                value = rule.get(key, rule.get(f"board_{key}"))
+                if value is not None and (
+                    isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or abs(float(value) - bounds[axis]) > 0.1
+                ):
+                    raise ValueError("Design board dimensions do not match the native Edge.Cuts outline")
+    return by_ref, constraints
+
+
+def _layout_review(placements: dict[str, dict], components: list[ComponentDef], constraints: list[dict],
+                   bounds: dict) -> dict[str, Any]:
+    """Report assembly readability separately from electrical/manufacturing approval."""
+    connectors = []
+    warnings = []
+    edge_rules = {rule.get("target"): rule for rule in constraints if rule.get("edge")}
+    for component in components:
+        if component.category not in {"connector", "usb", "debug"}:
+            continue
+        rule = edge_rules.get(component.source_ref, {})
+        explicit = rule.get("edge") in {"top", "bottom", "left", "right"} and "rotation" in rule
+        connectors.append({"reference": component.source_ref, "edge": rule.get("edge"),
+                           "rotation": placements[component.source_ref]["rotation"],
+                           "edge_and_orientation_specified": explicit})
+        if not explicit:
+            warnings.append(f"{component.source_ref}: specify the mating edge and rotation; "
+                            "nearest-edge affinity cannot verify access.")
+    area = bounds["width"] * bounds["height"]
+    footprint_area = sum(component.placement_width_mm * component.placement_height_mm for component in components)
+    occupied_ratio = footprint_area / area if area else 0.0
+    if occupied_ratio < 0.1:
+        warnings.append("Sparse board: review outline size against enclosure, routing and thermal requirements.")
+    return {"status": "review_required" if warnings else "intent_specified",
+            "connectors": connectors, "courtyard_area_ratio": round(occupied_ratio, 4),
+            "warnings": warnings, "fabrication_ready": False,
+            "scope": "Placement intent and readability only; "
+                     "part-specific electrical and mechanical review remains required."}
 
 
 def _hash(path: Path) -> str:
@@ -73,10 +192,13 @@ def _publish(staged: Path, destination: Path, snapshots: dict[Path, str | None],
 def place_pcb(
     board_path: str | Path, output_path: str | Path, *, iterations: int = 5000, seed: int = 0,
     overwrite: bool = False, kicad_python_path: str | Path | None = None,
+    design_spec: dict[str, Any] | None = None, tidy_references: bool = False,
 ) -> dict[str, Any]:
     """Place an unrouted rectangular board, preserving all real pads and nets."""
     source, destination = Path(board_path).resolve(), Path(output_path).resolve()
     try:
+        if not isinstance(tidy_references, bool):
+            raise ValueError("tidy_references must be a boolean")
         if destination.suffix.lower() != ".kicad_pcb":
             raise ValueError("Placement output must be a .kicad_pcb file")
         if source == destination:
@@ -99,47 +221,77 @@ def place_pcb(
         if inspection["track_count"] or inspection["zone_count"]:
             raise ValueError("Automatic placement requires an unrouted board without copper zones")
         bounds = inspection["bounds"]
-        constraints = []
+        intent, constraints = _design_intent(design_spec, inspection["footprints"], bounds)
+        authored_constraints = constraints
+        constraints = _center_constraints(constraints, inspection["footprints"], bounds)
         components = []
-        for item in inspection["footprints"]:
+        center_offsets = {}
+        # Native iteration order may depend on regenerated KiCad UUIDs. A seed
+        # must describe the same search when physical/electrical input is equal.
+        for item in sorted(inspection["footprints"], key=lambda footprint: footprint["ref"]):
+            design_component = intent.get(item["ref"])
             component = ComponentDef(
                 mpn=item["ref"], source_ref=item["ref"], footprint=item["footprint"],
-                category="connector" if item["ref"].startswith("J") else "other",
+                category=(design_component.category if design_component else
+                          "connector" if item["ref"].startswith("J") else "other"),
                 pins=[PinDef(p["number"], p["number"], "passive", "L") for p in item["pads"]],
                 pin_nets={p["number"]: p["net"] for p in item["pads"] if p["net"]},
             )
-            component.placement_width_mm = item["width"]
-            component.placement_height_mm = item["height"]
+            component.placement_width_mm = item.get("courtyard_width", item["width"])
+            component.placement_height_mm = item.get("courtyard_height", item["height"])
+            center_x, center_y = item.get("courtyard_center_x", 0), item.get("courtyard_center_y", 0)
+            center_offsets[item["ref"]] = (center_x, center_y)
             component.placement_layer = item["layer"]
             component.placement_geometry_status = "board_geometry"
+            if design_component:
+                component.functional_section = design_component.functional_section
+                component.block_id = design_component.block_id
+                component.placement_parent_ref = getattr(design_component, "placement_parent_ref", "")
+                component.placement_role = getattr(design_component, "placement_role", "")
             component.placement_pad_offsets = {}
             for pad in item["pads"]:
                 if pad["net"]:
-                    component.placement_pad_offsets.setdefault(pad["net"], []).append((pad["local_x"], pad["local_y"]))
+                    component.placement_pad_offsets.setdefault(pad["net"], []).append(
+                        (pad["local_x"] - center_x, pad["local_y"] - center_y))
             components.append(component)
             if item["locked"]:
+                dx, dy = _rotated_offset(center_x, center_y, item["rotation"])
                 constraints.append({"kind": "placement", "target": item["ref"],
-                                    "x_mm": item["x"] - bounds["x"], "y_mm": item["y"] - bounds["y"],
+                                    "x_mm": item["x"] + dx - bounds["x"],
+                                    "y_mm": item["y"] + dy - bounds["y"],
                                     "rotation": item["rotation"], "layer": item["layer"]})
         result = optimize_placement(
             components, config=PlacementConfig(board_width_mm=bounds["width"], board_height_mm=bounds["height"],
                                                 iterations=iterations, seed=seed), constraints=constraints,
         )
+        if any(abs(result[f"board_{axis}_mm"] - bounds[axis]) > 0.1 for axis in ("width", "height")):
+            raise ValueError("Design placement constraints cannot resize the native board outline")
         if result["quality"]["review_required"]:
             return {"status": "error", "message": "No valid placement found within the board constraints",
                     "placement": result}
-        placements = {ref: {**p, "x": p["x"] + bounds["x"], "y": p["y"] + bounds["y"]}
-                      for ref, p in result["placements"].items()}
+        placements = {}
+        for ref, placement in result["placements"].items():
+            x, y = _native_origin(placement, center_offsets[ref], bounds)
+            placements[ref] = {**placement, "x": x, "y": y,
+                               "courtyard_center_x_mm": placement["x"] + bounds["x"],
+                               "courtyard_center_y_mm": placement["y"] + bounds["y"]}
         result["placements"] = placements
         result["coordinate_origin"] = "kicad_board"
+        result["movable_coordinate_resolution_mm"] = 0.0001
+        result["design_intent_sha256"] = (hashlib.sha256(json.dumps(design_spec, sort_keys=True).encode()).hexdigest()
+                                           if design_spec is not None else None)
+        result["layout_review"] = _layout_review(placements, components, authored_constraints, bounds)
         with tempfile.TemporaryDirectory(prefix=".cw-place-", dir=destination.parent) as folder:
             staged = Path(folder) / destination.name
             snapshots = _prepare_settings(source, staged)
             snapshots.update(original_snapshots)
             applied = run_kicad("place", board=str(source), output=str(staged), placements=placements,
+                                tidy_references=tidy_references,
                                 python_path=kicad_python_path)
             if applied["status"] != "ok":
                 return applied
+            if tidy_references:
+                result["silkscreen"] = applied.get("silkscreen", {})
             _restore_settings(source, staged, snapshots)
             drc = run_drc(staged, evidence_ledger=EvidenceLedger())
             # An unrouted board necessarily has unconnected pads. All other

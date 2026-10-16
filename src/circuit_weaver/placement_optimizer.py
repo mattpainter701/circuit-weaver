@@ -186,8 +186,12 @@ class ComponentPlacement:
     requires_impedance_control: bool = False
     parent_ref: str = ""
     placement_role: str = ""
+    block_id: str = ""
+    functional_section: str = ""
     locked: bool = False
     constraint_locked: bool = False
+    edge_constrained: bool = False
+    rotation_locked: bool = False
     geometry_status: str = "estimated"
     net_pad_offsets: dict[str, list[tuple[float, float]]] | None = None
 
@@ -542,8 +546,26 @@ def _build_constraint_plan(
         if not edge and edge_match:
             edge = edge_match.group(1).lower()
         if edge in _EDGES:
+            edge_rotation = None
+            if "rotation" in raw:
+                edge_rotation = _finite_number(raw.get("rotation"))
+                if edge_rotation is None:
+                    plan.unsupported.append(
+                        {
+                            "index": index,
+                            "kind": kind,
+                            "target": target,
+                            "reason": "Edge placement rotation must be a finite number of degrees.",
+                        }
+                    )
+                    continue
+                edge_rotation %= 360.0
             tolerance = _finite_number(raw.get("max_distance_mm", raw.get("tolerance_mm", 1.0)))
-            plan.edges[target] = {"edge": edge, "max_distance_mm": max(0.0, tolerance or 0.0)}
+            plan.edges[target] = {
+                "edge": edge,
+                "max_distance_mm": max(0.0, tolerance or 0.0),
+                **({"rotation": edge_rotation} if edge_rotation is not None else {}),
+            }
             plan.applied.append({"kind": "edge", "target": target, **plan.edges[target]})
             continue
 
@@ -654,9 +676,15 @@ def _init_placements(
 
         fixed = (constraint_plan.fixed if constraint_plan else {}).get(comp.source_ref)
         edge_constraint = (constraint_plan.edges if constraint_plan else {}).get(comp.source_ref)
-        rotation = float(fixed.get("rotation", 0.0)) if fixed else 0.0
+        rotation = (
+            float(fixed.get("rotation", 0.0))
+            if fixed
+            else float(edge_constraint.get("rotation", 0.0))
+            if edge_constraint
+            else 0.0
+        )
         layer = str(fixed.get("layer", "front")) if fixed else str(getattr(comp, "placement_layer", "front"))
-        effective_w, effective_h = (h, w) if int(round(rotation)) % 180 == 90 else (w, h)
+        effective_w, effective_h = _rotated_dimensions(w, h, rotation)
         if edge_constraint:
             edge = edge_constraint["edge"]
             if edge == "left":
@@ -691,8 +719,12 @@ def _init_placements(
             requires_impedance_control=si.get("requires_impedance_control", False),
             parent_ref=parent_ref,
             placement_role=placement_role,
+            block_id=str(getattr(comp, "block_id", "") or "").strip(),
+            functional_section=str(getattr(comp, "functional_section", "") or "").strip(),
             locked=bool(fixed),
             constraint_locked=bool(fixed),
+            edge_constrained=bool(edge_constraint),
+            rotation_locked=bool(edge_constraint and "rotation" in edge_constraint and not fixed),
             net_pad_offsets=getattr(comp, "placement_pad_offsets", None),
             geometry_status=str(
                 getattr(comp, "placement_geometry_status", "estimated") or "estimated"
@@ -723,16 +755,20 @@ def _overlap_area(a: ComponentPlacement, b: ComponentPlacement, gap: float = 0.0
 
 def _effective_dimensions(placement: ComponentPlacement) -> tuple[float, float]:
     """Conservative axis-aligned extent, including non-orthogonal rotation."""
-    rotation = placement.rotation % 180
+    return _rotated_dimensions(placement.width, placement.height, placement.rotation)
+
+
+def _rotated_dimensions(width: float, height: float, rotation: float) -> tuple[float, float]:
+    rotation %= 180
     if rotation == 0:
-        return placement.width, placement.height
+        return width, height
     if rotation == 90:
-        return placement.height, placement.width
+        return height, width
     angle = math.radians(rotation)
     cosine, sine = abs(math.cos(angle)), abs(math.sin(angle))
     return (
-        round(placement.width * cosine + placement.height * sine, 12),
-        round(placement.width * sine + placement.height * cosine, 12),
+        round(width * cosine + height * sine, 12),
+        round(width * sine + height * cosine, 12),
     )
 
 
@@ -938,7 +974,7 @@ def _cost_parent_affinity(placements: list[ComponentPlacement]) -> float:
         if parent is None:
             total += 10_000.0
             continue
-        distance = math.hypot(placement.x - parent.x, placement.y - parent.y)
+        distance, _distance_model = _parent_affinity_distance(parent, placement)
         critical = placement.placement_role in {"decoupling", "bootstrap", "feedback", "crystal_load"}
         preferred = 4.0 if critical else 8.0
         weight = 35.0 if critical else 12.0
@@ -946,6 +982,46 @@ def _cost_parent_affinity(placements: list[ComponentPlacement]) -> float:
         if distance > preferred:
             total += (distance - preferred) ** 2 * weight * 5.0
     return total
+
+
+def _rotated_net_endpoints(
+    placement: ComponentPlacement, net: str,
+) -> list[tuple[float, float]]:
+    offsets = (placement.net_pad_offsets or {}).get(net, [])
+    angle = math.radians(placement.rotation)
+    cosine, sine = math.cos(angle), math.sin(angle)
+    return [
+        (placement.x + x * cosine + y * sine, placement.y - x * sine + y * cosine)
+        for x, y in offsets
+    ]
+
+
+def _parent_affinity_distance(
+    parent: ComponentPlacement, support: ComponentPlacement,
+) -> tuple[float, str]:
+    """Measure support proximity at shared non-ground pads, falling back to centers.
+
+    Ground-only coincidence is deliberately not treated as a placement anchor:
+    the shared return plane connects nearly every block and would pull unrelated
+    support parts toward arbitrary ground pads.
+    """
+    if parent.net_pad_offsets is not None and support.net_pad_offsets is not None:
+        common_signal_nets = [
+            net
+            for net in parent.net_pad_offsets.keys() & support.net_pad_offsets.keys()
+            if _net_weight(net) > 0
+            and parent.net_pad_offsets.get(net)
+            and support.net_pad_offsets.get(net)
+        ]
+        endpoint_distances = [
+            math.hypot(parent_point[0] - support_point[0], parent_point[1] - support_point[1])
+            for net in common_signal_nets
+            for parent_point in _rotated_net_endpoints(parent, net)
+            for support_point in _rotated_net_endpoints(support, net)
+        ]
+        if endpoint_distances:
+            return min(endpoint_distances), "pad_endpoints"
+    return math.hypot(parent.x - support.x, parent.y - support.y), "component_centers"
 
 
 def _cost_edge_affinity(placements: list[ComponentPlacement], config: PlacementConfig) -> float:
@@ -1017,6 +1093,72 @@ def _cost_compactness(
     return radial * 2.5 + (max_x - min_x) * (max_y - min_y) * 0.4 + centering * 20.0
 
 
+def _functional_group_key(placement: ComponentPlacement) -> tuple[str, str] | None:
+    """Use the narrowest available design grouping identifier."""
+    block_id = placement.block_id.strip()
+    if block_id:
+        return ("block_id", block_id.casefold())
+    section = placement.functional_section.strip()
+    if section:
+        return ("functional_section", section.casefold())
+    return None
+
+
+def _functional_groups(
+    placements: list[ComponentPlacement],
+) -> dict[tuple[str, str], list[ComponentPlacement]]:
+    groups: dict[tuple[str, str], list[ComponentPlacement]] = {}
+    for placement in placements:
+        if placement.parent_ref:
+            continue
+        key = _functional_group_key(placement)
+        if key is not None:
+            groups.setdefault(key, []).append(placement)
+    return groups
+
+
+def _functional_group_metrics(
+    placements: list[ComponentPlacement],
+) -> list[dict[str, Any]]:
+    metrics = []
+    for (kind, key), members in sorted(_functional_groups(placements).items()):
+        if len(members) < 2:
+            continue
+        distances = [
+            math.hypot(a.x - b.x, a.y - b.y)
+            for a, b in combinations(members, 2)
+        ]
+        metrics.append(
+            {
+                "grouping": kind,
+                "id": key,
+                "refs": sorted(member.ref for member in members),
+                "member_count": len(members),
+                "mean_pairwise_distance_mm": round(sum(distances) / len(distances), 2),
+                "max_pairwise_distance_mm": round(max(distances, default=0.0), 2),
+            }
+        )
+    return metrics
+
+
+def _cost_functional_grouping(placements: list[ComponentPlacement]) -> float:
+    """Encourage functional blocks to stay compact with a bounded influence.
+
+    Pair distances are capped at 20 mm so an isolated block cannot dominate
+    electrical, thermal, or hard mechanical objectives.
+    """
+    total = 0.0
+    for members in _functional_groups(placements).values():
+        if len(members) < 2:
+            continue
+        pair_cost = sum(
+            min(math.hypot(a.x - b.x, a.y - b.y), 20.0) ** 2
+            for a, b in combinations(members, 2)
+        )
+        total += pair_cost / (len(members) - 1) * 0.2
+    return total
+
+
 def _distance_to_edge(
     placement: ComponentPlacement, edge: str, config: PlacementConfig
 ) -> float:
@@ -1069,6 +1211,7 @@ def _total_cost(
     cost += _cost_parent_affinity(placements)
     cost += _cost_support_body_clearance(placements, config)
     cost += _cost_edge_affinity(placements, config)
+    cost += _cost_functional_grouping(placements)
     cost += _cost_supplied_constraints(placements, config, constraint_plan)
 
     if config.strategy in ("thermal", "balanced"):
@@ -1158,7 +1301,8 @@ def _perturb(
             new[idx].y, new[other].y = new[other].y, new[idx].y
     else:
         # Rotate
-        p.rotation = rng.choice([0, 90, 180, 270])
+        if not p.rotation_locked:
+            p.rotation = rng.choice([0, 90, 180, 270])
 
     # Clamp to board using the rotated footprint extent.
     margin = config.edge_clearance_mm
@@ -1232,6 +1376,10 @@ def _legalize_overlaps(
                 return False
             edge = (constraint_plan.edges if constraint_plan else {}).get(placement.ref)
             if edge and _distance_to_edge(placement, edge["edge"], config) > edge["max_distance_mm"] + 0.001:
+                return False
+            if edge and "rotation" in edge and abs(
+                (placement.rotation - edge["rotation"] + 180.0) % 360.0 - 180.0
+            ) > 0.001:
                 return False
             for other in legalized:
                 if _overlap_area(placement, other, config.min_component_gap_mm) > 0:
@@ -1322,6 +1470,19 @@ def _constraint_evaluation(
                     "reason": f"Footprint is {distance:.2f} mm from the requested {edge_rule['edge']} edge.",
                 }
             )
+        if "rotation" in edge_rule:
+            rotation_delta = abs((placement.rotation - float(edge_rule["rotation"]) + 180.0) % 360.0 - 180.0)
+            if rotation_delta > 0.001:
+                violations.append(
+                    {
+                        "kind": "edge_orientation",
+                        "target": ref,
+                        "reason": (
+                            f"Footprint rotation is {placement.rotation:.2f}°; "
+                            f"the requested edge orientation is {float(edge_rule['rotation']):.2f}°."
+                        ),
+                    }
+                )
 
     for affinity in plan.affinities:
         target = by_ref.get(affinity["target"])
@@ -1402,9 +1563,11 @@ def _validate_config(config: PlacementConfig) -> None:
 
 def _quantize_state(state: list[ComponentPlacement]) -> list[ComponentPlacement]:
     # Score precisely the coordinates that will be published. Fixed positions
-    # retain their supplied precision and are never snapped to a different site.
+    # retain supplied precision, and edge-normal coordinates remain exact.
     return [
-        replace(p, x=round(p.x, 2), y=round(p.y, 2)) if not p.constraint_locked else replace(p)
+        replace(p, x=round(p.x, 2), y=round(p.y, 2))
+        if not p.constraint_locked and not p.edge_constrained
+        else replace(p)
         for p in state
     ]
 
@@ -1469,14 +1632,15 @@ def _refine_placement(
                     if candidate_rank < rank:
                         state, rank = candidate, candidate_rank
                         changed = True
-            for rotation in (90, 180, 270):
-                candidate = [replace(p) for p in state]
-                candidate[index].rotation = (state[index].rotation + rotation) % 360
-                candidate_rank = _placement_rank(candidate, config, pairs, plan)
-                evaluations += 1
-                if candidate_rank < rank:
-                    state, rank = candidate, candidate_rank
-                    changed = True
+            if not placement.rotation_locked:
+                for rotation in (90, 180, 270):
+                    candidate = [replace(p) for p in state]
+                    candidate[index].rotation = (state[index].rotation + rotation) % 360
+                    candidate_rank = _placement_rank(candidate, config, pairs, plan)
+                    evaluations += 1
+                    if candidate_rank < rank:
+                        state, rank = candidate, candidate_rank
+                        changed = True
         if not changed:
             break
     return state, evaluations
@@ -1563,6 +1727,8 @@ def optimize_placement(
                 "missing_parents": [],
                 "support_body_violations": [],
                 "max_support_distance_mm": 0.0,
+                "support_distance_model": "none",
+                "support_distances": [],
                 "legalization_moves": 0,
                 "review_required": bool(
                     constraint_evaluation["unsupported"] or constraint_evaluation["violations"]
@@ -1666,7 +1832,7 @@ def _build_result(
     outside_board: list[str] = []
     missing_parents: list[str] = []
     support_body_violations: list[dict[str, Any]] = []
-    support_distances: list[float] = []
+    support_distances: list[dict[str, Any]] = []
     by_ref = {placement.ref: placement for placement in state}
 
     for idx, first in enumerate(state):
@@ -1678,7 +1844,15 @@ def _build_result(
             if parent is None:
                 missing_parents.append(first.ref)
             else:
-                support_distances.append(math.hypot(first.x - parent.x, first.y - parent.y))
+                support_distance, distance_model = _parent_affinity_distance(parent, first)
+                support_distances.append(
+                    {
+                        "support_ref": first.ref,
+                        "parent_ref": parent.ref,
+                        "distance_mm": round(support_distance, 2),
+                        "model": distance_model,
+                    }
+                )
                 clearance = _rectangle_clearance(first, parent)
                 if clearance + 0.001 < config.support_body_clearance_mm:
                     support_body_violations.append(
@@ -1694,12 +1868,14 @@ def _build_result(
 
     for p in state:
         placements[p.ref] = {
-            "x": p.x if p.constraint_locked else round(p.x, 2),
-            "y": p.y if p.constraint_locked else round(p.y, 2),
+            "x": p.x if p.constraint_locked or p.edge_constrained else round(p.x, 2),
+            "y": p.y if p.constraint_locked or p.edge_constrained else round(p.y, 2),
             "rotation": p.rotation,
             "layer": p.layer,
             "locked": p.locked,
             "constraint_locked": p.constraint_locked,
+            "edge_constrained": p.edge_constrained,
+            "rotation_locked": p.rotation_locked,
             "width_mm": p.width,
             "height_mm": p.height,
             "geometry_status": p.geometry_status,
@@ -1720,12 +1896,25 @@ def _build_result(
         "strategy": config.strategy,
         "thermal_warnings": thermal_warnings,
         "constraint_evaluation": constraint_evaluation,
+        "functional_grouping": {
+            "model": "bounded_pairwise_center_distance",
+            "groups": _functional_group_metrics(state),
+            "objective_cost": round(_cost_functional_grouping(state), 2),
+        },
         "quality": {
             "overlaps": overlap_pairs,
             "outside_board": sorted(outside_board),
             "missing_parents": sorted(missing_parents),
             "support_body_violations": support_body_violations,
-            "max_support_distance_mm": round(max(support_distances, default=0.0), 2),
+            "max_support_distance_mm": round(
+                max((item["distance_mm"] for item in support_distances), default=0.0), 2
+            ),
+            "support_distance_model": (
+                next(iter({item["model"] for item in support_distances}))
+                if len({item["model"] for item in support_distances}) == 1
+                else "mixed" if support_distances else "none"
+            ),
+            "support_distances": support_distances,
             "legalization_moves": legalization_moves,
             "review_required": bool(
                 overlap_pairs

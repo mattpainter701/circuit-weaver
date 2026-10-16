@@ -16,3 +16,17 @@ power:
 connectors:
   - ic: USB-C-PWR
     ref: J1
+
+# Explicit mechanical intent for the review prototype. At zero rotation this
+# footprint's receptacle mouth faces the bottom edge. Keep its courtyard inside
+# the outline; enclosure fit and connector overhang still require review.
+pcb_constraints:
+  - kind: placement
+    target: board
+    width_mm: 36
+    height_mm: 30
+  - kind: placement
+    target: J1
+    edge: bottom
+    rotation: 0
+    max_distance_mm: 0.5

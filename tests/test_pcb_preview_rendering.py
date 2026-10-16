@@ -12,11 +12,23 @@ from circuit_weaver.pcb_preview import (
     _NATIVE_POLYGON_SCRIPT,
     _build_svg_export_command,
     _publish_staged_file,
+    _remove_fabrication_text,
     _source_hashes,
     _style_element,
     _verify_native_edge_anchor,
     render_board_preview,
 )
+
+
+def test_fabrication_text_filter_preserves_body_lines_and_pin_one_geometry():
+    native = ET.fromstring(
+        '<g><path id="body" d="M0 0 L4 0 L4 3 Z"/>'
+        '<text>large duplicate value</text><g class="stroked-text"><desc>U1</desc><path id="glyph"/></g>'
+        '<g><path id="pin-one" d="M0 0 L1 0 L0 1 Z"/><text>duplicate reference</text></g></g>'
+    )
+    _remove_fabrication_text(native)
+    assert [element.get("id") for element in native.iter("path")] == ["body", "pin-one"]
+    assert list(native.iter("text")) == []
 
 
 def test_native_layer_recolor_keeps_copper_strokes_and_transparent_drills():

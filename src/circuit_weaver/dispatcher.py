@@ -4012,6 +4012,9 @@ def main() -> None:
     place_p.add_argument("--output", "-o", required=True, help="Separate placed .kicad_pcb output")
     place_p.add_argument("--iterations", type=int, default=5000)
     place_p.add_argument("--seed", type=int, default=0)
+    place_p.add_argument("--design", help="Matching design YAML/JSON supplying component roles and constraints")
+    place_p.add_argument("--tidy-references", action="store_true",
+                         help="Place readable native reference fields outside component bodies")
     place_p.add_argument("--overwrite", action="store_true")
     place_p.add_argument("--kicad-python-path", help="Python interpreter with KiCad pcbnew installed")
 
@@ -5370,6 +5373,8 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
         result = _run_with_stderr_capture(lambda: place_pcb(
             args.kicad_pcb, args.output, iterations=args.iterations, seed=args.seed,
             overwrite=args.overwrite, kicad_python_path=args.kicad_python_path,
+            design_spec=_load_spec_file(args.design) if args.design else None,
+            tidy_references=args.tidy_references,
         ))
         _print_json(result)
         raise SystemExit(0 if result["status"] == "ok" else 1)

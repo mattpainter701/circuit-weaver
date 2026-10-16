@@ -747,7 +747,7 @@ generation and run `build-pcb` into a separate output, followed by `place-pcb`:
 
 ```bash
 python -m circuit_weaver build-pcb "${ROOT_SCHEMATIC}" -o "${ELECTRICAL_PCB}"
-python -m circuit_weaver place-pcb "${ELECTRICAL_PCB}" -o "${PLACED_PCB}"
+python -m circuit_weaver place-pcb "${ELECTRICAL_PCB}" -o "${PLACED_PCB}" --design "${SPEC_FILE}" --tidy-references
 ```
 
 This loads real library footprints and requires exact pin/pad numbering. Missing
@@ -755,6 +755,12 @@ footprints, incomplete symbol pad coverage, annotation errors, or physical DRC
 block publication. Review any explicit prototype clearance assumption before
 passing `--clearance`; it cannot weaken existing source board rules. The board
 remains a prototype without identity evidence or manufacturing approval.
+Declare board dimensions, connector mating edge and rotation in `pcb_constraints`
+before placement. Pass the matching design with `--design` to retain generated
+support ownership and functional grouping. Review `layout_review`, native
+silkscreen unresolved counts, and the actual rendered board alongside DRC.
+Do not infer a connector's mating direction from its reference prefix, or shrink
+an enclosure-constrained board just to improve its appearance.
 
 Alternatively, open the generated schematic in KiCad, assign and verify
 footprints, run **Update PCB from Schematic**, and save the electrical board.
