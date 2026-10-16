@@ -56,9 +56,11 @@ def execute(request):
             raise ValueError("Clearance must be a finite positive millimeter value")
         # This applies only to the implicit default netclass of a newly-created
         # prototype board. The parent rejects explicit source board/rule settings.
-        board.GetDesignSettings().m_NetSettings.GetDefaultNetclass().SetClearance(
-            pcbnew.FromMM(clearance_mm)
-        )
+        net_settings = board.GetDesignSettings().m_NetSettings
+        # KiCad 8 exposes the default class as a member; 9/10 provide a getter.
+        get_default = getattr(net_settings, "GetDefaultNetclass", None)
+        default_class = get_default() if callable(get_default) else net_settings.m_DefaultNetClass
+        default_class.SetClearance(pcbnew.FromMM(clearance_mm))
     title_block = board.GetTitleBlock()
     title_block.SetTitle("Prototype PCB - NOT FOR FABRICATION")
     title_block.SetComment(

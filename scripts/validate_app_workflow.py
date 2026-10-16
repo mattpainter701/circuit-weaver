@@ -319,7 +319,9 @@ def main() -> int:
         demo.external("prototype-positions", [str(cli), "pcb", "export", "pos", "--format", "csv",
                                                "--units", "mm", "-o", str(output / "prototype-positions.csv"),
                                                str(routed)])
-        demo.external("board-preview", [str(cli), "pcb", "export", "svg", "--mode-single",
+        # KiCad 8's SVG exporter always uses one output file and has no mode flag.
+        svg_mode = [] if routing["drc"].get("tool_version", "").startswith("8.") else ["--mode-single"]
+        demo.external("board-preview", [str(cli), "pcb", "export", "svg", *svg_mode,
                                         "--exclude-drawing-sheet", "--page-size-mode", "2",
                                         "--layers", "F.Cu,B.Cu,F.SilkS,Edge.Cuts",
                                         "-o", str(output / "board-preview.svg"), str(routed)])

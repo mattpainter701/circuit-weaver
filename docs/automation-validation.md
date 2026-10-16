@@ -83,6 +83,10 @@ rules cannot be weakened by this option. Outputs remain separate from the input;
 `--overwrite`. The prototype path supports direct sibling schematic sheets;
 missing or nested sheet files are rejected. Footprints must resolve through
 the local library resolver, and failures identify the mismatch.
+For the builtin USB4085 power connector, generation selects the installed
+library's `S1` or `SH` spelling for the unused shield only when the complete
+pad-number set matches the known variant. Connected pins are never implicitly
+renumbered; board import still requires exact pin/pad numbers.
 
 ## Manufacturing remains a separate gate
 
@@ -103,5 +107,7 @@ overrides or assert `fabrication_ready`. Complete the authoritative identity,
 placement approval, board constraints, and manufacturing evidence workflow
 before ordering a board.
 
-CI runs the generated-design path with real KiCad 8, 9, and 10 plus pinned
-Freerouting. The native validation artifacts are retained with each CI run.
+CI runs the generated-design path in official KiCad 8, 9, and 10 containers
+pinned by digest, plus pinned Freerouting. It checks the CLI/Python versions
+and installed libraries before testing. Native artifacts and subprocess
+failure diagnostics are retained with each CI run.

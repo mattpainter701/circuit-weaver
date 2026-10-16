@@ -73,24 +73,40 @@ def test_release_workflow_rejects_tag_version_mismatch() -> None:
     assert "GITHUB_REF_NAME" in workflow_text
     assert "Tag/version mismatch" in workflow_text
     assert "twine check" in workflow_text
-    assert 'kicad-major: ["8", "9", "10"]' in workflow_text
+    assert 'kicad-major: "8"' in workflow_text
+    assert 'kicad-major: "9"' in workflow_text
+    assert 'kicad-major: "10"' in workflow_text
     assert "circuit_weaver/examples/iot_sensor.yaml" in workflow_text
     assert "__pycache__" in workflow_text
 
 
-def test_kicad_workflows_initialize_official_footprint_table_before_generation() -> None:
+def test_kicad_workflows_use_pinned_official_containers_and_native_runtime_checks() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    source_table = "/usr/share/kicad/template/fp-lib-table"
-    configured_table = '"$HOME/.config/kicad/${{ matrix.kicad-major }}.0/fp-lib-table"'
+    runtime_script = repo_root / "scripts" / "prepare_kicad_ci_container.sh"
+    runtime_text = runtime_script.read_text(encoding="utf-8")
+    expected_images = {
+        "8": "ghcr.io/kicad/kicad:8.0@sha256:5716d82aa247abdbe512650eb4e8fce5a4031cbbef0a2c8df83208a69fef87b2",
+        "9": "ghcr.io/kicad/kicad:9.0@sha256:e638b79b0321f29395a5b783e94bb9f3c73303e8da15da27b8f5cb4b67a37729",
+        "10": "ghcr.io/kicad/kicad:10.0@sha256:18693567392b80da435f9fa952ce3a3e534c66eb5a6033f5b9c80aa3b19dd3ec",
+    }
+
+    assert "kicad-cli version" in runtime_text
+    assert "import pcbnew" in runtime_text
+    assert "pcbnew.BOARD()" in runtime_text
+    assert "/usr/share/kicad/template/fp-lib-table" in runtime_text
+    assert '"$HOME/.config/kicad/${expected_major}.0/fp-lib-table"' in runtime_text
 
     for workflow_name in ("ci.yml", "release.yml"):
         workflow = repo_root / ".github" / "workflows" / workflow_name
         workflow_text = workflow.read_text(encoding="utf-8")
 
-        assert f"test -s {source_table}" in workflow_text
-        install_at = workflow_text.index("install -D --mode=0644")
-        source_at = workflow_text.index(source_table, install_at)
-        configured_at = workflow_text.index(configured_table, source_at)
+        assert "options: --user 0" in workflow_text
+        assert "apt-get update -o Acquire::Retries=3 -o APT::Update::Error-Mode=any" in workflow_text
+        assert "python3-venv curl git ca-certificates" in workflow_text
+        assert "bash scripts/prepare_kicad_ci_container.sh" in workflow_text
+        for image in expected_images.values():
+            assert image in workflow_text
+        install_at = workflow_text.index("bash scripts/prepare_kicad_ci_container.sh")
         generate_at = workflow_text.index("python -m circuit_weaver generate")
 
-        assert install_at < source_at < configured_at < generate_at
+        assert install_at < generate_at

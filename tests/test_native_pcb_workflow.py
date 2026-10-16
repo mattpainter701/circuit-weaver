@@ -40,7 +40,25 @@ def test_real_placement_route_import_and_drc(tmp_path, native_tools, case):
     python, root = native_tools
     source = tmp_path / f"{case}.kicad_pcb"
     fixture = Path(__file__).parent / "fixtures" / "make_basic_pcbs.py"
-    subprocess.run([python, str(fixture), str(root), str(source), case], check=True, capture_output=True, text=True)
+    fixture_command = [python, str(fixture), str(root), str(source), case]
+    fixture_process = subprocess.run(fixture_command, check=False, capture_output=True, text=True)
+    if fixture_process.returncode:
+        evidence = os.getenv("CW_NATIVE_PCB_EVIDENCE")
+        if evidence:
+            import shutil
+
+            destination = Path(evidence) / case
+            shutil.copytree(tmp_path, destination, dirs_exist_ok=True)
+            (destination / "fixture-failure.json").write_text(json.dumps({
+                "command": fixture_command,
+                "returncode": fixture_process.returncode,
+                "stdout": fixture_process.stdout,
+                "stderr": fixture_process.stderr,
+            }, indent=2))
+        pytest.fail(
+            f"Native KiCad fixture failed ({fixture_process.returncode}).\n"
+            f"stdout:\n{fixture_process.stdout}\nstderr:\n{fixture_process.stderr}"
+        )
     original = source.read_bytes()
     settings_before = {suffix: source.with_suffix(suffix).read_bytes()
                        for suffix in (".kicad_pro", ".kicad_dru") if source.with_suffix(suffix).exists()}

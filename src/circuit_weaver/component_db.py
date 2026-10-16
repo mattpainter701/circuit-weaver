@@ -901,6 +901,46 @@ def component_explanation_lines(comp: ComponentDef, ref: str = "") -> list[str]:
     return lines
 
 
+def _bind_builtin_connector_shield(comp: ComponentDef) -> ComponentDef:
+    """Use the installed USB4085 library's explicit unused shield pin name.
+
+    KiCad 8/9 call the four shield pads S1; newer libraries call them SH.
+    Resolve that known library spelling before schematic generation, while
+    leaving connected pins and unknown footprint variants unchanged. The PCB
+    importer still requires exact symbol-pin/physical-pad reconciliation.
+    """
+    if (
+        comp.mpn != "USB-C-PWR"
+        or comp.footprint != "Connector_USB:USB_C_Receptacle_GCT_USB4085"
+        or "SH" not in comp.explicit_no_connects
+        or "SH" in comp.pin_nets
+        or "SH" in comp.power_pins
+    ):
+        return comp
+    from .footprint_lib import KiCadFootprintLibrary
+
+    path = KiCadFootprintLibrary().resolve(comp.footprint)
+    if path is None:
+        return comp
+    numbers = {
+        quoted if quoted else unquoted
+        for quoted, unquoted in re.findall(r'\(pad\s+(?:"([^"]*)"|([^\s()]+))', path.read_text(encoding="utf-8"))
+        if quoted or unquoted
+    }
+    symbol_numbers = {pin.number for pin in comp.pins}
+    if "SH" not in symbol_numbers or numbers != (symbol_numbers - {"SH"}) | {"S1"}:
+        return comp
+
+    import copy
+
+    bound = copy.deepcopy(comp)
+    for pin in bound.pins:
+        if pin.number == "SH":
+            pin.number = "S1"
+    bound.explicit_no_connects = (bound.explicit_no_connects - {"SH"}) | {"S1"}
+    return bound
+
+
 class ComponentRegistry:
     """Registry of known components, queryable by MPN."""
 
@@ -920,17 +960,19 @@ class ComponentRegistry:
 
         comp = self._components.get(mpn)
         if comp:
-            return comp
+            return _bind_builtin_connector_shield(comp)
         canonical = self._aliases.get(mpn)
         if canonical:
-            return self._components.get(canonical)
+            comp = self._components.get(canonical)
+            return _bind_builtin_connector_shield(comp) if comp else None
         stripped = _re.sub(r"[-/:](?:7|ND|P|TR|REEL7?|NOPB|CT)$", "", mpn)
         if stripped != mpn:
-            return self._components.get(stripped)
+            comp = self._components.get(stripped)
+            return _bind_builtin_connector_shield(comp) if comp else None
         return None
 
     def find_by_category(self, category: str) -> list[ComponentDef]:
-        return [c for c in self._components.values() if c.category == category]
+        return [_bind_builtin_connector_shield(c) for c in self._components.values() if c.category == category]
 
     def all_mpns(self):
         return list(self._components.keys())
