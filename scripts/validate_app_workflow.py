@@ -93,7 +93,7 @@ class Demo:
         previews = "".join(
             f"<figure><figcaption>{html.escape(p.name)}</figcaption>"
             f"<object type='image/svg+xml' data='{p.relative_to(self.output).as_posix()}'></object></figure>"
-            for p in sorted((self.output / "board-preview").glob("*.svg"))
+            for p in (self.output / "board-preview.svg",) if p.is_file()
         )
         schematic = "".join(
             f"<li><a href='{p.relative_to(self.output).as_posix()}'>{html.escape(p.name)}</a></li>"
@@ -260,7 +260,10 @@ def main() -> int:
         demo.external("board-preview", [str(cli), "pcb", "export", "svg", "--mode-single",
                                         "--exclude-drawing-sheet", "--page-size-mode", "2",
                                         "--layers", "F.Cu,B.Cu,F.SilkS,Edge.Cuts",
-                                        "-o", str(output / "board-preview"), str(routed)])
+                                        "-o", str(output / "board-preview.svg"), str(routed)])
+        preview = output / "board-preview.svg"
+        require(preview.is_file() and "<svg" in preview.read_text(encoding="utf-8"),
+                "KiCad board preview SVG was not produced")
         if args.mcp_smoke:
             step = {"name": "mcp", "passed": False}
             demo.steps.append(step)
