@@ -114,6 +114,32 @@ def _boxes_overlap(a, b):
     return a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1]
 
 
+def _point_box_distance_sq(point, box):
+    dx = max(box[0] - point[0], 0, point[0] - box[2])
+    dy = max(box[1] - point[1], 0, point[1] - box[3])
+    return dx * dx + dy * dy
+
+
+def _reference_class(ref):
+    """Return the alphabetic designator prefix used to distinguish peers."""
+    prefix = ""
+    for char in ref:
+        if char.isdigit():
+            break
+        prefix += char
+    return prefix.casefold() if prefix else ref.casefold()
+
+
+def _candidate_associated(center, own_courtyard, ref, obstacles):
+    own_distance = _point_box_distance_sq(center, own_courtyard)
+    own_class = _reference_class(ref)
+    return not any(
+        kind == "courtyard" and owner != ref and _reference_class(owner) == own_class
+        and _point_box_distance_sq(center, obstacle) < own_distance
+        for kind, owner, obstacle in obstacles
+    )
+
+
 def _courtyard_box(footprint, pcbnew):
     layer = pcbnew.B_CrtYd if footprint.GetLayer() == pcbnew.B_Cu else pcbnew.F_CrtYd
     courtyard = footprint.GetCourtyard(layer)
@@ -186,28 +212,24 @@ def _inside_bounds(box, bounds):
     return box[0] >= bounds[0] and box[1] >= bounds[1] and box[2] <= bounds[2] and box[3] <= bounds[3]
 
 
-def _candidate_centers(courtyard, text_width, text_height, initial, bounds, pcbnew):
-    """Generate nearest positions around an expanded courtyard in stable rings."""
+def _candidate_centers(courtyard, text_width, text_height, bounds, pcbnew, max_ring=None):
+    """Generate deterministic perimeter positions from nearest to farthest."""
     step = pcbnew.FromMM(_SILK_SEARCH_STEP_MM)
-    half_width = max(0, text_width // 2) + pcbnew.FromMM(_SILK_CLEARANCE_MM)
-    half_height = max(0, text_height // 2) + pcbnew.FromMM(_SILK_CLEARANCE_MM)
+    half_width = max(0, (text_width + 1) // 2) + pcbnew.FromMM(_SILK_CLEARANCE_MM)
+    half_height = max(0, (text_height + 1) // 2) + pcbnew.FromMM(_SILK_CLEARANCE_MM)
     base = (courtyard[0] - half_width, courtyard[1] - half_height,
             courtyard[2] + half_width, courtyard[3] + half_height)
-    span = max(bounds[2] - bounds[0], bounds[3] - bounds[1])
-    max_ring = max(1, int(math.ceil(span / step)))
+    center_x = (courtyard[0] + courtyard[2]) // 2
+    center_y = (courtyard[1] + courtyard[3]) // 2
+    if max_ring is None:
+        span = max(bounds[2] - bounds[0], bounds[3] - bounds[1])
+        max_ring = max(1, int(math.ceil(span / step)))
     seen = set()
-    yield initial
-    seen.add(initial)
     for ring in range(max_ring + 1):
         left, top = base[0] - ring * step, base[1] - ring * step
         right, bottom = base[2] + ring * step, base[3] + ring * step
-        xs = {left, right}
-        ys = {top, bottom}
-        # Include the current center's projections and a regular grid along
-        # each edge so narrow openings between neighboring footprints remain
-        # discoverable.
-        xs.add(min(right, max(left, initial[0])))
-        ys.add(min(bottom, max(top, initial[1])))
+        xs = {left, right, center_x}
+        ys = {top, bottom, center_y}
         x = left
         while x <= right:
             xs.add(x)
@@ -218,9 +240,12 @@ def _candidate_centers(courtyard, text_width, text_height, initial, bounds, pcbn
             y += step
         candidates = {(x, top) for x in xs} | {(x, bottom) for x in xs}
         candidates |= {(left, y) for y in ys} | {(right, y) for y in ys}
-        for candidate in sorted(candidates, key=lambda point: ((point[0] - initial[0]) ** 2 +
-                                                               (point[1] - initial[1]) ** 2,
-                                                               point[1], point[0])):
+        for candidate in sorted(candidates, key=lambda point: (
+            _point_box_distance_sq(point, courtyard),
+            point[1] >= center_y,
+            (point[0] - center_x) ** 2 + (point[1] - center_y) ** 2,
+            point[1], point[0],
+        )):
             if candidate not in seen:
                 seen.add(candidate)
                 yield candidate
@@ -250,10 +275,46 @@ def _tidy_reference_fields(board, pcbnew):
     # Native text bounds depend on angle, so refresh the entries after rotation.
     entries = _reference_entries(board, pcbnew)
 
-    # Locked footprints and fields reserve their current positions first.
-    ordered = sorted(entries, key=lambda entry: (not entry["locked"], entry["ref"]))
+    # Locked fields reserve their current positions. Place the most constrained
+    # movable fields first, so an easy label cannot claim a neighboring part's
+    # only nearby clear slot.
+    def nearby_option_count(entry):
+        if entry["locked"]:
+            return -1
+        box = entry["box"]
+        width = box[2] - box[0] - 2 * pcbnew.FromMM(_SILK_CLEARANCE_MM)
+        height = box[3] - box[1] - 2 * pcbnew.FromMM(_SILK_CLEARANCE_MM)
+        own_courtyard = _courtyard_box(entry["footprint"], pcbnew)
+        initial_center = ((box[0] + box[2]) // 2, (box[1] + box[3]) // 2)
+        count = 0
+        max_local_distance = pcbnew.FromMM(3.0)
+        local_ring = int(math.ceil(max_local_distance / pcbnew.FromMM(_SILK_SEARCH_STEP_MM)))
+        for center in _candidate_centers(
+            own_courtyard, width, height, bounds, pcbnew, max_ring=local_ring
+        ):
+            if _point_box_distance_sq(center, own_courtyard) > max_local_distance ** 2:
+                continue
+            dx, dy = center[0] - initial_center[0], center[1] - initial_center[1]
+            candidate_box = (box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy)
+            if not _inside_bounds(candidate_box, bounds):
+                continue
+            if any(_boxes_overlap(candidate_box, obstacle[2]) for obstacle in obstacles[entry["layer"]]):
+                continue
+            if not _candidate_associated(center, own_courtyard, entry["ref"], obstacles[entry["layer"]]):
+                continue
+            count += 1
+        return count
+
+    locked_entries = sorted((entry for entry in entries if entry["locked"]), key=lambda entry: entry["ref"])
+    movable_entries = sorted(
+        (entry for entry in entries if not entry["locked"]),
+        key=lambda entry: (nearby_option_count(entry), entry["ref"]),
+    )
+    ordered = locked_entries + movable_entries
+    occupied_refs = {pcbnew.F_SilkS: [], pcbnew.B_SilkS: []}
     for entry in ordered:
         if entry["locked"]:
+            occupied_refs[entry["layer"]].append(entry["box"])
             continue
         field = entry["field"]
         pos = field.GetTextPos()
@@ -269,9 +330,8 @@ def _tidy_reference_fields(board, pcbnew):
         # translated native bboxes.
         origin_offset = (pos.x - initial_center[0], pos.y - initial_center[1])
         fixed_obstacles = obstacles[entry["layer"]]
-        other_refs = [other for other in entries if other is not entry and other["layer"] == entry["layer"]]
         chosen = None
-        for center in _candidate_centers(courtyard, width, height, initial_center, bounds, pcbnew):
+        for center in _candidate_centers(courtyard, width, height, bounds, pcbnew):
             dx, dy = center[0] - initial_center[0], center[1] - initial_center[1]
             candidate_box = (current_box[0] + dx, current_box[1] + dy,
                              current_box[2] + dx, current_box[3] + dy)
@@ -279,11 +339,19 @@ def _tidy_reference_fields(board, pcbnew):
                 continue
             if any(_boxes_overlap(candidate_box, obstacle[2]) for obstacle in fixed_obstacles):
                 continue
-            if any(_boxes_overlap(candidate_box, other["box"]) for other in other_refs):
+            if any(_boxes_overlap(candidate_box, other_box)
+                   for other_box in occupied_refs[entry["layer"]]):
+                continue
+            # A clear label can still read as belonging to the wrong part when
+            # its center is nearer a neighbor's courtyard than its own. Keep
+            # searching for a local position that visually associates it with
+            # its footprint whenever one is available.
+            if not _candidate_associated(center, courtyard, entry["ref"], fixed_obstacles):
                 continue
             chosen = (center, (center[0] + origin_offset[0], center[1] + origin_offset[1]))
             break
         if chosen is None:
+            occupied_refs[entry["layer"]].append(current_box)
             continue
         center, new_origin = chosen
         if center != initial_center:
@@ -292,6 +360,7 @@ def _tidy_reference_fields(board, pcbnew):
             delta = (center[0] - initial_center[0], center[1] - initial_center[1])
             entry["box"] = (current_box[0] + delta[0], current_box[1] + delta[1],
                             current_box[2] + delta[0], current_box[3] + delta[1])
+        occupied_refs[entry["layer"]].append(entry["box"])
     return {"requested": True, "moved_count": moved, "orientation_normalized_count": normalized}
 
 
@@ -300,7 +369,7 @@ def _reference_conflict_report(board, pcbnew, moved_count, orientation_normalize
     entries = _reference_entries(board, pcbnew)
     bounds = _board_text_bounds(board, pcbnew)
     conflict_counts = {"courtyard": 0, "pad_mask": 0, "silkscreen_graphics": 0,
-                       "reference_reference": 0, "edge": 0}
+                       "reference_reference": 0, "edge": 0, "association": 0}
     conflicted_refs = set()
     for entry in entries:
         box = entry["box"]
@@ -311,6 +380,15 @@ def _reference_conflict_report(board, pcbnew, moved_count, orientation_normalize
             if _boxes_overlap(box, obstacle):
                 conflict_counts[kind] += 1
                 conflicted_refs.add(entry["ref"])
+        center = ((box[0] + box[2]) // 2, (box[1] + box[3]) // 2)
+        # Reference fields can be authored on either silk layer regardless
+        # of footprint side. The footprint's physical courtyard is the
+        # correct association anchor even when this field lives on opposite
+        # side silk and therefore has no courtyard obstacle on its layer.
+        own_courtyard = _courtyard_box(entry["footprint"], pcbnew)
+        if not _candidate_associated(center, own_courtyard, entry["ref"], obstacles[entry["layer"]]):
+            conflict_counts["association"] += 1
+            conflicted_refs.add(entry["ref"])
     for index, first in enumerate(entries):
         for second in entries[index + 1:]:
             if first["layer"] == second["layer"] and _boxes_overlap(first["box"], second["box"]):

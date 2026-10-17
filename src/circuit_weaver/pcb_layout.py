@@ -189,10 +189,11 @@ def _publish(staged: Path, destination: Path, snapshots: dict[Path, str | None],
         _publish_staged_transaction(staged.parent, publications)
 
 
-def place_pcb(
+def _place_pcb_once(
     board_path: str | Path, output_path: str | Path, *, iterations: int = 5000, seed: int = 0,
     overwrite: bool = False, kicad_python_path: str | Path | None = None,
     design_spec: dict[str, Any] | None = None, tidy_references: bool = False,
+    expected_snapshots: dict[Path, str | None] | None = None,
 ) -> dict[str, Any]:
     """Place an unrouted rectangular board, preserving all real pads and nets."""
     source, destination = Path(board_path).resolve(), Path(output_path).resolve()
@@ -203,6 +204,8 @@ def place_pcb(
             raise ValueError("Placement output must be a .kicad_pcb file")
         if source == destination:
             raise ValueError("Choose a separate output board to preserve the original PCB")
+        if expected_snapshots is not None:
+            _check_snapshots(expected_snapshots)
         preflight = preflight_pcb(source)
         if not preflight["routable"]:
             raise ValueError(preflight["reason"])
@@ -213,6 +216,8 @@ def place_pcb(
             path: _hash(path) if path.exists() else None
             for path in (source, source.with_suffix(".kicad_pro"), source.with_suffix(".kicad_dru"))
         }
+        if expected_snapshots is not None:
+            original_snapshots.update(expected_snapshots)
         inspection = run_kicad("inspect", board=str(source), python_path=kicad_python_path)
         if inspection["status"] != "ok":
             return inspection
@@ -303,6 +308,111 @@ def place_pcb(
         return {"status": "ok", "output_path": str(destination), "output_kind": "placed_kicad_board",
                 "placement": result, "drc": {**drc.to_dict(), "board": str(destination)}, "fabrication_ready": False,
                 "message": "Real footprints placed and physical DRC checked; the board still requires routing"}
+    except (OSError, ValueError) as exc:
+        return {"status": "error", "message": str(exc)}
+
+
+def place_pcb(
+    board_path: str | Path, output_path: str | Path, *, iterations: int = 5000, seed: int = 0,
+    overwrite: bool = False, kicad_python_path: str | Path | None = None,
+    design_spec: dict[str, Any] | None = None, tidy_references: bool = False,
+) -> dict[str, Any]:
+    """Place a board, retrying a small deterministic seed set for tidy silk."""
+    if not isinstance(tidy_references, bool):
+        return {"status": "error", "message": "tidy_references must be a boolean"}
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        return {"status": "error", "message": "seed must be an integer"}
+    if not tidy_references:
+        return _place_pcb_once(
+            board_path, output_path, iterations=iterations, seed=seed, overwrite=overwrite,
+            kicad_python_path=kicad_python_path, design_spec=design_spec, tidy_references=False,
+        )
+
+    source, destination = Path(board_path).resolve(), Path(output_path).resolve()
+    try:
+        if destination.suffix.lower() != ".kicad_pcb":
+            raise ValueError("Placement output must be a .kicad_pcb file")
+        if source == destination:
+            raise ValueError("Choose a separate output board to preserve the original PCB")
+        error = _prepare_destination(destination, overwrite=overwrite)
+        if error:
+            raise ValueError(error)
+        original_snapshots = {
+            path: _hash(path) if path.exists() else None
+            for path in (source, source.with_suffix(".kicad_pro"), source.with_suffix(".kicad_dru"))
+        }
+        attempts: list[dict[str, Any]] = []
+        best_result: dict[str, Any] | None = None
+        best_score = math.inf
+        with tempfile.TemporaryDirectory(prefix=".cw-place-retries-", dir=destination.parent) as folder:
+            root = Path(folder)
+            for attempt_index, attempt_seed in enumerate((seed, seed + 1, seed + 2), start=1):
+                _check_snapshots(original_snapshots)
+                candidate_dir = root / f"attempt-{attempt_index}"
+                candidate_dir.mkdir()
+                candidate_path = candidate_dir / destination.name
+                candidate = _place_pcb_once(
+                    source, candidate_path, iterations=iterations, seed=attempt_seed, overwrite=False,
+                    kicad_python_path=kicad_python_path, design_spec=design_spec, tidy_references=True,
+                    expected_snapshots=original_snapshots,
+                )
+                # A concurrent source/project change invalidates the entire search,
+                # even if a candidate happened to pass before it was observed.
+                _check_snapshots(original_snapshots)
+                silk = candidate.get("placement", {}).get("silkscreen")
+                has_native_report = (isinstance(silk, dict) and
+                                     "unresolved_count" in silk and "remaining_conflict_count" in silk)
+                raw_unresolved = silk.get("unresolved_count") if isinstance(silk, dict) else None
+                raw_remaining = silk.get("remaining_conflict_count") if isinstance(silk, dict) else None
+                unresolved = raw_unresolved if type(raw_unresolved) is int and raw_unresolved >= 0 else None
+                remaining = raw_remaining if type(raw_remaining) is int and raw_remaining >= 0 else None
+                label_clear = (has_native_report and type(unresolved) is int and unresolved == 0
+                               and type(remaining) is int and remaining == 0)
+                success = candidate.get("status") == "ok" and label_clear
+                attempts.append({"attempt": attempt_index, "seed": attempt_seed, "iterations": iterations,
+                                 "status": "accepted" if success else "rejected",
+                                 "candidate_status": candidate.get("status", "error"),
+                                 "unresolved_count": unresolved, "remaining_conflict_count": remaining})
+                reason = None
+                if not has_native_report:
+                    reason = "native_silkscreen_report_missing"
+                elif unresolved is None or remaining is None:
+                    reason = "native_silkscreen_count_invalid"
+                attempts[-1]["rejection_reason"] = None if success else reason or "candidate_failed_checks"
+                score = (unresolved + remaining) if unresolved is not None and remaining is not None else math.inf
+                if best_result is None or score < best_score:
+                    best_result, best_score = candidate, score
+                if not success:
+                    # Without a native silk report, this was an unrelated
+                    # placement/DRC/worker failure; a new seed cannot resolve it.
+                    if candidate.get("status") != "ok" and not has_native_report:
+                        break
+                    continue
+                _publish(candidate_path, destination, original_snapshots, overwrite)
+                candidate["output_path"] = str(destination)
+                candidate["drc"] = {**candidate["drc"], "board": str(destination)}
+                candidate["placement_attempts"] = attempts
+                candidate["selected_attempt"] = attempt_index
+                candidate["selected_seed"] = attempt_seed
+                candidate["requested_seed"] = seed
+                candidate["iterations_per_attempt"] = iterations
+                return candidate
+        report = best_result or {"status": "error", "message": "No placement candidates were produced"}
+        report = copy.deepcopy(report)
+        report.pop("output_path", None)
+        report_silk = report.get("placement", {}).get("silkscreen")
+        if isinstance(report_silk, dict):
+            for key in ("unresolved_count", "remaining_conflict_count"):
+                value = report_silk.get(key)
+                if type(value) is not int or value < 0:
+                    report_silk[key] = None
+        if isinstance(report.get("drc"), dict):
+            report["drc"].pop("board", None)
+        return {"status": "error",
+                "message": ("No candidate passed physical DRC and native reference-label checks; "
+                            "output was not published"),
+                "placement_attempts": attempts, "best_candidate": report,
+                "iterations_per_attempt": iterations}
     except (OSError, ValueError) as exc:
         return {"status": "error", "message": str(exc)}
 

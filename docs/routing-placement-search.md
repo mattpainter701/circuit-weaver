@@ -59,6 +59,31 @@ conservative enclosing rectangle. Fixed coordinates retain their supplied
 precision; movable coordinates are evaluated at their published precision.
 Unresolved or impossible constraints remain visible as review blockers.
 
+When native pad locations are available, support parts start beside their
+owner's shared non-ground pads, with the configured body clearance. Missing
+pad evidence retains the deterministic support-ring fallback. Related support
+parts, such as USB termination resistors, can be refined onto a common row or
+column using their owner, role and signal net family. A shared ground or power
+rail alone does not establish a group. Designs with fewer than two movable
+primary ICs include their support parts in the compactness objective; larger
+designs retain the objective based on their primary components.
+
+`--tidy-references` searches nearby horizontal native reference positions and
+places the most constrained fields first. Locked fields reserve their positions;
+obsolete positions of movable fields do not block cleanup. A label must remain
+associated with its own component rather than a nearer component with the same
+designator prefix. An IC label can sit beside its support capacitors, while two
+neighboring capacitor or resistor labels remain distinguishable. Native checks
+also cover courtyard, pad/mask, silkscreen, reference and board-edge collisions.
+
+If that placement leaves unresolved labels, the native placement command tries
+up to three private candidates using the requested seed, seed + 1 and seed + 2.
+Each candidate receives the requested iteration budget and must pass physical
+DRC and native reference checks. Only the first passing candidate is published;
+exhaustion preserves any existing destination. Results record attempted seeds,
+label counts and the selected seed. Without `--tidy-references`, placement keeps
+its single-attempt behavior.
+
 The existing objective still balances thermal separation, connectivity, parent
 affinity, edge access, compactness, and zoning. Shared-net attractions are divided
 by fanout minus one to prevent a large bus overwhelming point-to-point nets.
