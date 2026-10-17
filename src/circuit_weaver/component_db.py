@@ -2227,7 +2227,12 @@ def _builtin_components():
         )
     )
 
-    # --- STM32F103C8T6 (LQFP-48 simplified) ---
+    # --- STM32F103C8T6 (LQFP-48 complete pin map) ---
+    # Physical pin numbering and supply requirements verified against ST
+    # DS5319 Rev 20, Figure 8 / Table 5 / Figure 14. The schematic symbol
+    # presentation groups supplies and grounds by function, independent of
+    # their physical package sides, so local power wiring stays compact:
+    # https://www.st.com/resource/en/datasheet/stm32f103c8.pdf
     reg.register(
         ComponentDef(
             mpn="STM32F103C8T6",
@@ -2237,19 +2242,82 @@ def _builtin_components():
             description="ARM Cortex-M3 MCU, 64KB Flash",
             category="digital",
             pins=[
-                PinDef("24", "VSSA", "power_in", "B"),
-                PinDef("23", "VDDA", "power_in", "T"),
-                PinDef("35", "VSS_1", "power_in", "B"),
-                PinDef("36", "VDD_1", "power_in", "T"),
-                PinDef("7", "BOOT0", "input", "L"),
-                PinDef("44", "NRST", "input", "R"),
-                PinDef("37", "PA13/SWDIO", "bidirectional", "R"),
-                PinDef("34", "PA14/SWCLK", "input", "R"),
+                PinDef("1", "VBAT", "power_in", "T"),
+                PinDef("2", "PC13-TAMPER-RTC", "bidirectional", "L"),
+                PinDef("3", "PC14-OSC32_IN", "bidirectional", "L"),
+                PinDef("4", "PC15-OSC32_OUT", "bidirectional", "L"),
+                PinDef("5", "PD0-OSC_IN", "bidirectional", "L"),
+                PinDef("6", "PD1-OSC_OUT", "bidirectional", "L"),
+                PinDef("7", "NRST", "input", "L"),
+                PinDef("8", "VSSA", "power_in", "B"),
+                PinDef("9", "VDDA", "power_in", "T"),
+                PinDef("10", "PA0-WKUP", "bidirectional", "L"),
+                PinDef("11", "PA1", "bidirectional", "L"),
+                PinDef("12", "PA2", "bidirectional", "L"),
+                PinDef("13", "PA3", "bidirectional", "L"),
+                PinDef("14", "PA4", "bidirectional", "L"),
+                PinDef("15", "PA5", "bidirectional", "L"),
+                PinDef("16", "PA6", "bidirectional", "R"),
+                PinDef("17", "PA7", "bidirectional", "R"),
+                PinDef("18", "PB0", "bidirectional", "B"),
+                PinDef("19", "PB1", "bidirectional", "B"),
+                PinDef("20", "PB2-BOOT1", "bidirectional", "B"),
+                PinDef("21", "PB10", "bidirectional", "B"),
+                PinDef("22", "PB11", "bidirectional", "B"),
+                PinDef("23", "VSS_1", "power_in", "B"),
+                PinDef("24", "VDD_1", "power_in", "T"),
+                PinDef("25", "PB12", "bidirectional", "B"),
+                PinDef("26", "PB13", "bidirectional", "B"),
+                PinDef("27", "PB14", "bidirectional", "B"),
+                PinDef("28", "PB15", "bidirectional", "R"),
+                PinDef("29", "PA8", "bidirectional", "R"),
+                PinDef("30", "PA9", "bidirectional", "R"),
+                PinDef("31", "PA10", "bidirectional", "R"),
+                PinDef("32", "PA11", "bidirectional", "R"),
+                PinDef("33", "PA12", "bidirectional", "R"),
+                PinDef("34", "PA13-SWDIO", "bidirectional", "R"),
+                PinDef("35", "VSS_2", "power_in", "B"),
+                PinDef("36", "VDD_2", "power_in", "T"),
+                PinDef("37", "PA14-SWCLK", "bidirectional", "T"),
+                PinDef("38", "PA15-JTDI", "bidirectional", "T"),
+                PinDef("39", "PB3-JTDO", "bidirectional", "T"),
+                PinDef("40", "PB4-NJTRST", "bidirectional", "T"),
+                PinDef("41", "PB5", "bidirectional", "T"),
+                PinDef("42", "PB6", "bidirectional", "T"),
+                PinDef("43", "PB7", "bidirectional", "T"),
+                PinDef("44", "BOOT0", "input", "R"),
+                PinDef("45", "PB8", "bidirectional", "R"),
+                PinDef("46", "PB9", "bidirectional", "R"),
+                PinDef("47", "VSS_3", "power_in", "B"),
+                PinDef("48", "VDD_3", "power_in", "T"),
             ],
-            pin_nets={"7": "BOOT0", "44": "RESET_N", "37": "SWDIO", "34": "SWCLK"},
-            power_pins={"23": "VDD_3P3", "24": "GND", "35": "GND", "36": "VDD_3P3"},
+            pin_nets={"7": "RESET_N", "34": "SWDIO", "37": "SWCLK", "44": "BOOT0"},
+            power_pins={
+                "1": "VDD_3P3",
+                "8": "GND",
+                "9": "VDD_3P3",
+                "23": "GND",
+                "24": "VDD_3P3",
+                "35": "GND",
+                "36": "VDD_3P3",
+                "47": "GND",
+                "48": "VDD_3P3",
+            },
             power_reqs=[PowerReq("VDD_3P3", 3.3, 80)],
-            bypass_caps=[BypassCap("36", "VDD_3P3", "GND", "100nF", "Capacitor_SMD:C_0402_1005Metric")],
+            bypass_caps=[
+                BypassCap("24", "VDD_3P3", "GND", "100nF", "Capacitor_SMD:C_0402_1005Metric"),
+                BypassCap("36", "VDD_3P3", "GND", "100nF", "Capacitor_SMD:C_0402_1005Metric"),
+                BypassCap("48", "VDD_3P3", "GND", "100nF", "Capacitor_SMD:C_0402_1005Metric"),
+                BypassCap("48", "VDD_3P3", "GND", "4.7uF", "Capacitor_SMD:C_0805_2012Metric"),
+                BypassCap("9", "VDD_3P3", "GND", "10nF", "Capacitor_SMD:C_0402_1005Metric"),
+                BypassCap("9", "VDD_3P3", "GND", "1uF", "Capacitor_SMD:C_0603_1608Metric"),
+                BypassCap("7", "RESET_N", "GND", "100nF", "Capacitor_SMD:C_0402_1005Metric"),
+            ],
+            straps=[
+                StrapConfig("44", "BOOT0", "GND", "10k", "Resistor_SMD:R_0402_1005Metric"),
+                StrapConfig("7", "RESET_N", "VDD_3P3", "10k", "Resistor_SMD:R_0402_1005Metric"),
+            ],
+            datasheet_url="https://www.st.com/resource/en/datasheet/stm32f103c8.pdf",
         )
     )
 

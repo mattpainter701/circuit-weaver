@@ -3,7 +3,7 @@
 #   - 24V industrial input clamped by a 12V TVS diode (SMBJ12A)
 #   - AP62300 buck stepping 24V → 3.3V for the MCU
 #   - MCP1700 LDO for a quiet 1.8V rail
-#   - STM32F103 MCU with programming + strap pins tied off
+#   - STM32F103 MCU with BOOT0 and reset straps and explicit unused-pin NCs
 # The TVS clamp protects VIN_24V; no isolated data path is wired on
 # this preview — the spec focuses on surviving the high-voltage input.
 
@@ -39,4 +39,4 @@ protection:
 digital:
   - ic: STM32F103C8T6
     ref: U3
-    no_connects: ["7", "34", "37", "44"]
+    no_connects: ["2", "3", "4", "5", "6", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "37", "38", "39", "40", "41", "42", "43", "45", "46"]
