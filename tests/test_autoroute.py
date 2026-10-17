@@ -16,7 +16,9 @@ from circuit_weaver.autoroute import (
     _find_freerouting_command,
     _find_freerouting_jar,
     _find_kicad_cli,
+    _iter_sexpr_block_spans,
     _kicad_cli_supports_specctra,
+    _native_placement_variant,
     _parse_freerouting_version,
     _parse_routing_stats,
     _probe_freerouting_capabilities,
@@ -149,6 +151,51 @@ def test_router_only_clearance_margin_updates_general_rules_and_preserves_typed_
     assert '(comment "(clearance 99) is quoted data, not a rule")' in text
 
 
+def test_native_placement_variants_reorder_only_component_and_nested_place_spans():
+    dsn = '''(pcb "ordered-board"
+  (structure (layer F.Cu (type signal)) (rule (width 200) (clearance 137)))
+  (placement
+    (component "Device:R" (place "R 1" 10 10 front 90) (place R2 20 10 front 0))
+    (component "Connector:USB" (place J1 30 10 front 0) (place J2 40 10 front 0))
+  )
+  (library (image "Device:R" (pin 1 0 0)))
+  (network (net GND (pins R1-1 J1-1)))
+  (comment "(component fake (place FAKE 0 0 front 0))")
+)\n'''
+
+    ascending, ascending_refs = _native_placement_variant(dsn, "ascending")
+    descending, descending_refs = _native_placement_variant(dsn, "descending")
+    original, original_refs = _native_placement_variant(dsn, "original")
+
+    assert ascending_refs == ["J1", "J2", "R 1", "R2"]
+    assert descending_refs == ["R2", "R 1", "J2", "J1"]
+    assert original_refs == ["R 1", "R2", "J1", "J2"]
+    assert ascending != dsn
+    assert descending != dsn
+    assert original == dsn
+    assert ascending.partition("(placement")[0] == dsn.partition("(placement")[0]
+    assert ascending.split("(library", 1)[1] == dsn.split("(library", 1)[1]
+    assert '(rule (width 200) (clearance 137))' in ascending
+    assert '(comment "(component fake (place FAKE 0 0 front 0))")' in ascending
+    # The complete place records travel as byte-preserved strings.
+    assert '(place "R 1" 10 10 front 90)' in ascending
+    assert '(place J1 30 10 front 0)' in ascending
+
+
+@pytest.mark.parametrize(
+    "placement",
+    [
+        '(placement (component Device:R))',
+        '(placement (component Device:R (place R1 0 0 front 0)) '
+        '(component Device:C (place R1 1 1 front 0)))',
+        '(placement (component Device:R (place 0 0 front 0)))',
+    ],
+)
+def test_native_placement_variant_rejects_ambiguous_component_identity(placement):
+    with pytest.raises(ValueError, match="Cannot safely reorder native DSN"):
+        _native_placement_variant(f'(pcb "b" {placement})', "ascending")
+
+
 @pytest.mark.parametrize(
     ("unit", "clearance", "expected"),
     [
@@ -256,6 +303,7 @@ def _portfolio_runner(outputs, seen, *, after_attempt=None):
 
 def test_portfolio_publishes_best_complete_candidate_and_removes_losers(tmp_path):
     source = _write_dsn(tmp_path)
+    original_dsn = source.read_bytes()
     seen = []
     outputs = [_routing_output(incomplete=2, vias=0), _routing_output(vias=5), _routing_output(vias=1)]
     with mock.patch("circuit_weaver.autoroute._find_freerouting_command", return_value=["freerouting"]), \
@@ -270,6 +318,7 @@ def test_portfolio_publishes_best_complete_candidate_and_removes_losers(tmp_path
     assert seen[0][1]["timeout"] <= 30
     assert not list(tmp_path.glob(".cw-routing-*"))
     assert result["artifact"]["path"] == str(source.with_suffix(".ses"))
+    assert source.read_bytes() == original_dsn
 
 
 def test_portfolio_retains_success_after_timeout_and_preserves_partial_status(tmp_path):
@@ -784,8 +833,124 @@ class TestAutoroute:
         assert "(clearance 1.25 (type smd_smd))" in dsn_text
         assert (tmp_path / "sensor-board_autoroute.dsn").exists()
         assert result["output_path"] == str(tmp_path / "sensor-board.ses")
+        assert result["search"]["attempts"][0]["placement_order_strategy"] == "ascending"
+        assert result["search"]["attempts"][0]["placement_order"] == ["R1"]
         assert any("specctra" in command for command in calls)
         assert any("-de" in command and "-do" in command for command in calls)
+
+    @pytest.mark.parametrize("newline", ["\n", "\r\n"])
+    @pytest.mark.parametrize(
+        ("optimization_threads", "optimizer_strategies"),
+        [(0, [None, None, None]), (2, ["greedy", "global", "hybrid"])],
+    )
+    def test_native_route_attempts_use_isolated_ordered_dsn_variants(
+        self, tmp_path, optimization_threads, optimizer_strategies, newline,
+    ):
+        board = _write_routable_board(tmp_path)
+        route_inputs: list[tuple[Path, bytes, list[str]]] = []
+        route_commands: list[list[str]] = []
+        baseline_snapshots: list[bytes] = []
+        original_board = board.read_bytes()
+        exported_dsn = VALID_DSN.replace(
+            '(component "Resistor_SMD:R_0402_1005Metric" (place R1 10000 10000 front 0))',
+            '(component "Resistor_SMD:R_0402_1005Metric" (place R1 10000 10000 front 0))\n'
+            '(component "Connector:USB" (place J1 30000 10000 front 0))',
+        )
+
+        def fake_run(command, **_kwargs):
+            if "-help" in command:
+                return mock.Mock(returncode=0, stdout="Freerouting v2.4.1", stderr="")
+            if command[0] == "kicad-cli":
+                Path(command[command.index("-o") + 1]).write_bytes(
+                    exported_dsn.replace("\n", newline).encode("utf-8")
+                )
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            dsn_path = Path(command[command.index("-de") + 1])
+            dsn_bytes = dsn_path.read_bytes()
+            _, reference_order = _native_placement_variant(dsn_bytes.decode("utf-8"), "original")
+            route_inputs.append((dsn_path, dsn_bytes, reference_order))
+            route_commands.append(command)
+            baseline_snapshots.append((tmp_path / "sensor-board_autoroute.dsn").read_bytes())
+            Path(command[command.index("-do") + 1]).write_text(VALID_SES, encoding="utf-8")
+            return mock.Mock(returncode=0, stdout=_routing_output(), stderr="")
+
+        def preserve_export_bytes(_path, _margin_mm):
+            return {"applied": True, "margin_mm": 0.01, "native_board_rules_changed": False}
+
+        with mock.patch("circuit_weaver.autoroute._apply_specctra_clearance_margin", side_effect=preserve_export_bytes):
+            with mock.patch("circuit_weaver.autoroute._find_freerouting_command", return_value=["freerouting"]):
+                with mock.patch("circuit_weaver.autoroute._find_kicad_cli", return_value="kicad-cli"):
+                    with mock.patch("circuit_weaver.autoroute._kicad_cli_supports_specctra", return_value=True):
+                        with mock.patch("subprocess.run", side_effect=fake_run):
+                            result = autoroute_pcb(
+                                board, attempts=3, optimization_threads=optimization_threads,
+                            )
+
+        assert result["status"] == "ok"
+        assert len(route_inputs) == 3
+        assert [entry[2] for entry in route_inputs] == [["J1", "R1"], ["R1", "J1"], ["R1", "J1"]]
+        assert len({entry[0].parent for entry in route_inputs}) == 3
+        assert all(entry[0].name == "sensor-board_autoroute.dsn" for entry in route_inputs)
+        assert len({entry[1] for entry in route_inputs}) == 2
+        assert [row["placement_order_strategy"] for row in result["search"]["attempts"]] == [
+            "ascending", "descending", "original",
+        ]
+        assert [row["placement_order"] for row in result["search"]["attempts"]] == [
+            ["J1", "R1"], ["R1", "J1"], ["R1", "J1"],
+        ]
+        assert [row["optimizer_strategy"] for row in result["search"]["attempts"]] == optimizer_strategies
+        assert all(command[command.index("-mt") + 1] == str(optimization_threads) for command in route_commands)
+        assert [
+            command[command.index("-us") + 1] if "-us" in command else None
+            for command in route_commands
+        ] == optimizer_strategies
+        assert all(row["variant_sha256"] for row in result["search"]["attempts"])
+        assert len(set(baseline_snapshots)) == 1
+        assert baseline_snapshots[0] == (tmp_path / "sensor-board_autoroute.dsn").read_bytes()
+        assert (b"\r\n" in baseline_snapshots[0]) == (newline == "\r\n")
+        assert all((b"\r\n" in variant) == (newline == "\r\n") for _, variant, _ in route_inputs)
+        def without_placement(content):
+            text = content.decode("utf-8")
+            spans = list(_iter_sexpr_block_spans(text, "placement"))
+            assert len(spans) == 1
+            start, end = spans[0]
+            return (text[:start] + text[end:]).encode("utf-8")
+
+        assert all(without_placement(variant) == without_placement(baseline_snapshots[0])
+                   for _, variant, _ in route_inputs)
+        assert board.read_bytes() == original_board
+        assert (tmp_path / "sensor-board_autoroute.dsn").exists()
+        assert not list(tmp_path.glob(".cw-routing-*"))
+
+    def test_native_variant_drift_cannot_replace_existing_session(self, tmp_path):
+        board = _write_routable_board(tmp_path)
+        destination = tmp_path / "reviewed.ses"
+        destination.write_bytes(b"previous reviewed session")
+        baseline_snapshot: list[bytes] = []
+
+        def fake_run(command, **_kwargs):
+            if "-help" in command:
+                return mock.Mock(returncode=0, stdout="Freerouting v2.4.1", stderr="")
+            if command[0] == "kicad-cli":
+                Path(command[command.index("-o") + 1]).write_text(VALID_DSN, encoding="utf-8")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            dsn_path = Path(command[command.index("-de") + 1])
+            baseline_snapshot.append((tmp_path / "sensor-board_autoroute.dsn").read_bytes())
+            Path(command[command.index("-do") + 1]).write_text(VALID_SES, encoding="utf-8")
+            dsn_path.write_bytes(dsn_path.read_bytes() + b"\n; changed during routing")
+            return mock.Mock(returncode=0, stdout=_routing_output(), stderr="")
+
+        with mock.patch("circuit_weaver.autoroute._find_freerouting_command", return_value=["freerouting"]):
+            with mock.patch("circuit_weaver.autoroute._find_kicad_cli", return_value="kicad-cli"):
+                with mock.patch("circuit_weaver.autoroute._kicad_cli_supports_specctra", return_value=True):
+                    with mock.patch("subprocess.run", side_effect=fake_run):
+                        result = autoroute_pcb(board, output_path=str(destination), overwrite=True)
+
+        assert result["status"] == "error"
+        assert "variant changed" in result["message"]
+        assert destination.read_bytes() == b"previous reviewed session"
+        assert baseline_snapshot[0] == (tmp_path / "sensor-board_autoroute.dsn").read_bytes()
+        assert not list(tmp_path.glob(".cw-routing-*"))
 
     def test_incomplete_routing_is_partial_but_published(self, tmp_path):
         output = _routing_output(incomplete=2)

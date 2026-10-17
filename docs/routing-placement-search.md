@@ -97,11 +97,21 @@ increases runtime. Use fewer restarts/refinement passes when latency matters.
 circuit-weaver autoroute board.dsn --attempts 3 --timeout 600 -o selected.ses
 ```
 
-The default remains one attempt. Builds advertising `-random_seed` use consecutive
-seeds (zero-based if unspecified). Other builds cycle through greedy, global, and
-hybrid optimizer strategies unless a strategy was explicitly selected. An explicit
-seed requires advertised seed support. Multiple attempts default to one optimizer
-thread. The timeout is a shared
+The default remains one attempt. For native KiCad boards, the first attempt uses
+stable footprint-reference order in an isolated DSN copy; later attempts also try
+descending reference order and the original export order. Shared-image placement
+records follow the same order. Only declaration order changes: pad geometry,
+coordinates, net assignments, outlines, and routing rules remain intact. Search
+evidence records the actual order used. The original exported DSN is preserved.
+
+Builds advertising `-random_seed` use consecutive seeds (zero-based if unspecified).
+Other builds cycle through greedy, global, and hybrid optimizer strategies unless
+a strategy was explicitly selected. Those strategies affect enabled optimization;
+they provide no primary-routing variation when optimizer threads are zero.
+Native declaration-order variants provide that variation without enabling the
+optimizer. Direct caller-provided DSNs are routed unchanged. An explicit seed
+requires advertised seed support. `--routed-board` defaults to disabled optimization;
+other multiple-attempt runs default to one optimizer thread. The timeout is a shared
 budget for routing attempts; capability probes and optional DSN export have
 their existing separate limits. Each attempt receives the remaining time divided
 by the remaining attempts, so time saved by early completion can be reused.

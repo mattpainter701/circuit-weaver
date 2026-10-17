@@ -1,16 +1,22 @@
-# Motor control board with MCU and power delivery.
-# Demonstrates 12V power management for motor control applications:
+# Motor controller MCU and power-delivery prototype.
+# Demonstrates the controller core for motor-control applications:
 #   - 12V input (external power connector)
 #   - AP62300 buck converter for clean 3.3V MCU rail (1A)
 #   - STM32F103C8T6 ARM Cortex-M3 microcontroller
-#   - Support for external H-bridge on 3.3V logic, 12V motor power
-# BOOT0/RESET_N/SWDIO/SWCLK are marked as no-connects so the sample is
-# placement-ready on its own; a real board would add a SWD header and
-# pull resistors on BOOT0 / RESET_N.
+# The external H-bridge, motor connector, and SWD header are outside this
+# prototype. BOOT0 and NRST receive explicit pull resistors; unused MCU I/O
+# and unimplemented debug connections are explicitly marked no-connect.
 
 project: Motor_Controller
 company: Demo Corp
-description: STM32-based motor controller with 12V-to-3.3V power delivery
+description: STM32 controller-core prototype with 12V-to-3.3V power delivery
+
+# Compact engineering-review outline; final mechanics remain application-specific.
+pcb_constraints:
+  - kind: placement
+    target: board
+    width_mm: 45
+    height_mm: 35
 
 power:
   - type: buck
@@ -25,7 +31,8 @@ power:
 digital:
   - ic: STM32F103C8T6
     ref: U2
-    # STM32 programming + strap pins are intentionally no-connect on
-    # this minimal demo; real boards add a 4-pin SWD header plus a 10k
-    # pull-down on BOOT0 and a 10k pull-up + decoupling cap on RESET_N.
-    no_connects: ["7", "34", "37", "44"]
+    # Explicit no-connects for unused GPIO, oscillator, and debug pins.
+    # Pins 7/34/37/44 are NRST/PA13-SWDIO/PA14-SWCLK/BOOT0 respectively.
+    # The SWD pair is explicitly unused; the component adds prototype-choice
+    # 10k pulls on NRST and BOOT0.
+    no_connects: ["2", "3", "4", "5", "6", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "37", "38", "39", "40", "41", "42", "43", "45", "46"]

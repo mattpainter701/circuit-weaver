@@ -11,22 +11,215 @@ import asyncio
 import csv
 import hashlib
 import html
+import io
 import json
+import math
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
-from pathlib import Path
+import zipfile
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import yaml
 
 REPO = Path(__file__).resolve().parents[1]
+_BOARD_TARGETS = {"board", "board_outline", "pcb", "outline"}
 
 
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _finite_number(value) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _design_board_size(design: dict, default: tuple[float, float] = (80.0, 60.0)) -> tuple[float, float]:
+    """Resolve board dimensions with the same aliases and precedence as placement."""
+    width, height = default
+    constraints = design.get("pcb_constraints")
+    if not isinstance(constraints, list):
+        return width, height
+    for raw in constraints:
+        if not isinstance(raw, dict):
+            continue
+        target = str(raw.get("target") or raw.get("ref") or "").strip().lower()
+        nested = raw.get("board") if isinstance(raw.get("board"), dict) else {}
+        explicit_board_keys = (
+            "board_width_mm" in raw or "board_height_mm" in raw or bool(nested)
+        )
+        if target not in _BOARD_TARGETS and not explicit_board_keys:
+            continue
+        candidate_width = _finite_number(raw.get(
+            "board_width_mm",
+            nested.get("width_mm", raw.get("width_mm") if target in _BOARD_TARGETS else None),
+        ))
+        candidate_height = _finite_number(raw.get(
+            "board_height_mm",
+            nested.get("height_mm", raw.get("height_mm") if target in _BOARD_TARGETS else None),
+        ))
+        if candidate_width is not None:
+            width = candidate_width
+        if candidate_height is not None:
+            height = candidate_height
+    return width, height
+
+
+def _apply_size_overrides(design: dict, width: float, height: float) -> None:
+    """Make copied placement constraints agree with the prototype outline."""
+    constraints = design.get("pcb_constraints")
+    if constraints is None:
+        constraints = []
+    if not isinstance(constraints, list):
+        raise RuntimeError("Cannot apply board-size overrides: pcb_constraints must be a list")
+
+    for raw in constraints:
+        if not isinstance(raw, dict):
+            continue
+        target = str(raw.get("target") or raw.get("ref") or "").strip().lower()
+        nested = raw.get("board") if isinstance(raw.get("board"), dict) else None
+        explicit_board_keys = (
+            "board_width_mm" in raw or "board_height_mm" in raw or bool(nested)
+        )
+        if target not in _BOARD_TARGETS and not explicit_board_keys:
+            continue
+
+        if "board_width_mm" in raw:
+            raw["board_width_mm"] = width
+        if "board_height_mm" in raw:
+            raw["board_height_mm"] = height
+        if nested is not None:
+            nested["width_mm"] = width
+            nested["height_mm"] = height
+        if target in _BOARD_TARGETS:
+            raw["width_mm"] = width
+            raw["height_mm"] = height
+
+    # A final canonical constraint ensures partial or conflicting duplicate
+    # declarations cannot override either effective dimension later in the list.
+    constraints.append({
+        "kind": "placement", "target": "board", "width_mm": width, "height_mm": height,
+    })
+    design["pcb_constraints"] = constraints
+
+
+def prepare_working_spec(source: Path, destination: Path, width: float | None,
+                         height: float | None) -> dict:
+    """Copy a design verbatim unless dimensions are explicitly overridden."""
+    shutil.copy2(source, destination)
+    original_bytes = source.read_bytes()
+    design = yaml.safe_load(original_bytes.decode("utf-8-sig"))
+    if not isinstance(design, dict):
+        raise RuntimeError("Design specification must contain a YAML mapping")
+    original_size = _design_board_size(design)
+    effective_size = (width if width is not None else original_size[0],
+                      height if height is not None else original_size[1])
+    overridden = width is not None or height is not None
+    if overridden:
+        for name, value in (("width", effective_size[0]), ("height", effective_size[1])):
+            if not math.isfinite(value) or value <= 0:
+                raise RuntimeError(f"Effective board {name} must be a positive finite number")
+        _apply_size_overrides(design, *effective_size)
+        destination.write_text(yaml.safe_dump(design, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    return {
+        "source_spec_sha256": hashlib.sha256(original_bytes).hexdigest(),
+        "working_spec_sha256": digest(destination),
+        "board_size_original_mm": list(original_size),
+        "board_size_effective_mm": list(effective_size),
+        "board_size_overrides_mm": {"width_mm": width, "height_mm": height},
+        "board_size_override_applied": overridden,
+    }
+
+
+def _payload_hash(files: dict[str, str]) -> str:
+    hasher = hashlib.sha256()
+    for name, content_hash in sorted(files.items()):
+        hasher.update(f"{name}\0{content_hash}\n".encode("utf-8"))
+    return hasher.hexdigest()
+
+
+def verify_installed_wheel_payload(package_root: Path, wheel_path: Path) -> dict:
+    """Require exact installed package bytes to match a wheel's package payload."""
+    if not package_root.is_dir():
+        raise RuntimeError(f"Installed package directory does not exist: {package_root}")
+    if not wheel_path.is_file():
+        raise RuntimeError(f"Expected wheel does not exist: {wheel_path}")
+
+    expected: dict[str, str] = {}
+    seen: set[str] = set()
+    try:
+        wheel_bytes = wheel_path.read_bytes()
+        wheel_sha256 = hashlib.sha256(wheel_bytes).hexdigest()
+        with zipfile.ZipFile(io.BytesIO(wheel_bytes)) as archive:
+            for info in archive.infolist():
+                name = info.filename
+                if (not name or "\\" in name or name.startswith("/")
+                        or PureWindowsPath(name).drive
+                        or any(part in {".", ".."} for part in name.rstrip("/").split("/"))):
+                    raise RuntimeError(f"Expected wheel contains an unsafe archive path: {name!r}")
+                if stat.S_ISLNK(info.external_attr >> 16):
+                    raise RuntimeError(f"Expected wheel contains a symbolic link: {name!r}")
+                normalized = PurePosixPath(name).as_posix()
+                if normalized in seen:
+                    raise RuntimeError(f"Expected wheel contains a duplicate path: {name!r}")
+                seen.add(normalized)
+                if info.is_dir() or not normalized.startswith("circuit_weaver/"):
+                    continue
+                relative = normalized.removeprefix("circuit_weaver/")
+                if not relative or relative.startswith("__pycache__/") or relative.endswith(".pyc"):
+                    continue
+                expected[relative] = hashlib.sha256(archive.read(info)).hexdigest()
+    except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
+        if isinstance(exc, RuntimeError) and str(exc).startswith("Expected wheel"):
+            raise
+        raise RuntimeError(f"Cannot inspect expected wheel: {exc}") from exc
+    if not expected:
+        raise RuntimeError("Expected wheel contains no circuit_weaver package payload")
+
+    installed: dict[str, str] = {}
+    for path in package_root.rglob("*"):
+        if path.is_symlink():
+            raise RuntimeError(f"Installed package contains a symbolic link: {path}")
+        if path.is_dir():
+            continue
+        relative_path = path.relative_to(package_root)
+        if "__pycache__" in relative_path.parts or path.suffix == ".pyc":
+            continue
+        if not path.is_file():
+            raise RuntimeError(f"Installed package contains an unsupported payload entry: {path}")
+        relative = relative_path.as_posix()
+        installed[relative] = digest(path)
+
+    missing = sorted(set(expected) - set(installed))
+    unexpected = sorted(set(installed) - set(expected))
+    changed = sorted(name for name in set(expected) & set(installed)
+                     if expected[name] != installed[name])
+    if missing or unexpected or changed:
+        raise RuntimeError(
+            "Installed package payload does not match expected wheel: "
+            f"missing={missing}, unexpected={unexpected}, changed={changed}"
+        )
+    if digest(wheel_path) != wheel_sha256:
+        raise RuntimeError("Expected wheel changed while its payload was being verified")
+    return {
+        "wheel_path": str(wheel_path.resolve()),
+        "wheel_sha256": wheel_sha256,
+        "package_path": str(package_root.resolve()),
+        "payload_file_count": len(expected),
+        "expected_payload_sha256": _payload_hash(expected),
+        "installed_payload_sha256": _payload_hash(installed),
+        "payload_matches": True,
+    }
 
 
 def require(condition: bool, message: str) -> None:
@@ -315,7 +508,16 @@ def main() -> int:
     parser.add_argument("--render-3d", action="store_true", help="Require a native assembly-model PNG (KiCad 9+)")
     parser.add_argument("--installed", action="store_true",
                         help="Test this Python's installed package, not checkout src/")
+    parser.add_argument("--expected-wheel", type=Path,
+                        help="Require the installed package payload to exactly match this wheel")
     args = parser.parse_args()
+    for name, value in (("--width", args.width), ("--height", args.height)):
+        if value is not None and (not math.isfinite(value) or value <= 0):
+            parser.error(f"{name} must be a positive finite number")
+    if args.expected_wheel is not None and not args.installed:
+        parser.error("--expected-wheel requires --installed")
+    if args.expected_wheel is not None and not args.expected_wheel.is_file():
+        parser.error(f"--expected-wheel does not exist: {args.expected_wheel}")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     source_spec = args.spec.resolve()
@@ -337,6 +539,10 @@ def main() -> int:
                 "Installed-mode probe imported checkout source")
         summary["package_path"] = str(package_root)
         summary["package_mode"] = "installed" if args.installed else "source"
+        if args.expected_wheel is not None:
+            summary["wheel_payload_verification"] = verify_installed_wheel_payload(
+                package_root, args.expected_wheel.resolve()
+            )
         source_files = [p for p in package_root.rglob("*")
                         if p.suffix in {".py", ".json"}]
         package_hash = hashlib.sha256()
@@ -345,12 +551,8 @@ def main() -> int:
         summary["package_source_sha256"] = package_hash.hexdigest()
         summary["runner_sha256"] = digest(Path(__file__))
         original = digest(source_spec)
-        shutil.copy2(source_spec, spec)
-        design = yaml.safe_load(spec.read_text(encoding="utf-8"))
-        board_rule = next((rule for rule in design.get("pcb_constraints", [])
-                           if rule.get("target") == "board" and rule.get("kind") == "placement"), {})
-        width = args.width if args.width is not None else board_rule.get("width_mm", 80)
-        height = args.height if args.height is not None else board_rule.get("height_mm", 60)
+        summary.update(prepare_working_spec(source_spec, spec, args.width, args.height))
+        width, height = summary["board_size_effective_mm"]
         demo.command("doctor", ["doctor"], json_output=False)
         valid = demo.command("validate", ["validate", str(spec)])
         require(valid.get("valid") is True, "Static design validation failed")
@@ -429,6 +631,8 @@ def main() -> int:
             step.update(passed=True, seconds=round(time.monotonic() - started, 2))
             (output / "mcp.stdout.log").write_text(json.dumps(result, indent=2), encoding="utf-8")
         require(digest(source_spec) == original, "Workflow modified the input design")
+        require(digest(spec) == summary["working_spec_sha256"],
+                "Workflow modified the copied design specification")
         verify_routing(routing, routed)
         summary.update(status="PASS — prototype workflow validated; manufacturing export correctly blocked",
                        source_unchanged=True, board_sha256=digest(routed))

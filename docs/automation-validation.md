@@ -19,11 +19,28 @@ and refuses an existing evidence directory. No interactive answers are needed.
 An agent such as Codex or Claude can execute the same command and inspect the
 saved JSON and stderr logs without parsing a terminal transcript.
 
-To validate a built wheel, run the script with the Python from a separate
-environment containing that wheel and pass `--installed`. That mode removes
-the source-path override from application subprocesses. The evidence records
-the actual package path, a package-content hash, the source revision, and whether
-the checkout had uncommitted changes.
+To validate a built wheel, install it in a separate environment and run the
+script with that environment's Python. Pass `--installed --expected-wheel`
+with the wheel's path to check the imported package against the actual wheel
+payload before application commands run:
+
+```sh
+python -m venv /path/to/validation-env
+/path/to/validation-env/bin/python -m pip install --force-reinstall /path/to/circuit_weaver-0.35.0-py3-none-any.whl
+/path/to/validation-env/bin/python scripts/validate_app_workflow.py --installed --expected-wheel /path/to/circuit_weaver-0.35.0-py3-none-any.whl --output /path/to/new-wheel-demo
+```
+
+On Windows, use the environment's `Scripts/python.exe`. If the environment
+shares global site packages, add `--ignore-installed` when installing the wheel
+so a global package with the same version cannot satisfy the install. Install
+the optional MCP dependencies as well when using `--mcp-smoke`.
+
+Installed mode removes the source-path override from application subprocesses.
+The expected-wheel check compares code and packaged resource bytes, rejects
+missing or unexpected payload files, and records the wheel hash and matched
+content evidence. `--installed` alone records the import path and content hash;
+it cannot establish which wheel supplied that package. Evidence also records
+the source revision and whether the checkout had uncommitted changes.
 
 To exercise the real MCP stdio server as well, install the optional runtime
 and enable its smoke test:
@@ -62,6 +79,12 @@ The demo explicitly disables Freerouting's post-route optimizer: the tested
 2.4.1 optimizer narrowed fine-pitch traces below the imported track-width rule
 despite disabled neckdown. Native routing without that optimizer preserves
 the configured width and still passes final KiCad DRC.
+Native routing varies stable placement declaration order in isolated DSN copies.
+This addresses a reproduced KiCad 9 export that left one USB supply connection
+unfinished in three identical primary-routing attempts: sorting placement
+declarations completed the connection without changing geometry or rules.
+Optimizer strategies alone provide no variation when optimization is disabled.
+Every accepted result still requires complete routing and final native DRC.
 Native-board autorouting also adds a 0.01 mm clearance margin to generic DSN
 clearance rules, preserving typed exceptions. A reproduced KiCad 10 case routed
 at exactly 0.127 mm measured 0.1263 mm after session import; the margin prevents
@@ -96,6 +119,10 @@ This is a declared prototype assumption, not a validated fabrication profile.
 The default sample declares a 36 × 30 mm review outline and a bottom-facing J1
 edge/orientation constraint. The runner uses those dimensions (or explicit
 `--width`/`--height`) and passes the matching design into native placement.
+Explicit dimension overrides update only the copied demo design, including its
+placement constraints, so generation, board construction, and placement use
+the same outline. Evidence retains the original and effective sizes, overrides,
+and copied-design hash. A single-axis override keeps the other declared dimension.
 Functional ownership and edge intent survive placement, while native reference
 cleanup is measured after saving and reloading. Layout review warnings and
 unresolved labels are retained in the report; successful DRC alone does not
@@ -109,6 +136,14 @@ For the builtin USB4085 power connector, generation selects the installed
 library's `S1` or `SH` spelling for the unused shield only when the complete
 pad-number set matches the known variant. Connected pins are never implicitly
 renumbered; board import still requires exact pin/pad numbers.
+
+The motor-controller sample also exercises a complete 48-pad STM32F103C8T6
+definition. Its pin numbering and supply connections follow the manufacturer's
+[STM32F103x8/xB datasheet](https://www.st.com/resource/en/datasheet/stm32f103c8.pdf).
+Unused GPIOs are explicit no-connects in the sample, rather than omitted symbol
+pins. It declares a compact 45 × 35 mm engineering-review outline. This is a
+minimal power/MCU automation example; external motor drivers,
+programming access, and application-specific electrical review remain required.
 
 ## Manufacturing remains a separate gate
 

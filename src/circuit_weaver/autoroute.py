@@ -163,6 +163,92 @@ def _first_payload_token(block: str, keyword: str) -> str | None:
     return _decode_specctra_token(match.group(0)) if match else None
 
 
+def _replace_blocks_at_spans(text: str, spans: list[tuple[int, int]], blocks: list[str]) -> str:
+    """Replace balanced blocks in their existing slots, preserving all gap bytes."""
+    if len(spans) != len(blocks):
+        raise ValueError("Cannot safely reorder Specctra records: block count changed")
+    for (start, end), block in reversed(list(zip(spans, blocks, strict=True))):
+        text = text[:start] + block + text[end:]
+    return text
+
+
+def _native_placement_variant(text: str, order: str, *, rotation: int = 0) -> tuple[str, list[str]]:
+    """Reorder only KiCad-exported placement records and report their reference order.
+
+    Component and place S-expressions are moved as original byte spans. All
+    other placement contents and every geometry, net, rule, and library record
+    remain byte-identical. Ambiguous identities fail closed.
+    """
+    if order not in {"ascending", "descending", "original", "rotated"}:
+        raise ValueError(f"Unsupported native placement order {order!r}")
+    placement_spans = list(_iter_sexpr_block_spans(text, "placement"))
+    if len(placement_spans) != 1:
+        raise ValueError("Cannot safely reorder native DSN: expected exactly one placement section")
+    placement_start, placement_end = placement_spans[0]
+    placement = text[placement_start:placement_end]
+    component_spans = list(_iter_sexpr_block_spans(placement, "component"))
+    if not component_spans:
+        raise ValueError("Cannot safely reorder native DSN: placement section has no components")
+
+    entries: list[dict[str, Any]] = []
+    all_references: list[str] = []
+    for start, end in component_spans:
+        block = placement[start:end]
+        component_name = _first_payload_token(block, "component")
+        place_spans = list(_iter_sexpr_block_spans(block, "place"))
+        references: list[str] = []
+        place_blocks: list[str] = []
+        for place_start, place_end in place_spans:
+            place_block = block[place_start:place_end]
+            tokens = _payload_tokens(_block_payload(place_block, "place"))
+            if not tokens:
+                raise ValueError("Cannot safely reorder native DSN: malformed place record")
+            reference = _decode_specctra_token(tokens[0])
+            if not reference or re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)", reference):
+                raise ValueError("Cannot safely reorder native DSN: place record has an invalid reference")
+            references.append(reference)
+            all_references.append(reference)
+            place_blocks.append(place_block)
+        if not component_name or not references:
+            raise ValueError("Cannot safely reorder native DSN: component identity is ambiguous")
+        if len(references) != len(set(references)):
+            raise ValueError("Cannot safely reorder native DSN: duplicate footprint references")
+        nested_order = references
+        if order == "ascending" or order == "rotated":
+            nested_order = sorted(references)
+        elif order == "descending":
+            nested_order = sorted(references, reverse=True)
+        if order != "original":
+            by_reference = dict(zip(references, place_blocks, strict=True))
+            reordered_places = [by_reference[reference] for reference in nested_order]
+            block = _replace_blocks_at_spans(block, place_spans, reordered_places)
+        entries.append({
+            "span": (start, end),
+            "block": block,
+            "minimum_reference": min(references),
+            "references": nested_order,
+        })
+
+    if len(all_references) != len(set(all_references)):
+        raise ValueError("Cannot safely reorder native DSN: duplicate footprint references")
+    if order == "ascending" or order == "rotated":
+        ordered_entries = sorted(entries, key=lambda entry: entry["minimum_reference"])
+        if order == "rotated" and ordered_entries:
+            offset = rotation % len(ordered_entries)
+            ordered_entries = ordered_entries[offset:] + ordered_entries[:offset]
+    elif order == "descending":
+        ordered_entries = sorted(entries, key=lambda entry: entry["minimum_reference"], reverse=True)
+    else:
+        ordered_entries = entries
+
+    placement = _replace_blocks_at_spans(
+        placement, component_spans, [entry["block"] for entry in ordered_entries],
+    )
+    reordered_text = text[:placement_start] + placement + text[placement_end:]
+    reference_order = [reference for entry in ordered_entries for reference in entry["references"]]
+    return reordered_text, reference_order
+
+
 def _apply_specctra_clearance_margin(path: Path, margin_mm: float) -> dict[str, Any]:
     """Tighten a KiCad-exported DSN's router rules without changing board DRC.
 
@@ -1179,10 +1265,11 @@ def _routing_rank(stats: dict[str, Any]) -> tuple[float, ...]:
 
 def _route_candidates(
     dsn_path: Path, ses_path: Path, command: list[str], *, attempts: int,
-    timeout_seconds: float, overwrite: bool, seed: int | None, **options: Any,
+    timeout_seconds: float, overwrite: bool, seed: int | None,
+    native_placement_portfolio: bool = False, **options: Any,
 ) -> dict[str, Any]:
     """Run an isolated portfolio and atomically publish its best valid session."""
-    if attempts == 1:
+    if attempts == 1 and not native_placement_portfolio:
         return _route_specctra(
             dsn_path, ses_path, command, timeout_seconds=timeout_seconds,
             overwrite=overwrite, seed=seed, **options,
@@ -1195,7 +1282,8 @@ def _route_candidates(
     supports_seed = bool((options.get("capability_probe") or {}).get("seed"))
     base_seed = (0 if seed is None else seed) if supports_seed else None
     try:
-        input_hash = hashlib.sha256(dsn_path.read_bytes()).hexdigest()
+        input_snapshot = dsn_path.read_bytes()
+        input_hash = hashlib.sha256(input_snapshot).hexdigest()
         # Same filesystem as the destination allows atomic final publication.
         # The context also cleans up losing sessions and interrupted attempts.
         with tempfile.TemporaryDirectory(prefix=".cw-routing-", dir=ses_path.parent) as temporary:
@@ -1204,20 +1292,59 @@ def _route_candidates(
                 if remaining <= 0:
                     break
                 path = Path(temporary) / f"candidate-{index + 1}.ses"
-                allowance = remaining / (attempts - index)
                 attempt_options = dict(options)
                 attempt_seed = base_seed + index if base_seed is not None else None
-                if not supports_seed and attempt_options.get("optimizer_strategy") is None:
+                route_dsn = dsn_path
+                placement_order = None
+                candidate_hash = None
+                placement_order_kind = None
+                if native_placement_portfolio:
+                    if index == 0:
+                        placement_order_kind = "ascending"
+                    elif index == 1:
+                        placement_order_kind = "descending"
+                    elif index == 2:
+                        placement_order_kind = "original"
+                    else:
+                        placement_order_kind = "rotated"
+                    variant_text, placement_order = _native_placement_variant(
+                        input_snapshot.decode("utf-8"),
+                        placement_order_kind,
+                        rotation=index - 2,
+                    )
+                    variant_dir = Path(temporary) / f"input-{index + 1}"
+                    variant_dir.mkdir()
+                    # Keep the exact input basename/design identity for SES
+                    # validation while isolating each independently-routed DSN.
+                    route_dsn = variant_dir / dsn_path.name
+                    route_dsn.write_bytes(variant_text.encode("utf-8"))
+                    candidate_hash = hashlib.sha256(route_dsn.read_bytes()).hexdigest()
+                if (
+                    not supports_seed
+                    and attempt_options.get("optimizer_strategy") is None
+                    and (
+                        not native_placement_portfolio
+                        or attempt_options.get("optimization_threads") not in {None, 0}
+                    )
+                ):
                     strategy = ("greedy", "global", "hybrid")[index % 3]
                     attempt_options["optimizer_strategy"] = strategy
                     attempt_options["optimizer_hybrid_ratio"] = "1:1" if strategy == "hybrid" else None
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0:
+                    break
+                allowance = remaining / (attempts - index)
                 result = _route_specctra(
-                    dsn_path, path, command, timeout_seconds=allowance,
+                    route_dsn, path, command, timeout_seconds=allowance,
                     overwrite=False, seed=attempt_seed, **attempt_options,
                 )
                 row = {"attempt": index + 1, "seed": attempt_seed,
                        "optimizer_strategy": attempt_options.get("optimizer_strategy"),
                        "status": result["status"], "timeout_seconds": allowance}
+                if placement_order is not None:
+                    row["placement_order_strategy"] = placement_order_kind
+                    row["placement_order"] = placement_order
+                    row["variant_sha256"] = candidate_hash
                 if "stats" in result:
                     row["stats"] = result["stats"]
                 if "message" in result:
@@ -1226,6 +1353,11 @@ def _route_candidates(
                 if hashlib.sha256(dsn_path.read_bytes()).hexdigest() != input_hash:
                     return _result_error("Routing input changed during candidate search; no session was published",
                                          attempts=attempt_rows)
+                if candidate_hash is not None and hashlib.sha256(route_dsn.read_bytes()).hexdigest() != candidate_hash:
+                    return _result_error(
+                        "Native routing variant changed during candidate search; no session was published",
+                        attempts=attempt_rows,
+                    )
                 if result["status"] == "ok" and (
                     winner is None or _routing_rank(result["stats"]) < _routing_rank(winner["stats"])
                 ):
@@ -1245,6 +1377,8 @@ def _route_candidates(
                 return _result_error(error, search=search)
             winner["artifact"]["path"] = str(ses_path)
             return {**winner, "search": search}
+    except (ValueError, UnicodeDecodeError) as exc:
+        return _result_error(f"Cannot prepare native routing-order variant: {exc}", attempts=attempt_rows)
     except OSError as exc:
         return _result_error(f"Could not stage routing candidates: {exc}", attempts=attempt_rows)
 
@@ -1432,6 +1566,7 @@ def autoroute_pcb(
         optimizer_item_selection=optimizer_item_selection,
         optimizer_improvement_threshold=optimizer_improvement_threshold,
         seed=seed,
+        native_placement_portfolio=source_suffix == ".kicad_pcb",
         capability_probe=capability_probe,
     )
 

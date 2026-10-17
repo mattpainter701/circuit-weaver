@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Repeatable local workflow validation
+
+- Keep explicit demo board-size overrides consistent across the copied design, native board construction, and placement; preserve the source spec and retain original/effective dimensions in the evidence.
+- Add an expected-wheel payload check before installed workflow commands, so an older package with the same version cannot silently count as validation of a newly built artifact. Compare packaged resources as well as code and retain artifact hashes.
+- Give native routing attempts distinct placement declaration orders in isolated DSN copies, resolving a reproduced KiCad 9 export that repeatedly left one supply connection unfinished with optimization disabled. Preserve all geometry, nets, rules, original exports and caller-provided DSNs, and retain strict final-board DRC.
+- Replace the STM32F103C8T6's incomplete and incorrect pin map with its full manufacturer-documented LQFP-48 definition. Correct power, boot, reset, and debug pin numbering, supply support, and dependent sample declarations while retaining strict native pin/pad reconciliation and manufacturing gates.
+- Give the motor-controller demo a validated 45 × 35 mm review outline, replacing the sparse 80 × 60 mm fallback while retaining readable reference labels and clear functional groups.
+
 ### Placement intent and readable board layouts
 
 - Preserve functional groups and support-part ownership in native `place-pcb` with a matching `--design`. Bind intent to actual footprint/net inventory, enforce explicit connector edge and rotation, and report missing access intent and excessive board whitespace.
