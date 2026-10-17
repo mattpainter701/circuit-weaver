@@ -120,10 +120,21 @@ def _point_box_distance_sq(point, box):
     return dx * dx + dy * dy
 
 
+def _reference_class(ref):
+    """Return the alphabetic designator prefix used to distinguish peers."""
+    prefix = ""
+    for char in ref:
+        if char.isdigit():
+            break
+        prefix += char
+    return prefix.casefold() if prefix else ref.casefold()
+
+
 def _candidate_associated(center, own_courtyard, ref, obstacles):
     own_distance = _point_box_distance_sq(center, own_courtyard)
+    own_class = _reference_class(ref)
     return not any(
-        kind == "courtyard" and owner != ref
+        kind == "courtyard" and owner != ref and _reference_class(owner) == own_class
         and _point_box_distance_sq(center, obstacle) < own_distance
         for kind, owner, obstacle in obstacles
     )

@@ -103,6 +103,50 @@ if not pcbnew.SaveBoard(str(output), board):
     raise RuntimeError("KiCad could not save dense-layout test board")
 '''
 
+_ASSOCIATION_CLASS_SCRIPT = r'''
+import pcbnew, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[2])
+from circuit_weaver import _kicad_worker as worker
+
+root = Path(sys.argv[1])
+board = pcbnew.BOARD()
+for ref, library, name, x in (
+    ("U1", "Package_TO_SOT_SMD", "SOT-223-3_TabPin2", 10),
+    ("C1", "Capacitor_SMD", "C_0402_1005Metric", 14),
+):
+    footprint = pcbnew.FootprintLoad(str(root / f"{library}.pretty"), name)
+    if footprint is None:
+        raise RuntimeError(f"missing test footprint: {library}:{name}")
+    board.Add(footprint)
+    footprint.SetReference(ref)
+    footprint.SetPosition(pcbnew.VECTOR2I(pcbnew.FromMM(x), pcbnew.FromMM(10)))
+
+obstacles = worker._silk_obstacles(board, pcbnew)[pcbnew.F_SilkS]
+u1 = board.FindFootprintByReference("U1")
+own = worker._courtyard_box(u1, pcbnew)
+c1_box = next(box for kind, ref, box in obstacles if kind == "courtyard" and ref == "C1")
+candidate = (c1_box[2] + pcbnew.FromMM(0.5), (c1_box[1] + c1_box[3]) // 2)
+own_distance = worker._point_box_distance_sq(candidate, own)
+c1_distance = worker._point_box_distance_sq(candidate, c1_box)
+if not c1_distance < own_distance:
+    raise AssertionError("fixture candidate must be closer to C1 than to U1")
+
+# Native geometry places the candidate closer to the support passive, but a
+# different reference class must not make U1 look misassociated.
+if not worker._candidate_associated(candidate, own, "U1", obstacles):
+    raise AssertionError("a nearer C footprint incorrectly rejected the U1 label")
+
+# The same courtyard as a U2 peer must still trigger the association check.
+same_class_obstacles = [
+    (kind, "U2" if kind == "courtyard" and ref == "C1" else ref, box)
+    for kind, ref, box in obstacles
+]
+if worker._candidate_associated(candidate, own, "U1", same_class_obstacles):
+    raise AssertionError("a nearer same-class U footprint did not trigger association")
+print("native class association behavior verified")
+'''
+
 
 @pytest.fixture(scope="module")
 def native_tools():
@@ -328,6 +372,16 @@ def test_dense_native_labels_stay_near_their_own_footprints_and_are_idempotent(t
     assert second["silkscreen"]["moved_count"] == 0
     assert second["silkscreen"]["conflict_counts"]["association"] == 0
     assert _field_snapshot(second_output, native_tools, refs) == after_first
+
+
+@pytest.mark.skip_category("optional-tool")
+def test_association_uses_reference_class_for_nearer_courtyards(native_tools):
+    python, root = native_tools
+    source_root = Path(__file__).resolve().parents[1] / "src"
+    process = subprocess.run([python, "-c", _ASSOCIATION_CLASS_SCRIPT, str(root), str(source_root)],
+                             capture_output=True, text=True, timeout=30)
+    assert process.returncode == 0, process.stdout + process.stderr
+    assert "native class association behavior verified" in process.stdout
 
 
 @pytest.mark.skip_category("optional-tool")
