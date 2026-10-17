@@ -408,7 +408,9 @@ def place_pcb(
                     report_silk[key] = None
         if isinstance(report.get("drc"), dict):
             report["drc"].pop("board", None)
-        return {"status": "error", "message": "No candidate passed physical DRC and native reference-label checks; output was not published",
+        return {"status": "error",
+                "message": ("No candidate passed physical DRC and native reference-label checks; "
+                            "output was not published"),
                 "placement_attempts": attempts, "best_candidate": report,
                 "iterations_per_attempt": iterations}
     except (OSError, ValueError) as exc:
