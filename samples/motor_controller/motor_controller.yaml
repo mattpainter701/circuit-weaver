@@ -11,6 +11,13 @@ project: Motor_Controller
 company: Demo Corp
 description: STM32 controller-core prototype with 12V-to-3.3V power delivery
 
+# Compact engineering-review outline; final mechanics remain application-specific.
+pcb_constraints:
+  - kind: placement
+    target: board
+    width_mm: 45
+    height_mm: 35
+
 power:
   - type: buck
     ic: AP62300

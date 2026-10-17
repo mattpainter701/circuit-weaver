@@ -135,7 +135,8 @@ The motor-controller sample also exercises a complete 48-pad STM32F103C8T6
 definition. Its pin numbering and supply connections follow the manufacturer's
 [STM32F103x8/xB datasheet](https://www.st.com/resource/en/datasheet/stm32f103c8.pdf).
 Unused GPIOs are explicit no-connects in the sample, rather than omitted symbol
-pins. This is a minimal power/MCU automation example; external motor drivers,
+pins. It declares a compact 45 × 35 mm engineering-review outline. This is a
+minimal power/MCU automation example; external motor drivers,
 programming access, and application-specific electrical review remain required.
 
 ## Manufacturing remains a separate gate
