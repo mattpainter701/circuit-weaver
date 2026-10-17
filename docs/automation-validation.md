@@ -79,6 +79,12 @@ The demo explicitly disables Freerouting's post-route optimizer: the tested
 2.4.1 optimizer narrowed fine-pitch traces below the imported track-width rule
 despite disabled neckdown. Native routing without that optimizer preserves
 the configured width and still passes final KiCad DRC.
+Native routing varies stable placement declaration order in isolated DSN copies.
+This addresses a reproduced KiCad 9 export that left one USB supply connection
+unfinished in three identical primary-routing attempts: sorting placement
+declarations completed the connection without changing geometry or rules.
+Optimizer strategies alone provide no variation when optimization is disabled.
+Every accepted result still requires complete routing and final native DRC.
 Native-board autorouting also adds a 0.01 mm clearance margin to generic DSN
 clearance rules, preserving typed exceptions. A reproduced KiCad 10 case routed
 at exactly 0.127 mm measured 0.1263 mm after session import; the margin prevents

@@ -498,7 +498,7 @@ circuit-weaver autoroute <board.kicad_pcb|design.dsn> [--output <file.ses>] \
 | `--effort` | Pass preset: `fast=100`, `medium=500` (default), `high=1000` |
 | `--max-passes` | Exact pass limit overriding `--effort`; 0 means unlimited |
 | `--timeout` | Routing timeout in seconds (default: 300) |
-| `--attempts` | 1-32 candidates sharing the routing timeout (default: 1); uses seeds or optimizer strategies |
+| `--attempts` | 1-32 candidates sharing the routing timeout (default: 1); native placement declaration orders, advertised seeds, or optimizer strategies |
 | `--overwrite` | Atomically replace existing DSN/SES outputs |
 | `--headless`, `--no-headless` | Enable/disable Freerouting GUI (headless by default) |
 | `--optimization-threads` | Optimizer thread count; 0 disables optimization |
@@ -520,9 +520,15 @@ discard earlier successes. The selected session minimizes incomplete connections
 then prefers reported-clear routing, fewer vias, and fewer trace segments.
 Segment count is a tie-breaker, not a wire-length measurement. Missing measurements
 never count as zero. The JSON `search` object records every attempt and its seed.
-Multiple attempts default to one optimizer thread. Builds advertising seed support
+Native boards first use ascending footprint-reference declaration order, then
+descending and original export order in isolated DSN copies. Geometry, nets,
+outlines, rules, and the original export stay unchanged. This provides primary
+routing variation while `--routed-board` keeps optimization disabled by default.
+Direct DSN inputs are routed unchanged; multiple attempts without native board
+publication default to one optimizer thread. Builds advertising seed support
 use consecutive seeds starting at `--seed` (or zero); other builds cycle through
 greedy, global, and hybrid strategies unless an explicit strategy was supplied.
+Optimizer strategies provide variation only when optimization is enabled.
 Explicit `--seed` still requires advertised support. Tool version and thread settings
 affect reproducibility. Input changes during search abort publication.
 
