@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Related component placement and readable references
+
+- Start support parts beside their owner's actual shared signal pads, retaining body clearances and a deterministic fallback when pad geometry is unavailable. Refine related signal support parts onto common rows or columns, and include support parts in compactness scoring for small designs while preserving placement constraints.
+- Give native reference labels a consistent horizontal position close to their own component, with collision-checked alternatives and stable results on repeated cleanup. Preserve locked labels and report any unresolved conflicts.
+
 ### Repeatable local workflow validation
 
 - Keep explicit demo board-size overrides consistent across the copied design, native board construction, and placement; preserve the source spec and retain original/effective dimensions in the evidence.

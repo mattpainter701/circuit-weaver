@@ -374,6 +374,180 @@ def test_parent_affinity_uses_nearest_rotated_shared_signal_pads():
     assert math.hypot(parent.x - support.x, parent.y - support.y) > 2.0
 
 
+def test_support_seed_uses_shared_signal_pad_side_and_preserves_body_clearance():
+    from circuit_weaver.placement_optimizer import (
+        PlacementConfig,
+        _init_placements,
+    )
+
+    owner = _make_comp("U1", category="digital", footprint="QFN-32")
+    owner.placement_pad_offsets = {"USB_CC1": [(2.5, 0.0)], "GND": [(0.0, 2.0)]}
+    support = _make_comp("R1", category="passive", footprint="0402")
+    support.placement_parent_ref = "U1"
+    support.placement_pad_offsets = {"USB_CC1": [(-0.4, 0.0)], "GND": [(0.4, 0.0)]}
+
+    state = _init_placements(
+        [owner, support], PlacementConfig(board_width_mm=50, board_height_mm=40), {}, {},
+    )
+    by_ref = {placement.ref: placement for placement in state}
+    parent, resistor = by_ref["U1"], by_ref["R1"]
+
+    # The USB_CC1 pad points right, so its support resistor starts on that side.
+    assert resistor.x > parent.x
+    assert resistor.y == pytest.approx(parent.y)
+    assert resistor.x - parent.x == pytest.approx(
+        parent.width / 2 + resistor.width / 2 + 1.5
+    )
+
+
+def test_support_seed_falls_back_to_ring_without_shared_signal_pads():
+    from circuit_weaver.placement_optimizer import PlacementConfig, _init_placements
+
+    owner = _make_comp("U1", category="digital", footprint="QFN-32")
+    owner.placement_pad_offsets = {"GND": [(2.0, 0.0)]}
+    support = _make_comp("C1", category="passive", footprint="0402")
+    support.placement_parent_ref = "U1"
+    support.placement_pad_offsets = {"GND": [(0.0, 0.0)]}
+
+    state = _init_placements(
+        [owner, support], PlacementConfig(board_width_mm=50, board_height_mm=40), {}, {},
+    )
+    parent, cap = state
+    assert cap.x < parent.x
+    assert cap.y == pytest.approx(parent.y)
+
+
+def test_rotated_diagonal_support_seed_meets_euclidean_body_clearance():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        PlacementConfig,
+        _overlap_area,
+        _rectangle_clearance,
+        _support_seed_position,
+    )
+
+    parent = ComponentPlacement(
+        "U1", 20, 20, rotation=45, width=6, height=2,
+        net_pad_offsets={"SIGNAL": [(3, 0)]},
+    )
+    config = PlacementConfig(min_component_gap_mm=3.0, support_body_clearance_mm=1.5)
+    x, y = _support_seed_position(parent, 1, 0.5, {"SIGNAL": [(0, 0)]}, config)
+    support = ComponentPlacement("R1", x, y, width=1, height=0.5, parent_ref="U1")
+
+    assert x > parent.x
+    assert y < parent.y
+    assert _rectangle_clearance(support, parent) >= config.min_component_gap_mm
+    assert _overlap_area(support, parent, gap=config.min_component_gap_mm) == 0
+
+
+def test_topology_matched_cc_supports_compact_under_legal_refinement():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        PlacementConfig,
+        _ConstraintPlan,
+        _cost_support_peer_alignment,
+        _refine_placement,
+        _support_peer_groups,
+    )
+
+    parent = ComponentPlacement("J1", 20, 20, width=6, height=6, constraint_locked=True)
+    cc1 = ComponentPlacement(
+        "R1", 14, 20, width=1, height=0.5, parent_ref="J1", placement_role="cc_pulldown",
+        net_pad_offsets={"CC1_J1": [(0.4, 0)], "GND": [(0, 0)]},
+    )
+    cc2 = ComponentPlacement(
+        "R2", 35, 20, width=1, height=0.5, parent_ref="J1", placement_role="cc_pulldown",
+        net_pad_offsets={"CC2_J1": [(-0.4, 0)], "GND": [(0, 0)]},
+    )
+    unrelated = ComponentPlacement(
+        "C1", 40, 30, width=1, height=0.5, parent_ref="J1", placement_role="decoupling",
+        net_pad_offsets={"VBUS": [(0.4, 0)], "GND": [(0, 0)]},
+    )
+    state = [parent, cc1, cc2, unrelated]
+    config = PlacementConfig(board_width_mm=50, board_height_mm=40, refinement_passes=3)
+    initial_alignment_cost = _cost_support_peer_alignment(state)
+
+    refined, _ = _refine_placement(state, config, {}, _ConstraintPlan())
+    by_ref = {placement.ref: placement for placement in refined}
+    final_cc_span = math.hypot(by_ref["R1"].x - by_ref["R2"].x, by_ref["R1"].y - by_ref["R2"].y)
+
+    assert final_cc_span < 5
+    assert _cost_support_peer_alignment(refined) < initial_alignment_cost
+    assert [[member.ref for member in group] for group in _support_peer_groups(state)] == [["R1", "R2"]]
+
+
+def test_support_families_use_signal_topology_and_ignore_shared_power_rails():
+    from circuit_weaver.placement_optimizer import ComponentPlacement, _support_peer_groups
+
+    parent = ComponentPlacement(
+        "U1", 20, 20, width=8, height=6,
+        net_pad_offsets={"VBUS_5V": [(-2, 0), (2, 0)], "USB_CC1": [(2, 1)], "USB_CC2": [(2, -1)]},
+    )
+    local_a = ComponentPlacement(
+        "C1", 18, 20, parent_ref="U1", placement_role="decoupling",
+        net_pad_offsets={"VBUS_5V": [(0, 0)]},
+    )
+    local_b = ComponentPlacement(
+        "C2", 22, 20, parent_ref="U1", placement_role="decoupling",
+        net_pad_offsets={"VBUS_5V": [(0, 0)]},
+    )
+    remote = ComponentPlacement(
+        "C3", 40, 20, parent_ref="U1", placement_role="decoupling",
+        net_pad_offsets={"VBUS_5V": [(0, 0)]},
+    )
+    cc1 = ComponentPlacement(
+        "R1", 20, 10, parent_ref="U1", placement_role="termination",
+        net_pad_offsets={"USB_CC1": [(0, 0)], "GND": [(0, 0)]},
+    )
+    cc2 = ComponentPlacement(
+        "R2", 20, 30, parent_ref="U1", placement_role="termination",
+        net_pad_offsets={"USB_CC2": [(0, 0)], "GND": [(0, 0)]},
+    )
+    reset_pullup = ComponentPlacement(
+        "R3", 20, 10, parent_ref="U1", placement_role="pullup",
+        net_pad_offsets={"RESET": [(0, 0)], "VDD_3P3": [(0, 0)]},
+    )
+    boot_pullup = ComponentPlacement(
+        "R4", 20, 30, parent_ref="U1", placement_role="pullup",
+        net_pad_offsets={"BOOT": [(0, 0)], "VDD_3P3": [(0, 0)]},
+    )
+
+    groups = {frozenset(member.ref for member in group) for group in _support_peer_groups([
+        parent, local_a, local_b, remote, cc1, cc2, reset_pullup, boot_pullup,
+    ])}
+    assert groups == {frozenset({"R1", "R2"})}
+
+
+def test_support_families_ignore_numeric_voltage_rail_aliases():
+    from circuit_weaver.placement_optimizer import ComponentPlacement, _support_peer_groups
+
+    parent = ComponentPlacement("U1", 20, 20, width=8, height=6)
+    plus_3v3 = ComponentPlacement(
+        "R1", 18, 20, parent_ref="U1", placement_role="pullup",
+        net_pad_offsets={"+3V3": [(0, 0)]},
+    )
+    plus_5v = ComponentPlacement(
+        "R2", 22, 20, parent_ref="U1", placement_role="pullup",
+        net_pad_offsets={"+5V": [(0, 0)]},
+    )
+
+    assert _support_peer_groups([parent, plus_3v3, plus_5v]) == []
+
+
+def test_compactness_includes_an_owner_and_its_support_parts():
+    from circuit_weaver.placement_optimizer import ComponentPlacement, PlacementConfig, _cost_compactness
+
+    config = PlacementConfig(board_width_mm=50, board_height_mm=40)
+    close = [
+        ComponentPlacement("U1", 20, 20, width=6, height=6),
+        ComponentPlacement("C1", 15, 20, parent_ref="U1", category="passive"),
+    ]
+    spread = [ComponentPlacement(**placement.__dict__) for placement in close]
+    spread[1].x = 35
+
+    assert _cost_compactness(close, config) < _cost_compactness(spread, config)
+
+
 def test_parent_affinity_ignores_ground_pad_coincidence_and_falls_back_to_centers():
     from circuit_weaver.placement_optimizer import (
         ComponentPlacement,

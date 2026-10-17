@@ -59,6 +59,22 @@ conservative enclosing rectangle. Fixed coordinates retain their supplied
 precision; movable coordinates are evaluated at their published precision.
 Unresolved or impossible constraints remain visible as review blockers.
 
+When native pad locations are available, support parts start beside their
+owner's shared non-ground pads, with the configured body clearance. Missing
+pad evidence retains the deterministic support-ring fallback. Related support
+parts, such as USB termination resistors, can be refined onto a common row or
+column using their owner, role and signal net family. A shared ground or power
+rail alone does not establish a group. Designs with fewer than two movable
+primary ICs include their support parts in the compactness objective; larger
+designs retain the objective based on their primary components.
+
+`--tidy-references` places horizontal native reference fields above their own
+courtyards when space allows, then tries nearby alternatives. Locked fields
+reserve their positions. Each accepted field reserves space for later fields,
+so obsolete positions of movable fields do not block cleanup. The native
+conflict report still checks courtyard, pad/mask, silkscreen, reference and
+board-edge collisions; an unresolved field remains visible for review.
+
 The existing objective still balances thermal separation, connectivity, parent
 affinity, edge access, compactness, and zoning. Shared-net attractions are divided
 by fanout minus one to prevent a large bus overwhelming point-to-point nets.
