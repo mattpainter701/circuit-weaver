@@ -52,6 +52,27 @@ def _shape_polygon(shape, pcbnew):
     return polygon
 
 
+def _boolean_mode(pcbnew):
+    """Return KiCad 8's explicit polygon boolean mode when it is exposed."""
+    return getattr(pcbnew.SHAPE_POLY_SET, "PM_STRICTLY_SIMPLE", None)
+
+
+def _boolean_add(destination, polygons, pcbnew):
+    mode = _boolean_mode(pcbnew)
+    if mode is None:
+        destination.BooleanAdd(polygons)
+    else:
+        destination.BooleanAdd(polygons, mode)
+
+
+def _boolean_subtract(destination, subject, clip, pcbnew):
+    mode = _boolean_mode(pcbnew)
+    if mode is None:
+        destination.BooleanSubtract(subject, clip)
+    else:
+        destination.BooleanSubtract(subject, clip, mode)
+
+
 def _filled_union(zones, layer, pcbnew, net=None):
     result = pcbnew.SHAPE_POLY_SET()
     count = 0
@@ -65,7 +86,7 @@ def _filled_union(zones, layer, pcbnew, net=None):
         polygons = zone.GetFilledPolysList(layer)
         if polygons.OutlineCount() <= 0:
             continue
-        result.BooleanAdd(polygons)
+        _boolean_add(result, polygons, pcbnew)
         count += 1
     if not count or result.OutlineCount() <= 0:
         return None
@@ -74,7 +95,7 @@ def _filled_union(zones, layer, pcbnew, net=None):
 
 def _fully_covered(shape_poly, filled_union, pcbnew):
     remainder = pcbnew.SHAPE_POLY_SET()
-    remainder.BooleanSubtract(shape_poly, filled_union)
+    _boolean_subtract(remainder, shape_poly, filled_union, pcbnew)
     return remainder.OutlineCount() == 0
 
 

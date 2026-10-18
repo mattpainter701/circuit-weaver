@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from circuit_weaver import _native_plane_cleanup as cleanup
 from circuit_weaver._native_copper_graph import CopperGraph, node_key
 from circuit_weaver.kicad_bridge import find_kicad_python
 
@@ -31,6 +32,39 @@ def test_copper_graph_routes_report_the_exact_item_uuid_union():
     route = graph.route("J1", "1", "J2", "1")
 
     assert route["item_uuids"] == ["contact-peer", "track-a", "track-b"]
+
+
+def test_polygon_boolean_overloads_follow_native_api_features():
+    class ModernPolySet:
+        def BooleanAdd(self, polygons):
+            self.added = polygons
+
+        def BooleanSubtract(self, subject, clip):
+            self.subtracted = (subject, clip)
+
+    modern = type("ModernPcbnew", (), {"SHAPE_POLY_SET": ModernPolySet})
+    modern_destination = ModernPolySet()
+    cleanup._boolean_add(modern_destination, "polygon", modern)
+    cleanup._boolean_subtract(modern_destination, "subject", "clip", modern)
+    assert modern_destination.added == "polygon"
+    assert modern_destination.subtracted == ("subject", "clip")
+
+    class LegacyPolySet:
+        PM_FAST = 1
+        PM_STRICTLY_SIMPLE = 2
+
+        def BooleanAdd(self, polygons, mode):
+            self.added = (polygons, mode)
+
+        def BooleanSubtract(self, subject, clip, mode):
+            self.subtracted = (subject, clip, mode)
+
+    legacy = type("LegacyPcbnew", (), {"SHAPE_POLY_SET": LegacyPolySet})
+    legacy_destination = LegacyPolySet()
+    cleanup._boolean_add(legacy_destination, "polygon", legacy)
+    cleanup._boolean_subtract(legacy_destination, "subject", "clip", legacy)
+    assert legacy_destination.added == ("polygon", LegacyPolySet.PM_STRICTLY_SIMPLE)
+    assert legacy_destination.subtracted == ("subject", "clip", LegacyPolySet.PM_STRICTLY_SIMPLE)
 
 
 @pytest.mark.skip_category("optional-tool")
