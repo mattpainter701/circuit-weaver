@@ -81,6 +81,16 @@ All final previews and delivery checks use the cleaned board. The cleanup plan,
 board/project/rule snapshots, native DRC and reference checks remain bound to
 the final evidence. Existing workflows stay at 16 stages, or 17 with one plan.
 
+To add filled native ground pours after routing, refinement and cleanup, pass
+`--ground-plane /path/to/ground-plane.json`; see
+[`plane-pcb`](cli-reference.md#plane-pcb). This adds one checked stage. With all
+three plans and assembled/MCP checks, the workflow has 19 stages and retains
+`routed-base.kicad_pcb`, `routed-refined.kicad_pcb` and `routed-cleaned.kicad_pcb`.
+The final `routed.kicad_pcb` contains the filled planes and supplies all preview
+and delivery checks. Plan hashes, actual native filled polygons and connectivity,
+unchanged original tracks/vias, protected trace-only paths, final DRC and label
+checks must pass. All intermediate evidence is rechecked before success.
+
 The MCP pass lists all five tools, validates and generates the same design,
 discovers projects, and verifies that malformed input, an empty research query,
 and missing readiness evidence are returned as MCP tool errors.

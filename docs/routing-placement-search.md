@@ -246,6 +246,18 @@ all delivery checks and previews use the final cleaned board. The combined mode
 adds two stages to the usual workflow. Input plan and board/project/rule hashes
 are verified throughout, including native save/reload checks.
 
+## Filled ground planes after routing
+
+Use `plane-pcb` with an explicit ground-plane plan to add filled GND pours after
+return refinement and copper cleanup. The native operation retains all original
+tracks and vias and checks protected paths using their original trace geometry.
+KiCad fills both outer-layer zones with thermal pad connections and removes
+unconnected islands. Saved filled polygons, connectivity, original placement and
+labels, full native DRC and source/settings hashes gate publication. The current
+bounded operation accepts two-layer rectangular boards without existing zones.
+The automated workflow's `--ground-plane` option retains its intermediate boards
+and renders the final filled board; see [workflow validation](automation-validation.md).
+
 ## Real-board regression corpus
 
 `tests/test_native_pcb_workflow.py` executes the public CLI against real KiCad and

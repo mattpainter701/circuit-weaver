@@ -95,6 +95,91 @@ def test_cleanup_plan_preflight_uses_demo_source_package_environment(tmp_path):
     ]}
 
 
+def test_ground_plane_plan_preflight_uses_demo_source_package_environment(tmp_path):
+    plan = tmp_path / "ground-plane.json"
+    plan.write_text(json.dumps({
+        "net": "GND", "layers": ["F.Cu", "B.Cu"], "edge_clearance_mm": 0.5,
+        "clearance_mm": 0.25, "min_thickness_mm": 0.2,
+        "thermal_gap_mm": 0.25, "thermal_spoke_width_mm": 0.3,
+        "protected_connections": [],
+    }), encoding="utf-8")
+    demo = _demo.Demo(tmp_path, 30)
+    stale_package = tmp_path / "stale-site-packages" / "circuit_weaver"
+    stale_package.mkdir(parents=True)
+    (stale_package / "__init__.py").write_text("", encoding="utf-8")
+    env = demo.env.copy()
+    env["PYTHONPATH"] = os.pathsep.join((str(_demo.REPO / "src"), str(stale_package.parent)))
+
+    result = _demo.load_ground_plane_plan_in_runtime(plan, cwd=demo.cwd, env=env)
+
+    assert result == json.loads(plan.read_text(encoding="utf-8"))
+
+
+def _ground_plane_evidence(tmp_path):
+    source, board = tmp_path / "cleaned.kicad_pcb", tmp_path / "grounded.kicad_pcb"
+    source.write_bytes(b"cleaned")
+    board.write_bytes(b"grounded")
+    connection = {"from_ref": "C1", "from_pad": "1", "to_ref": "U1", "to_pad": "1"}
+    plan = {"net": "GND", "layers": ["F.Cu", "B.Cu"], "protected_connections": [connection]}
+    payload = {
+        "status": "ok", "output_kind": "ground_plane_kicad_board", "source_sha256": _demo.digest(source),
+        "ground_plane": {
+            "net": "GND", "layers": ["F.Cu", "B.Cu"], "tracks_preserved": True,
+            "original_footprints_and_text_preserved": True, "saved_fill_geometry_verified": True,
+            "original_board_geometry_preserved": True,
+            "saved_connectivity_verified": True, "filled_area_mm2": 200.0,
+            "added_zones": 2, "filled_zones": 2,
+            "zone_stats": [{"polygon_count": 1, "island_count": 0, "polygon_sha256": "a" * 64},
+                           {"polygon_count": 1, "island_count": 0, "polygon_sha256": "b" * 64}],
+            "zone_connected_copper_counts": [1, 2], "island_count": 0,
+            "protected_connections": [{**connection, "status": "preserved"}],
+        },
+        "silkscreen": {"unresolved_count": 0, "remaining_conflict_count": 0},
+        "drc": {"status": "ok", "passed": True, "blocker_count": 0,
+                "board": str(board), "board_sha256": _demo.digest(board)},
+    }
+    return source, board, plan, payload
+
+
+@pytest.mark.parametrize("flag", [
+    "tracks_preserved", "original_footprints_and_text_preserved",
+    "original_board_geometry_preserved",
+    "saved_fill_geometry_verified", "saved_connectivity_verified",
+])
+def test_demo_ground_plane_requires_native_preservation_and_saved_fill(tmp_path, flag):
+    source, board, plan, payload = _ground_plane_evidence(tmp_path)
+    _demo.verify_ground_plane(payload, board, source, plan)
+    payload["ground_plane"].pop(flag)
+    with pytest.raises(RuntimeError, match="did not confirm"):
+        _demo.verify_ground_plane(payload, board, source, plan)
+
+
+@pytest.mark.parametrize("change, message", [
+    ("source", "different source board bytes"),
+    ("board", "final board bytes"),
+    ("net", "net or layers"),
+    ("unfilled", "missing or unfilled"),
+    ("endpoint", "unverified protected connection"),
+    ("nan_area", "no native filled copper"),
+])
+def test_demo_ground_plane_rejects_stale_or_incomplete_evidence(tmp_path, change, message):
+    source, board, plan, payload = _ground_plane_evidence(tmp_path)
+    if change == "source":
+        source.write_bytes(b"changed input")
+    elif change == "board":
+        board.write_bytes(b"changed output")
+    elif change == "net":
+        payload["ground_plane"]["net"] = "VDD"
+    elif change == "unfilled":
+        payload["ground_plane"]["filled_zones"] = 1
+    elif change == "endpoint":
+        payload["ground_plane"]["protected_connections"][0]["to_pad"] = "2"
+    else:
+        payload["ground_plane"]["filled_area_mm2"] = float("nan")
+    with pytest.raises(RuntimeError, match=message):
+        _demo.verify_ground_plane(payload, board, source, plan)
+
+
 def test_demo_binds_cleanup_input_evidence_and_all_preservation_flags(tmp_path):
     source, board = tmp_path / "routed.kicad_pcb", tmp_path / "cleaned.kicad_pcb"
     source.write_bytes(b"routed")
