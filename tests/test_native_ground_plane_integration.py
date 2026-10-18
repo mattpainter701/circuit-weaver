@@ -66,9 +66,14 @@ def test_native_ground_planes_fill_and_preserve_routes_after_reload(tmp_path):
                 for item in board.GetTracks():
                     if item.GetClass() == "PCB_VIA":
                         position = item.GetPosition()
+                        try:
+                            top_width = item.GetWidth(item.TopLayer())
+                            bottom_width = item.GetWidth(item.BottomLayer())
+                        except TypeError:
+                            top_width = bottom_width = item.GetWidth()
                         geometry = (round(pcbnew.ToMM(position.x), 6), round(pcbnew.ToMM(position.y), 6),
                                     int(item.TopLayer()), int(item.BottomLayer()),
-                                    int(item.GetWidth(item.TopLayer())), int(item.GetWidth(item.BottomLayer())),
+                                    int(top_width), int(bottom_width),
                                     int(item.GetDrill()))
                     else:
                         start, end = item.GetStart(), item.GetEnd()

@@ -94,7 +94,10 @@ def _connected_ground_pads(board, net):
 
 
 def _zone_pad_anchors(board, zone):
-    connected = board.GetConnectivity().GetConnectedItems(zone)
+    connectivity = board.GetConnectivity()
+    # These one-argument queries are stable across KiCad 8, 9, and 10. The
+    # track vector includes vias; pads are returned separately.
+    connected = list(connectivity.GetConnectedPads(zone)) + list(connectivity.GetConnectedTracks(zone))
     anchors = [item for item in connected if item.GetClass() != "ZONE"
                and str(item.GetNetname()) == str(zone.GetNetname())]
     if not anchors:

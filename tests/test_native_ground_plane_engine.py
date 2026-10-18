@@ -78,3 +78,33 @@ def test_protected_path_requires_existing_trace_only_route():
     graph = SimpleNamespace(route=lambda *args: None)
     with pytest.raises(ValueError, match="no existing trace-only route"):
         ground._trace_route(graph, {"from_ref": "U1", "from_pad": "1", "to_ref": "J1", "to_pad": "1"})
+
+
+def test_zone_anchor_query_uses_stable_pad_and_track_methods():
+    calls = []
+
+    class ConnectedItem:
+        def __init__(self, item_class):
+            self.item_class = item_class
+
+        def GetClass(self):
+            return self.item_class
+
+        def GetNetname(self):
+            return "GND"
+
+    class Connectivity:
+        def GetConnectedPads(self, zone):
+            calls.append("pads")
+            return [ConnectedItem("PAD")]
+
+        def GetConnectedTracks(self, zone):
+            calls.append("tracks")
+            return [ConnectedItem("PCB_VIA"), ConnectedItem("PCB_TRACK")]
+
+    board = SimpleNamespace(GetConnectivity=lambda: Connectivity())
+    zone = SimpleNamespace(GetNetname=lambda: "GND", GetLayerName=lambda: "B.Cu")
+    anchors = ground._zone_pad_anchors(board, zone)
+
+    assert calls == ["pads", "tracks"]
+    assert [item.GetClass() for item in anchors] == ["PAD", "PCB_VIA", "PCB_TRACK"]
