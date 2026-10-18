@@ -91,6 +91,10 @@ class CopperGraph:
         self.net_track_count = defaultdict(int)
         self.net_via_count = defaultdict(int)
         self.items = defaultdict(list)
+        # Parallel provenance for each graph edge keeps the adjacency tuple
+        # contract stable for existing callers while allowing cleanup tools
+        # to freeze the concrete copper objects on a selected route.
+        self.edge_items = defaultdict(set)
         tracks, vias = [], []
         for item in board.GetTracks():
             try:
@@ -187,9 +191,12 @@ class CopperGraph:
                 nodes.append(node)
                 track_nodes[(idx, t)] = node
             for u, v in zip(nodes, nodes[1:]):
-                self._add_edge(u, v, distance(u[:2], v[:2]), seg["net"])
+                self._add_edge(u, v, distance(u[:2], v[:2]), seg["net"], item_ids=(
+                    self._item_uuid(seg["item"]),
+                ))
         for i, t, j, u, gap, net in track_contacts:
-            self._add_edge(track_nodes[(i, round(t, 10))], track_nodes[(j, round(u, 10))], gap, net)
+            self._add_edge(track_nodes[(i, round(t, 10))], track_nodes[(j, round(u, 10))], gap, net,
+                           item_ids=(self._item_uuid(tracks[i]["item"]), self._item_uuid(tracks[j]["item"])))
 
         via_nodes = {}
         for via in vias:
@@ -198,9 +205,11 @@ class CopperGraph:
                 via_nodes[(id(via), layer_id)] = node_key(*center, board.GetLayerName(layer_id))
             top, bottom = int(via.TopLayer()), int(via.BottomLayer())
             if top != bottom:
-                self._add_edge(via_nodes[(id(via), top)], via_nodes[(id(via), bottom)], 0.0, net, via=1)
+                self._add_edge(via_nodes[(id(via), top)], via_nodes[(id(via), bottom)], 0.0, net, via=1,
+                               item_ids=(self._item_uuid(via),))
         for via, layer_id, idx, t, access, net in via_contacts:
-            self._add_edge(track_nodes[(idx, round(t, 10))], via_nodes[(id(via), layer_id)], access, net)
+            self._add_edge(track_nodes[(idx, round(t, 10))], via_nodes[(id(via), layer_id)], access, net,
+                           item_ids=(self._item_uuid(tracks[idx]["item"]), self._item_uuid(via)))
 
         # Native pad-to-via shape contacts (important for traces absent on one side).
         for fp in board.GetFootprints():
@@ -219,9 +228,11 @@ class CopperGraph:
                         if pad.IsOnLayer(layer_id) and shape_collides(
                             pad.GetEffectiveShape(layer_id), via.GetEffectiveShape(layer_id)
                         ):
-                            self._add_edge(pnode, via_nodes[(id(via), layer_id)], distance(pxy, center), net)
+                            self._add_edge(pnode, via_nodes[(id(via), layer_id)], distance(pxy, center), net,
+                                           item_ids=(self._item_uuid(via),))
         for pnode, idx, t, access, net in pad_contacts:
-            self._add_edge(pnode, track_nodes[(idx, round(t, 10))], access, net)
+            self._add_edge(pnode, track_nodes[(idx, round(t, 10))], access, net,
+                           item_ids=(self._item_uuid(tracks[idx]["item"]),))
 
         for node, edges in self.adj.items():
             unique, seen = [], set()
@@ -232,9 +243,21 @@ class CopperGraph:
                     unique.append(edge)
             self.adj[node] = unique
 
-    def _add_edge(self, a, b, length, net, via=0):
+    def _add_edge(self, a, b, length, net, via=0, item_ids=()):
+        if not hasattr(self, "edge_items"):
+            self.edge_items = defaultdict(set)
         self.adj[a].append((b, length, via, net))
         self.adj[b].append((a, length, via, net))
+        key = (a, b, length, via, net)
+        self.edge_items[key].update(item_id for item_id in item_ids if item_id)
+        self.edge_items[(b, a, length, via, net)].update(item_id for item_id in item_ids if item_id)
+
+    @staticmethod
+    def _item_uuid(item):
+        try:
+            return str(item.m_Uuid.AsString())
+        except (AttributeError, RuntimeError):
+            return ""
 
     def shortest(self, net, source, destinations):
         if source is None or not destinations:
@@ -257,15 +280,20 @@ class CopperGraph:
                     continue
                 candidate = (length + weight, vias + via)
                 if nxt not in best or candidate < best[nxt]:
-                    best[nxt], prev[nxt] = candidate, node
+                    best[nxt], prev[nxt] = candidate, (node, (node, nxt, weight, via, edge_net))
                     heapq.heappush(heap, (*candidate, str(nxt), nxt))
         if found is None:
             return None
         path = [found]
+        route_edges = []
         while path[-1] != source:
-            path.append(prev[path[-1]])
+            previous, edge_key = prev[path[-1]]
+            route_edges.append(edge_key)
+            path.append(previous)
         path.reverse()
-        return {"length_mm": best[found][0], "vias": best[found][1], "path": path}
+        item_uuids = sorted({item_id for edge_key in route_edges for item_id in self.edge_items.get(edge_key, ())})
+        return {"length_mm": best[found][0], "vias": best[found][1], "path": path,
+                "item_uuids": item_uuids}
 
     def route(self, from_ref, from_pad, to_ref, to_pad):
         first = self.pad_nodes.get((str(from_ref), str(from_pad)))

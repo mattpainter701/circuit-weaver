@@ -91,6 +91,15 @@ and delivery checks. Plan hashes, actual native filled polygons and connectivity
 unchanged original tracks/vias, protected trace-only paths, final DRC and label
 checks must pass. All intermediate evidence is rechecked before success.
 
+To remove traces replaced by these planes, add
+`--plane-cleanup /path/to/plane-cleanup.json` together with `--ground-plane`;
+see [`plane-cleanup-pcb`](cli-reference.md#plane-cleanup-pcb). With all four
+plans and assembled/MCP checks the run has 20 stages. It additionally retains
+`routed-grounded.kicad_pcb`; the cleaned `routed.kicad_pcb` supplies every final
+preview and delivery check. Full-shape native plane coverage, unchanged protected
+trace paths and vias, zone refill, saved connectivity, DRC, labels and all input
+and intermediate hashes are checked before success.
+
 The MCP pass lists all five tools, validates and generates the same design,
 discovers projects, and verifies that malformed input, an empty research query,
 and missing readiness evidence are returned as MCP tool errors.

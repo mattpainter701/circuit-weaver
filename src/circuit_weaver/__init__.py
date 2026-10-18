@@ -16,6 +16,7 @@ from .enclosure_designer import generate_enclosure_scad, render_enclosure_stl
 from .kicad_placement_api import check_kicad_available, detect_kicad_version, update_board_placements
 from .pcb_copper_cleanup import cleanup_copper
 from .pcb_ground_plane import add_ground_plane
+from .pcb_plane_cleanup import cleanup_plane_traces
 from .pcb_return_paths import refine_return_paths
 from .review_report import generate_review_report_html
 from .sourcing_auditor import audit_bom
@@ -26,6 +27,7 @@ __all__ = [
     "check_dfm",
     "cleanup_copper",
     "add_ground_plane",
+    "cleanup_plane_traces",
     "dfm_report",
     "generate_all_docs",
     "generate_assembly_guide_csv",

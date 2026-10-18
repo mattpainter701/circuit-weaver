@@ -141,6 +141,70 @@ def _ground_plane_evidence(tmp_path):
     return source, board, plan, payload
 
 
+def test_plane_cleanup_preflight_uses_demo_source_environment(tmp_path):
+    plan = tmp_path / "plane-cleanup.json"
+    content = {"net": "GND", "protected_connections": [
+        {"from_ref": "C1", "from_pad": "1", "to_ref": "U1", "to_pad": "1"},
+    ]}
+    plan.write_text(json.dumps(content), encoding="utf-8")
+    demo = _demo.Demo(tmp_path, 30)
+    stale_package = tmp_path / "stale-site-packages" / "circuit_weaver"
+    stale_package.mkdir(parents=True)
+    (stale_package / "__init__.py").write_text("", encoding="utf-8")
+    env = demo.env.copy()
+    env["PYTHONPATH"] = os.pathsep.join((str(_demo.REPO / "src"), str(stale_package.parent)))
+    assert _demo.load_plane_cleanup_plan_in_runtime(plan, cwd=demo.cwd, env=env) == content
+
+
+def test_plane_cleanup_workflow_requires_plane_stage_before_creating_output(tmp_path):
+    output = tmp_path / "should-not-exist"
+    result = subprocess.run([
+        os.sys.executable, str(_demo.REPO / "scripts/validate_app_workflow.py"),
+        "--plane-cleanup", "plan.json", "--output", str(output),
+    ], capture_output=True, text=True)
+    assert result.returncode == 2
+    assert "--plane-cleanup requires --ground-plane" in result.stderr
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("mutation", ["source", "output", "coverage", "vias", "inventory", "endpoint"])
+def test_demo_rejects_stale_or_incomplete_plane_cleanup_evidence(tmp_path, mutation):
+    source, board = tmp_path / "grounded.kicad_pcb", tmp_path / "cleaned.kicad_pcb"
+    source.write_bytes(b"grounded")
+    board.write_bytes(b"cleaned")
+    pair = {"from_ref": "C1", "from_pad": "1", "to_ref": "U1", "to_pad": "1"}
+    plan = {"net": "GND", "protected_connections": [pair]}
+    report = dict.fromkeys((
+        "existing_filled_planes_verified", "only_covered_unlocked_traces_removed", "no_copper_added",
+        "vias_preserved", "nonselected_copper_preserved", "locked_copper_preserved", "original_geometry_preserved",
+        "original_board_geometry_preserved",
+        "saved_fill_geometry_verified", "saved_coverage_verified", "saved_connectivity_verified",
+        "protected_paths_preserved",
+    ), True)
+    report.update(net="GND", removed_count=1, track_count_before=3, track_count_after=2,
+                  removed_tracks=[{"uuid": "removed"}],
+                  protected_connections=[{**pair, "status": "preserved", "protected_path_preserved": True}])
+    payload = {"status": "ok", "output_kind": "plane_cleaned_kicad_board", "source_sha256": _demo.digest(source),
+               "plane_cleanup": report, "silkscreen": {"unresolved_count": 0, "remaining_conflict_count": 0},
+               "drc": {"status": "ok", "passed": True, "blocker_count": 0,
+                       "board": str(board), "board_sha256": _demo.digest(board)}}
+    _demo.verify_plane_cleanup(payload, board, source, plan)
+    if mutation == "source":
+        source.write_bytes(b"changed")
+    elif mutation == "output":
+        board.write_bytes(b"changed")
+    elif mutation == "coverage":
+        report["saved_coverage_verified"] = False
+    elif mutation == "vias":
+        report.pop("vias_preserved")
+    elif mutation == "inventory":
+        report["removed_count"] = 2
+    else:
+        report["protected_connections"][0]["to_pad"] = "2"
+    with pytest.raises(RuntimeError):
+        _demo.verify_plane_cleanup(payload, board, source, plan)
+
+
 @pytest.mark.parametrize("flag", [
     "tracks_preserved", "original_footprints_and_text_preserved",
     "original_board_geometry_preserved",
