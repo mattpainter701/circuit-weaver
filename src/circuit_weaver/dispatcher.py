@@ -4052,6 +4052,15 @@ def main() -> None:
     plane_p.add_argument("--overwrite", action="store_true")
     plane_p.add_argument("--kicad-python-path", help="Python interpreter with KiCad pcbnew installed")
 
+    plane_cleanup_p = subparsers.add_parser(
+        "plane-cleanup-pcb", help="Remove redundant plane-covered traces from a separate KiCad board copy"
+    )
+    plane_cleanup_p.add_argument("kicad_pcb", help="DRC-clean input board with existing filled ground planes")
+    plane_cleanup_p.add_argument("--output", "-o", required=True, help="Separate plane-cleaned .kicad_pcb output")
+    plane_cleanup_p.add_argument("--plan", required=True, help="Strict JSON net and protected-connections plan")
+    plane_cleanup_p.add_argument("--overwrite", action="store_true")
+    plane_cleanup_p.add_argument("--kicad-python-path", help="Python interpreter with KiCad pcbnew installed")
+
     autoroute_p = subparsers.add_parser(
         "autoroute", help="Route PCB using Freerouting (optional; requires Freerouting JAR)"
     )
@@ -5457,6 +5466,20 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
         try:
             plan = load_ground_plane_plan(args.plan)
             result = _run_with_stderr_capture(lambda: add_ground_plane(
+                args.kicad_pcb, args.output, plan,
+                overwrite=args.overwrite, kicad_python_path=args.kicad_python_path,
+            ))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            result = {"status": "error", "message": str(exc)}
+        _print_json(result)
+        raise SystemExit(0 if result["status"] == "ok" else 1)
+
+    if args.command == "plane-cleanup-pcb":
+        from .pcb_plane_cleanup import cleanup_plane_traces, load_plane_cleanup_plan
+
+        try:
+            plan = load_plane_cleanup_plan(args.plan)
+            result = _run_with_stderr_capture(lambda: cleanup_plane_traces(
                 args.kicad_pcb, args.output, plan,
                 overwrite=args.overwrite, kicad_python_path=args.kicad_python_path,
             ))

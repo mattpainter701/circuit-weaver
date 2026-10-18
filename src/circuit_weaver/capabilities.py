@@ -210,6 +210,12 @@ CAPABILITIES: Final[tuple[CapabilityRecord, ...]] = (
         output_guarantee="kicad-load", since_version="0.35.0",
     ),
     _record(
+        "plane-cleanup-pcb", "plane-cleanup-pcb", maturity="review_only", skill="circuit-weaver",
+        python="circuit_weaver.pcb_plane_cleanup:cleanup_plane_traces",
+        evidence_kinds=("command-contract", "kicad-load", "external-tool", "user-supplied"),
+        output_guarantee="kicad-load", since_version="0.35.0",
+    ),
+    _record(
         "cleanup-pcb", "cleanup-pcb", maturity="review_only", skill="circuit-weaver",
         python="circuit_weaver.pcb_copper_cleanup:cleanup_copper",
         evidence_kinds=("command-contract", "kicad-load", "external-tool", "user-supplied"),

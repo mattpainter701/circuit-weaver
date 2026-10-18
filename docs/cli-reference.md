@@ -525,6 +525,33 @@ checks and unchanged board/project/rule snapshots gate atomic publication.
 Use a separate output board; `--overwrite` permits replacement only after all
 checks pass. `--kicad-python-path` overrides native interpreter discovery.
 
+## plane-cleanup-pcb
+
+Remove redundant unlocked straight traces covered by an existing filled same-net
+plane, preserving all vias and the exact copper used by protected pad paths.
+
+```bash
+circuit-weaver plane-cleanup-pcb grounded.kicad_pcb -o cleaned.kicad_pcb --plan plane-cleanup.json
+```
+
+The strict JSON plan has exactly `net` and `protected_connections`:
+
+```json
+{"net":"GND","protected_connections":[{"from_ref":"C1","from_pad":"1","to_ref":"U1","to_pad":"1"}]}
+```
+
+The native engine compares each candidate's complete copper shape with the filled
+plane polygons on its own layer. It retains uncovered, locked and protected
+traces and all vias. It refills the zones and verifies coverage again after
+save/reload; plane outlines and settings, other-net copper, components, models,
+pad nets and labels stay unchanged. Protected paths may include other nets such
+as VDD. Their trace-only geometry and metrics remain independent of the planes.
+
+Use a separate output file. Full input/final native DRC, saved filled geometry,
+native connectivity, exact permitted deletions, references and unchanged input
+board/project/rules gate atomic publication. `--overwrite` and
+`--kicad-python-path` have the same meanings as for `plane-pcb`.
+
 ## cleanup-pcb
 
 Remove redundant selected-net copper and try shared via pairs without worsening

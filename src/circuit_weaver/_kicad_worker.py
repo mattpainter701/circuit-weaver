@@ -615,8 +615,10 @@ def execute(request):
     tidy_summary = None
     refinement = None
     cleanup = None
+    plane_cleanup = None
     ground_plane = None
     cleanup_removed_items = []
+    plane_cleanup_removed_items = []
     original_copper = None
     original_layout = None
     original_board_geometry = None
@@ -704,6 +706,60 @@ def execute(request):
         ground_plane["tracks_preserved"] = True
         ground_plane["original_footprints_and_text_preserved"] = True
         ground_plane["original_board_geometry_preserved"] = True
+    elif operation == "cleanup_plane_traces":
+        from _native_plane_cleanup import apply as cleanup_covered_plane_traces
+
+        plan = request.get("plan")
+        if (not isinstance(plan, dict) or not isinstance(plan.get("net"), str) or not plan["net"]
+                or not isinstance(plan.get("protected_connections"), list)):
+            raise ValueError("Plane-cleanup operation requires a validated plan")
+        original_copper = _copper_state(board)
+        original_layout = _fixed_layout_state(board)
+        original_board_geometry = _ground_plane_source_geometry_state(board, pcbnew)
+        plane_cleanup = cleanup_covered_plane_traces(
+            board, pcbnew, net=plan["net"], protected_connections=plan["protected_connections"],
+        )
+        if not isinstance(plane_cleanup, dict) or plane_cleanup.get("status") != "ok":
+            raise ValueError("Native plane-cleanup operation did not verify a valid result")
+        plane_cleanup_removed_items = plane_cleanup.pop("_native_removed_items", [])
+        if (_identity(board) != identity or original_layout != _fixed_layout_state(board)
+                or original_board_geometry != _ground_plane_source_geometry_state(board, pcbnew)):
+            raise ValueError(
+                "Plane cleanup changed pad/net identity, layout, footprint, pad, model, drawing or outline geometry"
+            )
+        before_copper, after_copper = original_copper, _copper_state(board)
+        added = after_copper - before_copper
+        removed = before_copper - after_copper
+        if added:
+            raise ValueError("Plane cleanup added or mutated native copper")
+        removed_rows = [json.loads(raw) for raw, count in removed.items() for _ in range(count)]
+        if (any(row["type"] != "PCB_TRACK" or row["net"] != plan["net"] or row["locked"]
+                for row in removed_rows)
+                or len(removed_rows) != plane_cleanup.get("removed_count")):
+            raise ValueError("Plane cleanup removed a via, locked trace, or nonselected copper item")
+        reported = plane_cleanup.get("removed_tracks")
+        if not isinstance(reported, list) or len(reported) != len(removed_rows):
+            raise ValueError("Plane-cleanup report does not identify every removed native trace")
+        actual_by_uuid = {row["uuid"]: row for row in removed_rows}
+        if len(actual_by_uuid) != len(removed_rows):
+            raise ValueError("Native trace removal did not produce unique UUIDs")
+        for report_row in reported:
+            actual = actual_by_uuid.get(report_row.get("uuid")) if isinstance(report_row, dict) else None
+            geometry = report_row.get("geometry") if isinstance(report_row, dict) else None
+            if (actual is None or report_row.get("net") != actual["net"] or report_row.get("locked") is not False
+                    or geometry != {"start": actual["start"], "end": actual["end"],
+                                    "layer": actual["layer"], "width": actual["width"]}):
+                raise ValueError("Plane-cleanup report removal geometry does not match the native copper diff")
+        if {row["uuid"] for row in reported} != set(actual_by_uuid):
+            raise ValueError("Plane-cleanup report UUIDs do not match the native copper diff")
+        plane_cleanup["existing_filled_planes_verified"] = True
+        plane_cleanup["only_covered_unlocked_traces_removed"] = True
+        plane_cleanup["no_copper_added"] = True
+        plane_cleanup["vias_preserved"] = True
+        plane_cleanup["nonselected_copper_preserved"] = True
+        plane_cleanup["locked_copper_preserved"] = True
+        plane_cleanup["original_geometry_preserved"] = True
+        plane_cleanup["original_board_geometry_preserved"] = True
     elif operation == "place":
         placements = request["placements"]
         if not placements or set(placements) - set(identity):
@@ -838,6 +894,52 @@ def execute(request):
         ground_plane["original_board_geometry_preserved"] = True
         result["ground_plane"] = ground_plane
         result["silkscreen"] = _reference_conflict_report(reloaded, pcbnew, 0, 0)
+    if plane_cleanup is not None:
+        from _native_plane_cleanup import verify as verify_plane_cleanup_after_reload
+
+        if (_identity(reloaded) != identity or original_layout != _fixed_layout_state(reloaded)
+                or original_board_geometry != _ground_plane_source_geometry_state(reloaded, pcbnew)):
+            raise ValueError("Saved plane-cleanup board changed identity or original geometry")
+        saved_copper = _copper_state(reloaded)
+        if saved_copper - original_copper:
+            raise ValueError("Saved plane-cleanup board added or mutated native copper")
+        saved_removed = original_copper - saved_copper
+        saved_removed_rows = [json.loads(raw) for raw, count in saved_removed.items() for _ in range(count)]
+        if (any(row["type"] != "PCB_TRACK" or row["net"] != request["plan"]["net"] or row["locked"]
+                for row in saved_removed_rows)
+                or len(saved_removed_rows) != plane_cleanup.get("removed_count")):
+            raise ValueError("Saved plane-cleanup board removed a via, locked trace, or nonselected copper item")
+        saved_by_uuid = {row["uuid"]: row for row in saved_removed_rows}
+        if (len(saved_by_uuid) != len(saved_removed_rows)
+                or set(saved_by_uuid) != {row["uuid"] for row in plane_cleanup["removed_tracks"]}):
+            raise ValueError("Saved plane-cleanup removed UUIDs do not match the native report")
+        for report_row in plane_cleanup["removed_tracks"]:
+            actual = saved_by_uuid[report_row["uuid"]]
+            geometry = report_row.get("geometry")
+            if (report_row.get("net") != actual["net"] or report_row.get("locked") is not False
+                    or geometry != {"start": actual["start"], "end": actual["end"],
+                                    "layer": actual["layer"], "width": actual["width"]}):
+                raise ValueError("Saved plane-cleanup removed geometry does not match the native report")
+        verification = verify_plane_cleanup_after_reload(
+            reloaded, pcbnew, plane_cleanup, net=request["plan"]["net"],
+            protected_connections=request["plan"]["protected_connections"],
+        )
+        if not isinstance(verification, dict) or verification.get("status") != "ok":
+            raise ValueError("Saved plane-cleanup board failed native fill, coverage or connectivity verification")
+        plane_cleanup.update(verification)
+        plane_cleanup.update({
+            "existing_filled_planes_verified": True,
+            "only_covered_unlocked_traces_removed": True,
+            "no_copper_added": True,
+            "vias_preserved": True,
+            "nonselected_copper_preserved": True,
+            "locked_copper_preserved": True,
+            "original_geometry_preserved": True,
+            "original_board_geometry_preserved": True,
+        })
+        result["plane_cleanup"] = plane_cleanup
+        result["silkscreen"] = _reference_conflict_report(reloaded, pcbnew, 0, 0)
+        plane_cleanup_removed_items.clear()
     return result
 
 

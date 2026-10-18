@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Plane-backed ground trace cleanup
+
+- Remove redundant unlocked traces whose complete copper shape is covered by a same-net filled plane, while retaining every via, protected return and decoupling route, other-net copper, placement and labels. Native refill, saved coverage/connectivity verification and full DRC gate the result.
+- Add an optional workflow stage after plane creation, retain the grounded intermediate board and render the final cleaned assembled preview.
+
 ### Filled ground planes with preserved routing
 
 - Add an explicit native ground-plane command with thermal pad connections, island removal and saved fill/connectivity verification. Retain existing tracks, vias, placement and labels, and keep protected trace-only return and decoupling paths unchanged.

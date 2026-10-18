@@ -258,6 +258,14 @@ bounded operation accepts two-layer rectangular boards without existing zones.
 The automated workflow's `--ground-plane` option retains its intermediate boards
 and renders the final filled board; see [workflow validation](automation-validation.md).
 
+After filling, `plane-cleanup-pcb` can remove unlocked straight traces already
+covered by native same-net plane copper. Full copper-shape containment is checked
+before deletion and again after refill and save/reload. Protected route geometry,
+all vias, locked copper, other nets, plane settings, placement and labels are
+preserved. Full DRC and native connectivity gate publication. The workflow's
+`--plane-cleanup` option retains the filled intermediate board and renders the
+final cleaned board; measured protected paths remain trace-only.
+
 ## Real-board regression corpus
 
 `tests/test_native_pcb_workflow.py` executes the public CLI against real KiCad and
