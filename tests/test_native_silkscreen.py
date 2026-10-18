@@ -237,6 +237,88 @@ print("native bounded association-margin preference verified")
 '''
 
 
+_REFERENCE_SIZE_FIXTURE_SCRIPT = r'''
+import pcbnew, sys
+from pathlib import Path
+
+root, output = Path(sys.argv[1]), Path(sys.argv[2])
+board = pcbnew.BOARD()
+specs = [
+    ("R1", "Resistor_SMD", "R_0603_1608Metric", (12, 12), 90, False, True),
+    ("R2", "Resistor_SMD", "R_0603_1608Metric", (24, 12), 0, True, True),
+    ("C1", "Capacitor_SMD", "C_0603_1608Metric", (36, 12), 0, False, False),
+]
+for ref, library, name, (x, y), rotation, footprint_locked, visible in specs:
+    footprint = pcbnew.FootprintLoad(str(root / f"{library}.pretty"), name)
+    if footprint is None:
+        raise RuntimeError(f"missing test footprint: {library}:{name}")
+    board.Add(footprint)
+    footprint.SetReference(ref)
+    footprint.SetValue(ref)
+    footprint.SetPosition(pcbnew.VECTOR2I(pcbnew.FromMM(x), pcbnew.FromMM(y)))
+    footprint.SetOrientationDegrees(rotation)
+    footprint.SetLocked(footprint_locked)
+    field = footprint.Reference()
+    field.SetTextSize(pcbnew.VECTOR2I(pcbnew.FromMM(1.1), pcbnew.FromMM(0.8)))
+    field.SetTextThickness(pcbnew.FromMM(0.15))
+    field.SetTextAngleDegrees(90 if ref == "R1" else 0)
+    field.SetTextPos(pcbnew.VECTOR2I(pcbnew.FromMM(x + 1.3), pcbnew.FromMM(y - 1.7)))
+    field.SetVisible(visible)
+
+if not pcbnew.SaveBoard(str(output), board):
+    raise RuntimeError("KiCad could not save reference-size test board")
+'''
+
+
+_REFERENCE_SIZE_INSPECT_SCRIPT = r'''
+import importlib.util, json, pcbnew, sys
+from pathlib import Path
+
+worker_path, board_path = Path(sys.argv[1]), Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location("cw_worker", worker_path)
+worker = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(worker)
+board = pcbnew.LoadBoard(str(board_path))
+
+def snapshot():
+    state = {}
+    for footprint in board.GetFootprints():
+        field = footprint.Reference()
+        pos, size = field.GetTextPos(), field.GetTextSize()
+        state[footprint.GetReference()] = {
+            "footprint_angle": footprint.GetOrientationDegrees(),
+            "field_x": pos.x, "field_y": pos.y,
+            "field_angle": field.GetTextAngleDegrees(),
+            "field_size_x": size.x, "field_size_y": size.y,
+            "footprint_locked": footprint.IsLocked(),
+            "field_locked": field.IsLocked(), "field_visible": field.IsVisible(),
+        }
+    return state
+
+before = snapshot()
+field = board.FindFootprintByReference("R1").Reference()
+expected_fp = board.FindFootprintByReference("R1")
+saved_position = field.GetTextPos()
+saved_angle = field.GetTextAngleDegrees()
+saved_rotation = expected_fp.GetOrientationDegrees()
+expected_fp.SetOrientationDegrees(0)
+field.SetTextAngleDegrees(0)
+box = field.GetBoundingBox()
+expected = [
+    pcbnew.ToMM(box.GetWidth() + 2 * pcbnew.FromMM(worker._SILK_CLEARANCE_MM)),
+    pcbnew.ToMM(box.GetHeight() + 2 * pcbnew.FromMM(worker._SILK_CLEARANCE_MM)),
+]
+expected_fp.SetOrientationDegrees(saved_rotation)
+field.SetTextPos(saved_position)
+field.SetTextAngleDegrees(saved_angle)
+rows = worker._inspect(board, pcbnew)["footprints"]
+after = snapshot()
+if before != after:
+    raise AssertionError(f"inspect mutated footprint/reference state: before={before}; after={after}")
+print(json.dumps({"expected": expected, "rows": {row["ref"]: row for row in rows}, "state": after}))
+'''
+
+
 @pytest.fixture(scope="module")
 def native_tools():
     python = find_kicad_python()
@@ -572,3 +654,31 @@ pcbnew.SaveBoard(sys.argv[2], board)
     assert abs(item["courtyard_center_x"]) > 0.1 or abs(item["courtyard_center_y"]) > 0.1
     assert item["rotation"] == pytest.approx(90)
     assert _field_snapshot(source, native_tools, ("J1",)) == before
+
+
+@pytest.mark.skip_category("optional-tool")
+def test_native_inspect_reports_horizontal_reference_size_without_mutation(tmp_path, native_tools):
+    python, root = native_tools
+    source = tmp_path / "reference-size.kicad_pcb"
+    create = subprocess.run(
+        [python, "-c", _REFERENCE_SIZE_FIXTURE_SCRIPT, str(root), str(source)],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert create.returncode == 0, create.stdout + create.stderr
+
+    worker_path = Path(__file__).resolve().parents[1] / "src" / "circuit_weaver" / "_kicad_worker.py"
+    process = subprocess.run(
+        [python, "-c", _REFERENCE_SIZE_INSPECT_SCRIPT, str(worker_path), str(source)],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert process.returncode == 0, process.stdout + process.stderr
+
+    import json
+
+    result = json.loads(process.stdout)
+    assert result["rows"]["R1"]["reference_size_mm"] == pytest.approx(result["expected"])
+    assert result["rows"]["R2"]["reference_size_mm"] is None  # locked footprint
+    assert result["rows"]["C1"]["reference_size_mm"] is None  # hidden field
+    # The native helper checks the in-memory footprint angle, field position,
+    # field angle, text size, visibility, and lock states before and after
+    # `_inspect`, including an authored vertical field on a rotated footprint.

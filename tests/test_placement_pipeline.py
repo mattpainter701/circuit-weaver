@@ -80,12 +80,14 @@ def test_inventory_is_exhaustive_and_preserves_primary_connectivity() -> None:
     assert bypass.functional_section == "control"
     assert bypass.block_id == "main_controller"
     assert bypass.placement_parent_ref == "U1"
+    assert bypass.placement_parent_pin == "1"
     assert bypass.placement_role == "decoupling"
     assert "decoupling support" in bypass.description
 
     assert strap.value == "10k"
     assert strap.pin_nets == {"1": "BOOT_MODE", "2": "GND"}
     assert strap.placement_parent_ref == "U1"
+    assert strap.placement_parent_pin == "3"
     assert strap.placement_role == "boot_strap"
     assert "boot strap support" in strap.description
     assert not strap.bypass_caps

@@ -127,6 +127,11 @@ _FOOTPRINT_DIMENSION_RE = re.compile(
 
 _GROUND_NET_PREFIXES = ("GND", "AGND", "DGND", "PGND", "VSS", "GNDA", "GNDD")
 _POWER_NET_PREFIXES = ("VDD", "VCC", "VBUS", "VIN", "VBAT", "VSYS", "AVDD", "DVDD")
+_CRITICAL_SUPPORT_ROLES = {
+    "decoupling", "bootstrap", "bootstrap_cap", "feedback", "crystal_load",
+    "input_cap", "output_cap", "inductor",
+}
+_POWER_LOOP_ROLES = {"decoupling", "input_cap", "output_cap"}
 _HIGH_SPEED_NET_TOKENS = (
     "USB",
     "ETH",
@@ -195,6 +200,10 @@ class ComponentPlacement:
     rotation_locked: bool = False
     geometry_status: str = "estimated"
     net_pad_offsets: dict[str, list[tuple[float, float]]] | None = None
+    parent_pin: str = ""
+    pin_offsets: dict[str, tuple[float, float]] | None = None
+    pin_nets: dict[str, str] | None = None
+    reference_size_mm: tuple[float, float] | None = None
 
 
 @dataclass
@@ -621,7 +630,7 @@ def _init_placements(
     placement_by_ref: dict[str, ComponentPlacement] = {}
     zone_counters: dict[str, int] = {}
     support_counters: dict[str, int] = {}
-    support_seed_counters: dict[tuple[str, str, tuple[str, ...]], int] = {}
+    support_seed_counters: dict[tuple[str, str, str, tuple[str, ...]], int] = {}
 
     # Owners must be placed before generated support parts so bypass,
     # bootstrap, feedback, and strap parts start next to the correct IC.
@@ -656,11 +665,13 @@ def _init_placements(
             x = parent.x + ox * radius_x
             y = parent.y + oy * radius_y
             seed_index = 0
-            if placement_role.strip().casefold() == "decoupling":
+            support_role = placement_role.strip().casefold()
+            parent_pin = str(getattr(comp, "placement_parent_pin", "") or "").strip()
+            if parent_pin or support_role in _POWER_LOOP_ROLES:
                 shared_nets = _shared_support_nets(
                     parent, getattr(comp, "placement_pad_offsets", None)
                 )
-                seed_key = (parent_ref, "decoupling", tuple(shared_nets))
+                seed_key = (parent_ref, support_role, parent_pin, tuple(shared_nets))
                 seed_index = support_seed_counters.get(seed_key, 0)
                 support_seed_counters[seed_key] = seed_index + 1
             pad_seed = _support_seed_position(
@@ -669,9 +680,8 @@ def _init_placements(
                 h,
                 getattr(comp, "placement_pad_offsets", None),
                 config,
-                endpoint_index=seed_index
-                if placement_role.strip().casefold() == "decoupling"
-                else 0,
+                endpoint_index=seed_index,
+                parent_pin=parent_pin,
             )
             if pad_seed is not None:
                 x, y = pad_seed
@@ -724,6 +734,10 @@ def _init_placements(
         mpn = component_part_number(comp)
         thermal = thermal_specs.get(mpn, {})
         si = si_specs.get(mpn, {})
+        pin_nets = {
+            **(getattr(comp, "power_pins", {}) or {}),
+            **(getattr(comp, "pin_nets", {}) or {}),
+        }
 
         placement = ComponentPlacement(
             ref=comp.source_ref,
@@ -740,6 +754,7 @@ def _init_placements(
             else 0.0,
             requires_impedance_control=si.get("requires_impedance_control", False),
             parent_ref=parent_ref,
+            parent_pin=str(getattr(comp, "placement_parent_pin", "") or ""),
             placement_role=placement_role,
             block_id=str(getattr(comp, "block_id", "") or "").strip(),
             functional_section=str(getattr(comp, "functional_section", "") or "").strip(),
@@ -748,6 +763,9 @@ def _init_placements(
             edge_constrained=bool(edge_constraint),
             rotation_locked=bool(edge_constraint and "rotation" in edge_constraint and not fixed),
             net_pad_offsets=getattr(comp, "placement_pad_offsets", None),
+            pin_offsets=getattr(comp, "placement_pin_offsets", None),
+            pin_nets=pin_nets,
+            reference_size_mm=getattr(comp, "placement_reference_size_mm", None),
             geometry_status=str(
                 getattr(comp, "placement_geometry_status", "estimated") or "estimated"
             ),
@@ -1006,12 +1024,36 @@ def _cost_parent_affinity(placements: list[ComponentPlacement]) -> float:
             total += 10_000.0
             continue
         distance, _distance_model = _parent_affinity_distance(parent, placement)
-        critical = placement.placement_role in {"decoupling", "bootstrap", "feedback", "crystal_load"}
+        role = placement.placement_role.strip().casefold()
+        critical = role in _CRITICAL_SUPPORT_ROLES
         preferred = 4.0 if critical else 8.0
         weight = 35.0 if critical else 12.0
         total += distance * weight
         if distance > preferred:
             total += (distance - preferred) ** 2 * weight * 5.0
+        loop = _local_power_loop_geometry(parent, placement)
+        if loop is not None:
+            # A capped quadratic reward makes both local legs matter while
+            # keeping distant shared pads from dominating the full board.
+            total += 20.0 * (
+                min(loop["supply_leg_mm"], 12.0) ** 2
+                + min(loop["return_leg_mm"], 12.0) ** 2
+            )
+        else:
+            pin_distance = _parent_pin_distance(parent, placement)
+            if pin_distance is not None:
+                total += 20.0 * min(pin_distance, 12.0) ** 2
+
+    # Keep a regulator output capacitor near the inductor terminal on their
+    # shared supply rail. Both parts must belong to the same owner block.
+    outputs = [p for p in placements if p.placement_role.strip().casefold() == "output_cap"]
+    inductors = [p for p in placements if p.placement_role.strip().casefold() == "inductor"]
+    for output in outputs:
+        for inductor in inductors:
+            if output.parent_ref and output.parent_ref == inductor.parent_ref:
+                distance = _support_power_rail_distance(output, inductor)
+                if distance is not None:
+                    total += 16.0 * min(distance, 12.0) ** 2
     return total
 
 
@@ -1025,6 +1067,128 @@ def _rotated_net_endpoints(
         (placement.x + x * cosine + y * sine, placement.y - x * sine + y * cosine)
         for x, y in offsets
     ]
+
+
+def _rotated_local_endpoint(
+    placement: ComponentPlacement, offset: tuple[float, float],
+) -> tuple[float, float]:
+    angle = math.radians(placement.rotation)
+    cosine, sine = math.cos(angle), math.sin(angle)
+    x, y = offset
+    return placement.x + x * cosine + y * sine, placement.y - x * sine + y * cosine
+
+
+def _parent_pin_distance(
+    parent: ComponentPlacement, support: ComponentPlacement,
+) -> float | None:
+    """Distance from an explicitly associated owner pin to the support pad."""
+    pin = support.parent_pin.strip()
+    if not pin or parent.pin_offsets is None or parent.pin_nets is None:
+        return None
+    offset = parent.pin_offsets.get(pin)
+    net = parent.pin_nets.get(pin)
+    support_offsets = (support.net_pad_offsets or {}).get(net or "", [])
+    if offset is None or not net or not support_offsets:
+        return None
+    parent_point = _rotated_local_endpoint(parent, offset)
+    return min(
+        math.hypot(parent_point[0] - x, parent_point[1] - y)
+        for x, y in _rotated_net_endpoints(support, net)
+    )
+
+
+def _support_power_rail_distance(
+    first: ComponentPlacement, second: ComponentPlacement,
+) -> float | None:
+    if first.net_pad_offsets is None or second.net_pad_offsets is None:
+        return None
+    shared_rails = sorted(
+        net for net in first.net_pad_offsets.keys() & second.net_pad_offsets.keys()
+        if _is_power_rail(net)
+        and first.net_pad_offsets.get(net)
+        and second.net_pad_offsets.get(net)
+    )
+    distances = [
+        math.hypot(ax - bx, ay - by)
+        for net in shared_rails
+        for ax, ay in _rotated_net_endpoints(first, net)
+        for bx, by in _rotated_net_endpoints(second, net)
+    ]
+    return min(distances) if distances else None
+
+
+def _is_ground_net(net_name: str) -> bool:
+    return (net_name or "").upper().startswith(_GROUND_NET_PREFIXES)
+
+
+def _is_power_rail(net_name: str) -> bool:
+    upper = (net_name or "").upper()
+    return upper.startswith(_POWER_NET_PREFIXES) or _is_voltage_rail(upper)
+
+
+def _local_power_loop_geometry(
+    parent: ComponentPlacement, support: ComponentPlacement,
+) -> dict[str, Any] | None:
+    """Return local straight-line supply/return pad distances for a decoupler.
+
+    This is a placement proxy based only on actual shared pad coordinates. It
+    does not estimate routed copper length or electrical loop performance.
+    """
+    if (
+        support.placement_role.strip().casefold() not in _POWER_LOOP_ROLES
+        or support.net_pad_offsets is None
+    ):
+        return None
+    shared = (parent.net_pad_offsets or {}).keys() & support.net_pad_offsets.keys()
+    rails = sorted(net for net in support.net_pad_offsets if _is_power_rail(net))
+    grounds = sorted(net for net in shared if _is_ground_net(net))
+    owner_pin = support.parent_pin.strip()
+    owner_pin_net = (parent.pin_nets or {}).get(owner_pin)
+    owner_offset = (parent.pin_offsets or {}).get(owner_pin)
+    if owner_pin_net in rails:
+        rails = [owner_pin_net]
+    if not rails or not grounds:
+        return None
+
+    candidates: list[tuple[float, float, float, str, str]] = []
+    for rail in rails:
+        if owner_pin and owner_pin_net == rail and owner_offset is not None:
+            parent_rail = [_rotated_local_endpoint(parent, owner_offset)]
+        else:
+            parent_rail = _rotated_net_endpoints(parent, rail)
+        if not parent_rail:
+            continue
+        support_rail = _rotated_net_endpoints(support, rail)
+        if not parent_rail or not support_rail:
+            continue
+        supply_leg = min(
+            math.hypot(px - sx, py - sy)
+            for px, py in parent_rail
+            for sx, sy in support_rail
+        )
+        for ground in grounds:
+            parent_ground = _rotated_net_endpoints(parent, ground)
+            support_ground = _rotated_net_endpoints(support, ground)
+            if not parent_ground or not support_ground:
+                continue
+            return_leg = min(
+                math.hypot(px - sx, py - sy)
+                for px, py in parent_ground
+                for sx, sy in support_ground
+            )
+            loop_mm = supply_leg + return_leg
+            candidates.append((loop_mm, supply_leg, return_leg, rail, ground))
+    if not candidates:
+        return None
+    loop_mm, supply_leg, return_leg, rail, ground = min(candidates)
+    return {
+        "supply_net": rail,
+        "ground_net": ground,
+        "owner_pin": owner_pin if owner_pin and owner_pin_net == rail and owner_offset is not None else "",
+        "supply_leg_mm": supply_leg,
+        "return_leg_mm": return_leg,
+        "geometric_loop_mm": loop_mm,
+    }
 
 
 def _parent_affinity_distance(
@@ -1079,19 +1243,30 @@ def _support_seed_position(
     config: PlacementConfig,
     *,
     endpoint_index: int = 0,
+    parent_pin: str = "",
 ) -> tuple[float, float] | None:
     """Seed supports at real shared pads, balancing equivalent decouplers."""
     if parent.net_pad_offsets is None or support_pad_offsets is None:
         return None
     shared = _shared_support_nets(parent, support_pad_offsets)
     directions: list[tuple[float, float, str, float]] = []
-    for net in shared:
-        for x, y in _rotated_net_endpoints(parent, net):
-            x -= parent.x
-            y -= parent.y
-            distance = math.hypot(x, y)
-            if distance > 1e-6:
-                directions.append((x / distance, y / distance, net, distance))
+    pin_offset = (parent.pin_offsets or {}).get(parent_pin) if parent_pin else None
+    pin_net = (parent.pin_nets or {}).get(parent_pin) if parent_pin else None
+    if pin_offset is not None and pin_net in shared:
+        x, y = _rotated_local_endpoint(parent, pin_offset)
+        x -= parent.x
+        y -= parent.y
+        distance = math.hypot(x, y)
+        if distance > 1e-6:
+            directions.append((x / distance, y / distance, pin_net, distance))
+    else:
+        for net in shared:
+            for x, y in _rotated_net_endpoints(parent, net):
+                x -= parent.x
+                y -= parent.y
+                distance = math.hypot(x, y)
+                if distance > 1e-6:
+                    directions.append((x / distance, y / distance, net, distance))
     if not directions:
         return None
 
@@ -1295,11 +1470,29 @@ def _cost_functional_grouping(placements: list[ComponentPlacement]) -> float:
 def _support_peer_groups(
     placements: list[ComponentPlacement],
 ) -> list[list[ComponentPlacement]]:
-    """Infer local support families from owner and dedicated signal topology."""
+    """Infer local support families from owner pins and signal topology."""
     candidates: dict[tuple[str, str], list[ComponentPlacement]] = {}
+    placements_by_ref = {placement.ref: placement for placement in placements}
     for placement in placements:
         if not placement.parent_ref:
             continue
+        owner_pin = placement.parent_pin.strip()
+        parent = placements_by_ref.get(placement.parent_ref)
+        parent_pin_nets = parent.pin_nets or {} if parent is not None else {}
+        owner_net = next(
+            (
+                net
+                for number, net in parent_pin_nets.items()
+                if str(number).strip().casefold() == owner_pin.casefold()
+            ),
+            None,
+        )
+        support_nets = set((placement.net_pad_offsets or {}).keys())
+        support_nets.update((placement.pin_nets or {}).values())
+        if owner_pin and owner_net and owner_net in support_nets:
+            candidates.setdefault(
+                (placement.parent_ref, f"owner_pin:{owner_pin.casefold()}"), []
+            ).append(placement)
         net_families = set()
         for net in (placement.net_pad_offsets or {}):
             # Ground and shared supply rails do not identify a local functional
@@ -1324,21 +1517,203 @@ def _support_peer_groups(
     return groups
 
 
+def _same_owner_pin_supports(members: list[ComponentPlacement]) -> bool:
+    if len(members) < 2:
+        return False
+    first = members[0]
+    return bool(
+        first.parent_ref
+        and first.parent_pin.strip()
+        and all(
+            member.parent_ref == first.parent_ref
+            and member.parent_pin.strip().casefold() == first.parent_pin.strip().casefold()
+            for member in members
+        )
+    )
+
+
 def _cost_support_peer_alignment(placements: list[ComponentPlacement]) -> float:
     """Keep topology-matched support peers locally aligned with bounded weight."""
     total = 0.0
     for members in _support_peer_groups(placements):
         span_x = max(member.x for member in members) - min(member.x for member in members)
         span_y = max(member.y for member in members) - min(member.y for member in members)
-        align_y = span_x >= span_y
+        same_owner_pin = _same_owner_pin_supports(members) and all(
+            member.placement_role.strip().casefold() in _POWER_LOOP_ROLES
+            for member in members
+        )
+        align_y = True if same_owner_pin else span_x >= span_y
         pair_cost = 0.0
         for a, b in combinations(members, 2):
             dx, dy = abs(a.x - b.x), abs(a.y - b.y)
             distance = math.hypot(dx, dy)
             lateral = dy if align_y else dx
-            pair_cost += min(distance, 10.0) ** 2 * 0.05 + min(lateral, 10.0) ** 2 * 0.5
+            lateral_weight = 4.0 if same_owner_pin else 0.5
+            pair_cost += min(distance, 10.0) ** 2 * 0.05 + min(lateral, 10.0) ** 2 * lateral_weight
         total += pair_cost / (len(members) - 1)
     return total
+
+
+_LABEL_PROXY_STEP_MM = 0.5
+_LABEL_PROXY_RADIUS_MM = 3.0
+_LABEL_PROXY_COURTYARD_MARGIN_MM = 0.2
+_LABEL_PROXY_BOARD_MARGIN_MM = 0.4
+_LABEL_PROXY_TARGET_SLOTS = 2
+_LABEL_PROXY_MISSING_SLOT_COST = 250.0
+
+
+def _point_box_distance_sq(point: tuple[float, float], box: tuple[float, float, float, float]) -> float:
+    dx = max(box[0] - point[0], 0.0, point[0] - box[2])
+    dy = max(box[1] - point[1], 0.0, point[1] - box[3])
+    return dx * dx + dy * dy
+
+
+def _placement_courtyard_box(
+    placement: ComponentPlacement, margin_mm: float = _LABEL_PROXY_COURTYARD_MARGIN_MM
+) -> tuple[float, float, float, float]:
+    width, height = _effective_dimensions(placement)
+    return (
+        placement.x - width / 2 - margin_mm,
+        placement.y - height / 2 - margin_mm,
+        placement.x + width / 2 + margin_mm,
+        placement.y + height / 2 + margin_mm,
+    )
+
+
+def _proxy_label_centers(
+    placement: ComponentPlacement,
+) -> list[tuple[float, float]]:
+    """Sample face/corner label slots over the native worker's 0–3 mm range."""
+    size = placement.reference_size_mm
+    if not size or len(size) != 2:
+        return []
+    text_width, text_height = (float(size[0]), float(size[1]))
+    if not all(math.isfinite(value) and value > 0 for value in (text_width, text_height)):
+        return []
+    courtyard = _placement_courtyard_box(placement)
+    left = courtyard[0] - text_width / 2
+    right = courtyard[2] + text_width / 2
+    top = courtyard[1] - text_height / 2
+    bottom = courtyard[3] + text_height / 2
+    center_x = (courtyard[0] + courtyard[2]) / 2
+    center_y = (courtyard[1] + courtyard[3]) / 2
+    centers: set[tuple[float, float]] = set()
+    rings = int(round(_LABEL_PROXY_RADIUS_MM / _LABEL_PROXY_STEP_MM))
+    for ring in range(rings + 1):
+        offset = ring * _LABEL_PROXY_STEP_MM
+        left_x, right_x = left - offset, right + offset
+        top_y, bottom_y = top - offset, bottom + offset
+        centers.update(
+            {
+                (left_x, top_y), (center_x, top_y), (right_x, top_y),
+                (left_x, center_y), (right_x, center_y),
+                (left_x, bottom_y), (center_x, bottom_y), (right_x, bottom_y),
+            }
+        )
+    return sorted(
+        centers,
+        key=lambda point: (
+            _point_box_distance_sq(point, courtyard), point[1], point[0],
+        ),
+    )
+
+
+def _reference_label_space_metrics(
+    placements: list[ComponentPlacement], config: PlacementConfig
+) -> list[dict[str, Any]]:
+    """Estimate nearby associated text slots; native silkscreen validation remains authoritative."""
+    with_size = [placement for placement in placements if placement.reference_size_mm]
+    if not with_size:
+        return []
+    courtyards = {placement.ref: _placement_courtyard_box(placement) for placement in placements}
+    obstacles_by_layer: dict[str, list[ComponentPlacement]] = {}
+    same_class: dict[str, list[ComponentPlacement]] = {}
+    for placement in placements:
+        obstacles_by_layer.setdefault(placement.layer.casefold(), []).append(placement)
+        prefix = _reference_class_prefix(placement.ref)
+        same_class.setdefault(prefix, []).append(placement)
+
+    metrics: list[dict[str, Any]] = []
+    for placement in with_size:
+        size = placement.reference_size_mm
+        if not size or len(size) != 2:
+            continue
+        text_width, text_height = float(size[0]), float(size[1])
+        own_box = courtyards[placement.ref]
+        peers = [
+            other for other in same_class.get(_reference_class_prefix(placement.ref), [])
+            if other.ref != placement.ref
+            and other.layer.casefold() == placement.layer.casefold()
+        ]
+        obstacles = [
+            other for other in obstacles_by_layer.get(placement.layer.casefold(), [])
+            if other.ref != placement.ref
+        ]
+        feasible: set[tuple[float, float]] = set()
+        for center in _proxy_label_centers(placement):
+            label_box = (
+                center[0] - text_width / 2,
+                center[1] - text_height / 2,
+                center[0] + text_width / 2,
+                center[1] + text_height / 2,
+            )
+            if (
+                label_box[0] < _LABEL_PROXY_BOARD_MARGIN_MM
+                or label_box[1] < _LABEL_PROXY_BOARD_MARGIN_MM
+                or label_box[2] > config.board_width_mm - _LABEL_PROXY_BOARD_MARGIN_MM
+                or label_box[3] > config.board_height_mm - _LABEL_PROXY_BOARD_MARGIN_MM
+            ):
+                continue
+            if any(
+                _overlap_boxes(label_box, courtyards[other.ref])
+                for other in obstacles
+            ):
+                continue
+            own_distance = _point_box_distance_sq(center, own_box)
+            if any(
+                _point_box_distance_sq(center, courtyards[peer.ref]) < own_distance
+                for peer in peers
+            ):
+                continue
+            feasible.add(center)
+            if len(feasible) >= _LABEL_PROXY_TARGET_SLOTS:
+                break
+        metrics.append(
+            {
+                "ref": placement.ref,
+                "nearby_associated_slots": len(feasible),
+                "target_slots": _LABEL_PROXY_TARGET_SLOTS,
+                "model": "sampled_face_corner_proxy",
+            }
+        )
+    return metrics
+
+
+def _reference_class_prefix(ref: str) -> str:
+    for index, char in enumerate(ref):
+        if char.isdigit():
+            return ref[:index].casefold() or ref.casefold()
+    return ref.casefold()
+
+
+def _overlap_boxes(
+    first: tuple[float, float, float, float], second: tuple[float, float, float, float]
+) -> bool:
+    return first[0] < second[2] and first[2] > second[0] and first[1] < second[3] and first[3] > second[1]
+
+
+def _cost_reference_label_space(
+    placements: list[ComponentPlacement], config: PlacementConfig
+) -> float:
+    """Bounded preference for preserving a few nearby, associated label slots."""
+    return sum(
+        min(
+            max(0, _LABEL_PROXY_TARGET_SLOTS - metric["nearby_associated_slots"])
+            * _LABEL_PROXY_MISSING_SLOT_COST,
+            _LABEL_PROXY_TARGET_SLOTS * _LABEL_PROXY_MISSING_SLOT_COST,
+        )
+        for metric in _reference_label_space_metrics(placements, config)
+    )
 
 
 def _distance_to_edge(
@@ -1395,6 +1770,7 @@ def _total_cost(
     cost += _cost_edge_affinity(placements, config)
     cost += _cost_functional_grouping(placements)
     cost += _cost_support_peer_alignment(placements)
+    cost += _cost_reference_label_space(placements, config)
     cost += _cost_supplied_constraints(placements, config, constraint_plan)
 
     if config.strategy in ("thermal", "balanced"):
@@ -1936,7 +2312,11 @@ def _refine_placement(
                 others = [peer for peer in peers if peer.ref != placement.ref]
                 span_x = max(peer.x for peer in peers) - min(peer.x for peer in peers)
                 span_y = max(peer.y for peer in peers) - min(peer.y for peer in peers)
-                align_y = span_x >= span_y
+                power_pin_peers = _same_owner_pin_supports(peers) and all(
+                    peer.placement_role.strip().casefold() in _POWER_LOOP_ROLES
+                    for peer in peers
+                )
+                align_y = True if power_pin_peers else span_x >= span_y
                 own_width, own_height = _effective_dimensions(placement)
                 peer_moves = []
                 for peer in others:
@@ -2140,6 +2520,14 @@ def optimize_placement(
                 "max_support_distance_mm": 0.0,
                 "support_distance_model": "none",
                 "support_distances": [],
+                "local_power_loop_distances": [],
+                "max_local_power_loop_mm": 0.0,
+                "reference_label_space": {
+                    "model": "sampled_face_corner_proxy",
+                    "estimated": True,
+                    "references": [],
+                    "objective_cost": 0.0,
+                },
                 "legalization_moves": 0,
                 "review_required": bool(
                     constraint_evaluation["unsupported"] or constraint_evaluation["violations"]
@@ -2244,6 +2632,7 @@ def _build_result(
     missing_parents: list[str] = []
     support_body_violations: list[dict[str, Any]] = []
     support_distances: list[dict[str, Any]] = []
+    local_power_loop_distances: list[dict[str, Any]] = []
     by_ref = {placement.ref: placement for placement in state}
 
     for idx, first in enumerate(state):
@@ -2264,6 +2653,21 @@ def _build_result(
                         "model": distance_model,
                     }
                 )
+                loop = _local_power_loop_geometry(parent, first)
+                if loop is not None:
+                    local_power_loop_distances.append(
+                        {
+                            "support_ref": first.ref,
+                            "parent_ref": parent.ref,
+                            "supply_net": loop["supply_net"],
+                            "ground_net": loop["ground_net"],
+                            "owner_pin": loop["owner_pin"],
+                            "supply_leg_mm": round(loop["supply_leg_mm"], 2),
+                            "return_leg_mm": round(loop["return_leg_mm"], 2),
+                            "geometric_loop_mm": round(loop["geometric_loop_mm"], 2),
+                            "model": "rotated_pad_endpoint_sum",
+                        }
+                    )
                 clearance = _rectangle_clearance(first, parent)
                 if clearance + 0.001 < config.support_body_clearance_mm:
                     support_body_violations.append(
@@ -2296,6 +2700,7 @@ def _build_result(
 
     plan = constraint_plan or _ConstraintPlan()
     constraint_evaluation = _constraint_evaluation(state, config, plan)
+    label_space_metrics = _reference_label_space_metrics(state, config)
     return {
         "status": "ok",
         "placements": placements,
@@ -2326,6 +2731,20 @@ def _build_result(
                 else "mixed" if support_distances else "none"
             ),
             "support_distances": support_distances,
+            "local_power_loop_distances": local_power_loop_distances,
+            "reference_label_space": {
+                "model": "sampled_face_corner_proxy",
+                "estimated": True,
+                "references": label_space_metrics,
+                "objective_cost": round(_cost_reference_label_space(state, config), 2),
+            },
+            "max_local_power_loop_mm": round(
+                max(
+                    (item["geometric_loop_mm"] for item in local_power_loop_distances),
+                    default=0.0,
+                ),
+                2,
+            ),
             "legalization_moves": legalization_moves,
             "review_required": bool(
                 overlap_pairs

@@ -248,16 +248,28 @@ def _place_pcb_once(
             center_offsets[item["ref"]] = (center_x, center_y)
             component.placement_layer = item["layer"]
             component.placement_geometry_status = "board_geometry"
+            component.placement_reference_size_mm = item.get("reference_size_mm")
             if design_component:
                 component.functional_section = design_component.functional_section
                 component.block_id = design_component.block_id
                 component.placement_parent_ref = getattr(design_component, "placement_parent_ref", "")
+                component.placement_parent_pin = getattr(design_component, "placement_parent_pin", "")
                 component.placement_role = getattr(design_component, "placement_role", "")
             component.placement_pad_offsets = {}
+            pin_offsets = {}
             for pad in item["pads"]:
+                number = pad["number"]
+                # Duplicate pad numbers identify several physical lands. Keep
+                # the net-based fallback instead of picking an arbitrary land.
+                pin_offsets[number] = (
+                    None if number in pin_offsets else
+                    (pad["local_x"] - center_x, pad["local_y"] - center_y)
+                )
                 if pad["net"]:
                     component.placement_pad_offsets.setdefault(pad["net"], []).append(
                         (pad["local_x"] - center_x, pad["local_y"] - center_y))
+            component.placement_pin_offsets = {number: offset for number, offset in pin_offsets.items()
+                                               if offset is not None}
             components.append(component)
             if item["locked"]:
                 dx, dy = _rotated_offset(center_x, center_y, item["rotation"])

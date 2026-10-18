@@ -59,3 +59,70 @@ def test_switching_invalid_feedback_bottom_fails_closed_before_network_emission(
         build_switching_regulator(
             get_ic_data("AP62300"), {"vin": 12.0, "vout": 3.3, "iout": 1.0, "r_fbb": 0.1, "ref": "U1"}
         )
+
+
+def test_ap62300_floating_enable_default_is_explicit_no_connect():
+    result = build_switching_regulator(
+        get_ic_data("AP62300"),
+        {"vin": 12.0, "vout": 3.3, "iout": 1.0, "vin_net": "VIN_12V", "ref": "U1"},
+    )
+    component = result.components[0]
+    port_names = {port.name for port in result.boundary_ports}
+
+    assert component.power_pins["3"] == "VIN_12V"
+    assert "5" not in component.pin_nets
+    assert "5" in component.explicit_no_connects
+    assert "EN" not in port_names
+    assert "VIN_12V" in port_names
+
+
+def test_ap62300_explicit_enable_net_overrides_floating_default():
+    result = build_switching_regulator(
+        get_ic_data("AP62300"),
+        {
+            "vin": 12.0,
+            "vout": 3.3,
+            "iout": 1.0,
+            "vin_net": "VIN_12V",
+            "en_net": "REG_EN",
+            "ref": "U1",
+        },
+    )
+    component = result.components[0]
+    port_names = {port.name for port in result.boundary_ports}
+
+    assert component.power_pins["3"] == "VIN_12V"
+    assert component.pin_nets["5"] == "REG_EN"
+    assert "5" not in component.explicit_no_connects
+    assert not (set(component.pin_nets) & component.explicit_no_connects)
+    assert "REG_EN" in port_names
+
+
+def test_ap62300_explicit_empty_enable_value_is_not_replaced_by_default():
+    component = build_switching_regulator(
+        get_ic_data("AP62300"),
+        {
+            "vin": 12.0,
+            "vout": 3.3,
+            "iout": 1.0,
+            "en_net": "",
+            "ref": "U1",
+        },
+    ).components[0]
+
+    assert component.pin_nets["5"] == ""
+    assert "5" not in component.explicit_no_connects
+    assert not (set(component.pin_nets) & component.explicit_no_connects)
+
+
+def test_other_switching_ic_keeps_vin_tied_enable_default():
+    result = build_switching_regulator(
+        get_ic_data("TPS62088"),
+        {"vin": 5.0, "vout": 1.8, "iout": 1.0, "vin_net": "VIN_5V", "ref": "U2"},
+    )
+    component = result.components[0]
+    port_names = {port.name for port in result.boundary_ports}
+
+    assert component.pin_nets["3"] == "VIN_5V"
+    assert "3" not in component.explicit_no_connects
+    assert "VIN_5V" in port_names

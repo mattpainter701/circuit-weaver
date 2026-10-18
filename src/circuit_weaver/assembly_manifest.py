@@ -48,6 +48,7 @@ class AssemblyItem:
     exclude_from_bom: bool = False
     exclude_from_cpl: bool = False
     evidence_ids: tuple[str, ...] = ()
+    owner_pin: str = ""
 
     def to_dict(self) -> dict:
         payload = asdict(self)
@@ -346,6 +347,7 @@ def build_assembly_manifest(
                     semantic_key=semantic_key,
                     owner_ref=owner_ref,
                     role=bypass.role,
+                    owner_pin=str(bypass.pin or ""),
                     functional_section=getattr(comp, "functional_section", "") or "",
                     block_id=getattr(comp, "block_id", "") or "",
                     net1=bypass.net,
@@ -370,6 +372,7 @@ def build_assembly_manifest(
                     semantic_key=semantic_key,
                     owner_ref=owner_ref,
                     role=strap.role,
+                    owner_pin=str(strap.pin or ""),
                     functional_section=getattr(comp, "functional_section", "") or "",
                     block_id=getattr(comp, "block_id", "") or "",
                     net1=strap.net,

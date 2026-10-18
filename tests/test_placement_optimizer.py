@@ -374,6 +374,169 @@ def test_parent_affinity_uses_nearest_rotated_shared_signal_pads():
     assert math.hypot(parent.x - support.x, parent.y - support.y) > 2.0
 
 
+def test_decoupling_affinity_scores_both_rotated_supply_and_return_legs():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        _cost_parent_affinity,
+        _local_power_loop_geometry,
+    )
+
+    parent = ComponentPlacement(
+        "U1", 0, 0, rotation=90,
+        net_pad_offsets={"VIN": [(0, 2)], "GND": [(0, -2)]},
+    )
+    long_return = ComponentPlacement(
+        "C1", 3, 0, rotation=90, parent_ref="U1", placement_role="decoupling",
+        net_pad_offsets={"VIN": [(0, -1)], "GND": [(0, 3)]},
+    )
+    short_return = ComponentPlacement(
+        "C2", 3, 0, rotation=90, parent_ref="U1", placement_role="decoupling",
+        net_pad_offsets={"VIN": [(0, -1)], "GND": [(0, -5)]},
+    )
+
+    long_geometry = _local_power_loop_geometry(parent, long_return)
+    short_geometry = _local_power_loop_geometry(parent, short_return)
+
+    assert long_geometry == {
+        "supply_net": "VIN",
+        "ground_net": "GND",
+        "owner_pin": "",
+        "supply_leg_mm": pytest.approx(0),
+        "return_leg_mm": pytest.approx(8),
+        "geometric_loop_mm": pytest.approx(8),
+    }
+    assert short_geometry["supply_leg_mm"] == pytest.approx(0)
+    assert short_geometry["return_leg_mm"] == pytest.approx(0)
+    assert _cost_parent_affinity([parent, short_return]) < _cost_parent_affinity(
+        [parent, long_return]
+    )
+
+
+def test_decoupling_power_loop_requires_a_known_rail_and_ground_pair():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        _local_power_loop_geometry,
+        _net_weight,
+    )
+
+    parent = ComponentPlacement(
+        "U1", 10, 10,
+        net_pad_offsets={"RESET_N": [(0, 0)], "VIN": [(1, 0)], "GND": [(0, 1)]},
+    )
+    reset_cap = ComponentPlacement(
+        "C1", 12, 10, parent_ref="U1", placement_role="decoupling",
+        net_pad_offsets={"RESET_N": [(0, 0)], "GND": [(1, 0)]},
+    )
+    one_leg_cap = ComponentPlacement(
+        "C2", 12, 10, parent_ref="U1", placement_role="decoupling",
+        net_pad_offsets={"VIN": [(0, 0)]},
+    )
+    signal_support = ComponentPlacement(
+        "R1", 12, 10, parent_ref="U1", placement_role="pullup",
+        net_pad_offsets={"VIN": [(0, 0)], "GND": [(1, 0)]},
+    )
+
+    assert _local_power_loop_geometry(parent, reset_cap) is None
+    assert _local_power_loop_geometry(parent, one_leg_cap) is None
+    assert _local_power_loop_geometry(parent, signal_support) is None
+    assert _net_weight("GND") == 0.0
+
+
+def test_decoupling_supply_leg_uses_declared_owner_pin_when_rail_is_shared():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        _cost_parent_affinity,
+        _local_power_loop_geometry,
+    )
+
+    parent = ComponentPlacement(
+        "U1", 0, 0,
+        net_pad_offsets={"VDD_3P3": [(0, 0), (10, 0)], "GND": [(10, 2)]},
+        pin_offsets={"9": (10, 0)},
+        pin_nets={"9": "VDD_3P3"},
+    )
+    cap_near_wrong_pin = ComponentPlacement(
+        "C1", 0, 0, parent_ref="U1", parent_pin="9", placement_role="decoupling",
+        net_pad_offsets={"VDD_3P3": [(0, 0)], "GND": [(0, 2)]},
+    )
+    cap_near_intended_pin = ComponentPlacement(
+        "C2", 10, 0, parent_ref="U1", parent_pin="9", placement_role="decoupling",
+        net_pad_offsets={"VDD_3P3": [(0, 0)], "GND": [(0, 2)]},
+    )
+
+    wrong_loop = _local_power_loop_geometry(parent, cap_near_wrong_pin)
+    intended_loop = _local_power_loop_geometry(parent, cap_near_intended_pin)
+
+    assert wrong_loop["owner_pin"] == intended_loop["owner_pin"] == "9"
+    assert wrong_loop["supply_leg_mm"] == pytest.approx(10)
+    assert intended_loop["supply_leg_mm"] == pytest.approx(0)
+    assert _cost_parent_affinity([parent, cap_near_intended_pin]) < _cost_parent_affinity(
+        [parent, cap_near_wrong_pin]
+    )
+
+
+def test_output_cap_is_attracted_to_same_owner_inductor_on_shared_rail():
+    from circuit_weaver.placement_optimizer import ComponentPlacement, _cost_parent_affinity
+
+    parent = ComponentPlacement("U1", 10, 10)
+    output_cap = ComponentPlacement(
+        "C1", 30, 10, parent_ref="U1", placement_role="output_cap",
+        net_pad_offsets={"VDD_3P3": [(-1, 0)]},
+    )
+    near_inductor = ComponentPlacement(
+        "L1", 32, 10, parent_ref="U1", placement_role="inductor",
+        net_pad_offsets={"VDD_3P3": [(1, 0)]},
+    )
+    far_inductor = ComponentPlacement(
+        "L1", 42, 10, parent_ref="U1", placement_role="inductor",
+        net_pad_offsets={"VDD_3P3": [(1, 0)]},
+    )
+
+    assert _cost_parent_affinity([parent, output_cap, near_inductor]) < _cost_parent_affinity(
+        [parent, output_cap, far_inductor]
+    )
+
+
+def test_local_power_loop_metric_uses_pad_geometry_and_ignores_unrelated_ground():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        PlacementConfig,
+        _build_result,
+        _cost_parent_affinity,
+    )
+
+    parent = ComponentPlacement(
+        "U1", 10, 10, net_pad_offsets={"VDD_3P3": [(1, 0)], "GND": [(0, 1)]}
+    )
+    cap = ComponentPlacement(
+        "C1", 12, 10, parent_ref="U1", placement_role="decoupling",
+        net_pad_offsets={"VDD_3P3": [(-1, 0)], "GND": [(0, -1)]},
+    )
+    unrelated = ComponentPlacement(
+        "U2", 80, 60, net_pad_offsets={"GND": [(0, 0)]}
+    )
+
+    result = _build_result([parent, cap], PlacementConfig(), 0, 0, 0)
+
+    assert result["quality"]["local_power_loop_distances"] == [
+        {
+            "support_ref": "C1",
+            "parent_ref": "U1",
+            "supply_net": "VDD_3P3",
+            "ground_net": "GND",
+            "owner_pin": "",
+            "supply_leg_mm": 0.0,
+            "return_leg_mm": 2.83,
+            "geometric_loop_mm": 2.83,
+            "model": "rotated_pad_endpoint_sum",
+        }
+    ]
+    assert result["quality"]["max_local_power_loop_mm"] == 2.83
+    assert _cost_parent_affinity([parent, cap, unrelated]) == pytest.approx(
+        _cost_parent_affinity([parent, cap])
+    )
+
+
 def test_support_seed_uses_shared_signal_pad_side_and_preserves_body_clearance():
     from circuit_weaver.placement_optimizer import (
         PlacementConfig,
@@ -398,6 +561,101 @@ def test_support_seed_uses_shared_signal_pad_side_and_preserves_body_clearance()
     assert resistor.x - parent.x == pytest.approx(
         parent.width / 2 + resistor.width / 2 + 1.5
     )
+
+
+def test_support_seed_prefers_declared_owner_pin_and_optimizer_carries_pin_metadata():
+    from circuit_weaver.placement_optimizer import PlacementConfig, _init_placements
+
+    owner = _make_comp("U1", category="power", footprint="QFN-32")
+    owner.placement_pad_offsets = {
+        "VIN": [(-5.0, 0.0), (5.0, 0.0)],
+        "GND": [(0.0, 2.0)],
+    }
+    owner.placement_pin_offsets = {"5": (5.0, 0.0)}
+    owner.power_pins = {"5": "VIN"}
+    cap = _make_comp("C1", category="passive", footprint="0402")
+    cap.placement_parent_ref = "U1"
+    cap.placement_parent_pin = "5"
+    cap.placement_role = "input_cap"
+    cap.placement_pad_offsets = {"VIN": [(0.4, 0.0)], "GND": [(-0.4, 0.0)]}
+    cap.placement_reference_size_mm = (1.2, 0.7)
+
+    state = _init_placements(
+        [owner, cap], PlacementConfig(board_width_mm=60, board_height_mm=40), {}, {},
+    )
+    by_ref = {placement.ref: placement for placement in state}
+    parent, support = by_ref["U1"], by_ref["C1"]
+
+    assert support.parent_pin == "5"
+    assert parent.pin_nets["5"] == "VIN"
+    assert support.x > parent.x
+    assert support.reference_size_mm == (1.2, 0.7)
+
+
+def test_reference_label_space_proxy_prefers_associated_slots_and_is_bounded():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        PlacementConfig,
+        _cost_reference_label_space,
+        _reference_label_space_metrics,
+    )
+
+    config = PlacementConfig(board_width_mm=30, board_height_mm=30)
+    target = ComponentPlacement(
+        "C1", 15, 15, width=1.6, height=0.8, reference_size_mm=(2.2, 1.0),
+    )
+    remote_peer = ComponentPlacement("C2", 27, 15, width=1.6, height=0.8)
+    open_metrics = _reference_label_space_metrics([target, remote_peer], config)
+    assert open_metrics[0]["nearby_associated_slots"] >= 2
+    assert _cost_reference_label_space([target, remote_peer], config) == 0
+
+    cage = [
+        ComponentPlacement("C2", 17.5, 15, width=1.6, height=0.8),
+        ComponentPlacement("C3", 12.5, 15, width=1.6, height=0.8),
+        ComponentPlacement("C4", 15, 16.5, width=1.6, height=0.8),
+        ComponentPlacement("C5", 15, 13.5, width=1.6, height=0.8),
+    ]
+    crowded_metrics = _reference_label_space_metrics([target, *cage], config)
+    crowded_target = next(metric for metric in crowded_metrics if metric["ref"] == "C1")
+    assert crowded_target["nearby_associated_slots"] < open_metrics[0]["nearby_associated_slots"]
+    assert 0 < _cost_reference_label_space([target, *cage], config) <= 500
+
+
+def test_reference_label_space_proxy_skips_missing_metadata_and_respects_board_edges():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        PlacementConfig,
+        _cost_reference_label_space,
+        _reference_label_space_metrics,
+    )
+
+    config = PlacementConfig(board_width_mm=10, board_height_mm=10)
+    no_metadata = ComponentPlacement("R1", 1.5, 5, width=1.0, height=0.6)
+    edge_label = ComponentPlacement(
+        "C1", 1.5, 5, width=1.6, height=0.8, reference_size_mm=(8.0, 8.0),
+    )
+    metrics = _reference_label_space_metrics([no_metadata, edge_label], config)
+    assert [metric["ref"] for metric in metrics] == ["C1"]
+    assert metrics[0]["nearby_associated_slots"] == 0
+    assert _cost_reference_label_space([no_metadata], config) == 0
+
+
+def test_reference_label_proxy_ignores_opposite_side_courtyards():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        PlacementConfig,
+        _reference_label_space_metrics,
+    )
+
+    config = PlacementConfig(board_width_mm=30, board_height_mm=30)
+    target = ComponentPlacement(
+        "C1", 15, 15, width=1.6, height=0.8, reference_size_mm=(2.2, 1.0), layer="front",
+    )
+    back_peer = ComponentPlacement("C2", 15, 15, width=6.0, height=6.0, layer="back")
+
+    metrics = _reference_label_space_metrics([target, back_peer], config)
+
+    assert metrics[0]["nearby_associated_slots"] == 2
 
 
 def test_equivalent_decouplers_round_robin_real_shared_rail_pads():
@@ -606,6 +864,77 @@ def test_support_families_use_signal_topology_and_ignore_shared_power_rails():
         frozenset({"R1", "R2"}),
         frozenset({"R3", "C5"}),
     }
+
+
+def test_support_families_group_power_caps_by_explicit_owner_pin_only():
+    from circuit_weaver.placement_optimizer import ComponentPlacement, _support_peer_groups
+
+    parent = ComponentPlacement("U1", 20, 20, pin_nets={"9": "VDD_3P3", "24": "VDD_3P3"})
+    first = ComponentPlacement(
+        "C1", 14, 19, parent_ref="U1", parent_pin="9", placement_role="decoupling",
+        net_pad_offsets={"VDD_3P3": [(0, 0)], "GND": [(0.4, 0)]},
+    )
+    same_pin = ComponentPlacement(
+        "C2", 14, 23, parent_ref="U1", parent_pin="9", placement_role="decoupling",
+        net_pad_offsets={"VDD_3P3": [(0, 0)], "GND": [(-0.4, 0)]},
+    )
+    other_pin = ComponentPlacement(
+        "C3", 25, 20, parent_ref="U1", parent_pin="24", placement_role="decoupling",
+        net_pad_offsets={"VDD_3P3": [(0, 0)], "GND": [(0, 0)]},
+    )
+
+    groups = _support_peer_groups([parent, first, same_pin, other_pin])
+
+    assert [[member.ref for member in group] for group in groups] == [["C1", "C2"]]
+
+
+def test_support_families_do_not_group_symbolic_or_mismatched_owner_pins():
+    from circuit_weaver.placement_optimizer import ComponentPlacement, _support_peer_groups
+
+    parent = ComponentPlacement("U1", 20, 20, pin_nets={"9": "VDD_3P3"})
+    symbolic_a = ComponentPlacement(
+        "C1", 14, 19, parent_ref="U1", parent_pin="auto", placement_role="decoupling",
+        net_pad_offsets={"VDD_3P3": [(0, 0)], "GND": [(0.4, 0)]},
+    )
+    symbolic_b = ComponentPlacement(
+        "C2", 14, 23, parent_ref="U1", parent_pin="auto", placement_role="decoupling",
+        net_pad_offsets={"VDD_5V": [(0, 0)], "GND": [(-0.4, 0)]},
+    )
+    mismatched_a = ComponentPlacement(
+        "C3", 14, 19, parent_ref="U1", parent_pin="9", placement_role="decoupling",
+        net_pad_offsets={"VDD_5V": [(0, 0)], "GND": [(0.4, 0)]},
+    )
+    mismatched_b = ComponentPlacement(
+        "C4", 14, 23, parent_ref="U1", parent_pin="9", placement_role="decoupling",
+        net_pad_offsets={"VDD_5V": [(0, 0)], "GND": [(-0.4, 0)]},
+    )
+
+    assert _support_peer_groups([parent, symbolic_a, symbolic_b, mismatched_a, mismatched_b]) == []
+
+
+def test_same_owner_pin_power_caps_prefer_a_row_to_open_space_near_the_owner():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        _cost_support_peer_alignment,
+    )
+
+    parent = ComponentPlacement("U1", 20, 20, pin_nets={"9": "VDD_3P3"})
+    first = ComponentPlacement(
+        "C1", 14, 19, parent_ref="U1", parent_pin="9", placement_role="decoupling",
+        net_pad_offsets={"VDD_3P3": [(0, 0)], "GND": [(0.4, 0)]},
+    )
+    second_row = ComponentPlacement(
+        "C2", 18, 19, parent_ref="U1", parent_pin="9", placement_role="decoupling",
+        net_pad_offsets={"VDD_3P3": [(0, 0)], "GND": [(-0.4, 0)]},
+    )
+    second_column = ComponentPlacement(
+        "C2", 14, 23, parent_ref="U1", parent_pin="9", placement_role="decoupling",
+        net_pad_offsets={"VDD_3P3": [(0, 0)], "GND": [(-0.4, 0)]},
+    )
+
+    assert _cost_support_peer_alignment([parent, first, second_row]) < _cost_support_peer_alignment(
+        [parent, first, second_column]
+    )
 
 
 def test_support_families_ignore_numeric_voltage_rail_aliases():

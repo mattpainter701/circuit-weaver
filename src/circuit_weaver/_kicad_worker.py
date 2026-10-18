@@ -26,6 +26,8 @@ def _inspect(board, pcbnew):
     for footprint in board.GetFootprints():
         position = footprint.GetPosition()
         rotation = footprint.GetOrientationDegrees()
+        reference_field = footprint.Reference()
+        reference_size_mm = None
         pads = [{"number": p.GetNumber(), "net": p.GetNetname(),
                  "x": pcbnew.ToMM(p.GetPosition().x), "y": pcbnew.ToMM(p.GetPosition().y)}
                 for p in footprint.Pads()]
@@ -38,6 +40,18 @@ def _inspect(board, pcbnew):
             seen_fields.add(id(field))
             field_state.append((field, field.GetTextPos(), field.GetTextAngleDegrees()))
         footprint.SetOrientationDegrees(0)
+        if (not footprint.IsLocked() and not reference_field.IsLocked()
+                and _field_visible(reference_field)):
+            # The placement solver needs the horizontal silk footprint of the
+            # designator, independent of its authored angle and footprint
+            # rotation. Include the same margin used by the native silk
+            # cleanup so this size can be used as a conservative label box.
+            reference_field.SetTextAngleDegrees(0.0)
+            reference_box = _box(reference_field, pcbnew, _SILK_CLEARANCE_MM)
+            reference_size_mm = [
+                pcbnew.ToMM(reference_box[2] - reference_box[0]),
+                pcbnew.ToMM(reference_box[3] - reference_box[1]),
+            ]
         for row, pad in zip(pads, footprint.Pads()):
             row["local_x"] = pcbnew.ToMM(pad.GetPosition().x - position.x)
             row["local_y"] = pcbnew.ToMM(pad.GetPosition().y - position.y)
@@ -71,6 +85,7 @@ def _inspect(board, pcbnew):
             "courtyard_height": pcbnew.ToMM(courtyard_height),
             "courtyard_center_x": pcbnew.ToMM(courtyard_center_x),
             "courtyard_center_y": pcbnew.ToMM(courtyard_center_y),
+            "reference_size_mm": reference_size_mm,
             "pads": pads,
         })
     box = board.GetBoardEdgesBoundingBox()
