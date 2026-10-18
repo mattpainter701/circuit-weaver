@@ -204,6 +204,12 @@ CAPABILITIES: Final[tuple[CapabilityRecord, ...]] = (
     _record("place-pcb", "place-pcb", maturity="experimental", skill="circuit-weaver",
             evidence_kinds=("command-contract", "external-tool", "user-supplied")),
     _record(
+        "cleanup-pcb", "cleanup-pcb", maturity="review_only", skill="circuit-weaver",
+        python="circuit_weaver.pcb_copper_cleanup:cleanup_copper",
+        evidence_kinds=("command-contract", "kicad-load", "external-tool", "user-supplied"),
+        output_guarantee="kicad-load", since_version="0.35.0",
+    ),
+    _record(
         "refine-pcb", "refine-pcb", maturity="review_only", skill="circuit-weaver",
         python="circuit_weaver.pcb_return_paths:refine_return_paths",
         evidence_kinds=("command-contract", "kicad-load", "external-tool", "user-supplied"),

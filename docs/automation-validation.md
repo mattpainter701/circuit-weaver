@@ -71,6 +71,16 @@ Refinement requires a fully routed, DRC-passing input and publishes only after
 full final DRC and reference verification. Component positions, labels, pad nets
 and original copper are preserved; blocked connections fail the run.
 
+To remove redundant selected-net copper and try shared vias, add
+`--cleanup-plan /path/to/cleanup.json`; see
+[`cleanup-pcb`](cli-reference.md#cleanup-pcb). This adds one checked stage and
+keeps protected pad paths at or below their original lengths. With both plans,
+the workflow retains `routed-base.kicad_pcb` and `routed-refined.kicad_pcb` before
+the final cleaned `routed.kicad_pcb`; the assembled/MCP run has 18 stages.
+All final previews and delivery checks use the cleaned board. The cleanup plan,
+board/project/rule snapshots, native DRC and reference checks remain bound to
+the final evidence. Existing workflows stay at 16 stages, or 17 with one plan.
+
 The MCP pass lists all five tools, validates and generates the same design,
 discovers projects, and verifies that malformed input, an empty research query,
 and missing readiness evidence are returned as MCP tool errors.

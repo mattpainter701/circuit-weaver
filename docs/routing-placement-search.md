@@ -224,6 +224,28 @@ usual workflow. Existing routes are retained so adding a legal same-net link
 cannot remove an already available copper path; independent path extraction is
 still needed to assess the requested return improvement.
 
+## Protected copper cleanup
+
+`cleanup-pcb` accepts explicit net names and protected pad pairs. It measures
+their native copper paths before changing anything, removes redundant unlocked
+segments and transitions, and can replace several local vias with a shared pair.
+Every trial preserves selected-net pad connectivity and the original protected
+path ceilings. Unselected nets, locked copper, component poses and labels are
+retained. The bounded proposal search uses native copper/mask geometry; full
+KiCad DRC and native reference checks remain final publication gates.
+
+The geometry graph includes track intersections, actual copper-shape contacts,
+interior pad/track contacts and via layer transitions. Heap ties use a stable
+ordering so mixed pad and coordinate nodes cannot interrupt shortest-path checks.
+The path lengths are geometric proxies, not loop inductance or current-capacity
+analysis. Current cleanup supports two-layer boards without zones or copper arcs.
+
+The workflow's optional `--cleanup-plan cleanup.json` runs after routing and any
+return refinement. It retains both intermediates when both phases are enabled;
+all delivery checks and previews use the final cleaned board. The combined mode
+adds two stages to the usual workflow. Input plan and board/project/rule hashes
+are verified throughout, including native save/reload checks.
+
 ## Real-board regression corpus
 
 `tests/test_native_pcb_workflow.py` executes the public CLI against real KiCad and

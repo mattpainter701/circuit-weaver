@@ -278,6 +278,32 @@ def verify_refinement(payload: dict, board: Path, source: Path, expected_connect
             "Refined board failed native silkscreen verification")
 
 
+def verify_cleanup(payload: dict, board: Path, source: Path, expected_connections: int) -> None:
+    """Bind native copper-cleanup evidence to its exact input and output images."""
+    drc = payload.get("drc", {})
+    require(payload.get("status") == "ok" and payload.get("output_kind") == "cleaned_kicad_board",
+            "Copper cleanup produced no native board")
+    require(payload.get("source_sha256") == digest(source), "Cleanup refers to different source board bytes")
+    require(drc.get("status") == "ok" and drc.get("passed") is True and drc.get("blocker_count") == 0,
+            "Cleaned board did not pass full native DRC")
+    require(Path(drc.get("board", "")).resolve() == board.resolve(), "Final DRC refers to a different board")
+    require(drc.get("board_sha256") == digest(board), "Final DRC does not match final board bytes")
+    cleanup = payload.get("cleanup", {})
+    for key in ("all_pads_connected", "protected_paths_preserved", "unselected_copper_preserved",
+                "original_footprints_and_text_preserved", "copper_changes_limited_to_selected_nets",
+                "locked_copper_preserved"):
+        require(cleanup.get(key) is True, f"Native cleanup did not confirm {key.replace('_', ' ')}")
+    rows = cleanup.get("protected_connections")
+    require(isinstance(rows, list) and len(rows) == expected_connections,
+            "Native cleanup report does not cover every protected connection")
+    require(all(isinstance(item, dict) and item.get("status") == "connected"
+                and item.get("protected_path_preserved") is True for item in rows),
+            "Native cleanup report contains an unverified protected connection")
+    silkscreen = payload.get("silkscreen", {})
+    require(silkscreen.get("unresolved_count") == 0 and silkscreen.get("remaining_conflict_count") == 0,
+            "Cleaned board failed native silkscreen verification")
+
+
 def verify_preview(payload: dict, board: Path, svg: Path, side: str, appearance: str = "layers") -> None:
     """Bind a native preview to the exact routed board and SVG bytes."""
     require(payload.get("status") == "ok", "Native board preview failed")
@@ -655,6 +681,29 @@ def load_return_plan_in_runtime(path: Path, *, cwd: Path, env: dict[str, str]) -
     return payload
 
 
+def load_cleanup_plan_in_runtime(path: Path, *, cwd: Path, env: dict[str, str]) -> dict:
+    """Validate a cleanup plan using the same package environment as the demo CLI."""
+    code = (
+        "import json, sys; "
+        "from circuit_weaver.pcb_copper_cleanup import load_cleanup_plan; "
+        "print(json.dumps(load_cleanup_plan(sys.argv[1])))"
+    )
+    process = subprocess.run(
+        [sys.executable, "-c", code, str(path)], cwd=cwd, env=env,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if process.returncode != 0:
+        detail = (process.stderr or process.stdout).strip()
+        raise ValueError(f"Copper-cleanup plan preflight failed: {detail}")
+    try:
+        payload = json.loads(process.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Copper-cleanup plan preflight returned invalid JSON") from exc
+    if not isinstance(payload, dict) or set(payload) != {"nets", "protected_connections"}:
+        raise ValueError("Copper-cleanup plan preflight returned an invalid plan")
+    return payload
+
+
 async def mcp_smoke(spec: Path, output: Path, env: dict) -> dict:
     """Exercise the real JSON-RPC stdio server, including error propagation."""
     import yaml
@@ -711,6 +760,8 @@ def main() -> int:
     parser.add_argument("--attempts", type=int, default=3)
     parser.add_argument("--return-paths", type=Path,
                         help="Opt in to local return-path shortcuts using a strict JSON connections plan")
+    parser.add_argument("--cleanup-plan", type=Path,
+                        help="Opt in to native copper cleanup using a strict nets/protected-connections plan")
     parser.add_argument("--route-timeout", type=int, default=180)
     parser.add_argument("--clearance", type=float, default=0.127,
                         help="Prototype default clearance in mm (0.127 accommodates the sample USB connector)")
@@ -763,6 +814,8 @@ def main() -> int:
         original = digest(source_spec)
         return_plan_source = args.return_paths.resolve() if args.return_paths else None
         return_plan_hash = digest(return_plan_source) if return_plan_source else None
+        cleanup_plan_source = args.cleanup_plan.resolve() if args.cleanup_plan else None
+        cleanup_plan_hash = digest(cleanup_plan_source) if cleanup_plan_source else None
         if return_plan_source is not None:
             try:
                 return_plan = load_return_plan_in_runtime(
@@ -772,6 +825,15 @@ def main() -> int:
                 raise ValueError(f"invalid --return-paths plan: {exc}") from exc
         else:
             return_plan = None
+        if cleanup_plan_source is not None:
+            try:
+                cleanup_plan = load_cleanup_plan_in_runtime(
+                    cleanup_plan_source, cwd=demo.cwd, env=demo.env,
+                )
+            except (OSError, ValueError) as exc:
+                raise ValueError(f"invalid --cleanup-plan: {exc}") from exc
+        else:
+            cleanup_plan = None
         summary.update(prepare_working_spec(source_spec, spec, args.width, args.height))
         width, height = summary["board_size_effective_mm"]
         demo.command("doctor", ["doctor"], json_output=False)
@@ -801,7 +863,8 @@ def main() -> int:
                 "Native reference cleanup left unresolved collisions")
         require(summary["silkscreen"].get("remaining_conflict_count") == 0,
                 "Native silkscreen conflict check did not pass")
-        routed_base = output / ("routed-base.kicad_pcb" if return_plan is not None else "routed.kicad_pcb")
+        routed_base = output / ("routed-base.kicad_pcb" if return_plan is not None or cleanup_plan is not None
+                                else "routed.kicad_pcb")
         routing = demo.command("route", [
             "autoroute", str(output / "placed.kicad_pcb"), "--routed-board", str(routed_base),
             "--attempts", str(args.attempts), "--timeout", str(args.route_timeout),
@@ -814,7 +877,7 @@ def main() -> int:
             shutil.copy2(return_plan_source, plan_copy)
             require(digest(plan_copy) == return_plan_hash,
                     "Copied return-path plan does not match the input plan")
-            refined = output / "routed.kicad_pcb"
+            refined = output / ("routed-refined.kicad_pcb" if cleanup_plan is not None else "routed.kicad_pcb")
             refinement = demo.command("refine-return-paths", [
                 "refine-pcb", str(routed_base), "-o", str(refined), "--connections", str(plan_copy),
             ])
@@ -824,8 +887,27 @@ def main() -> int:
             require(digest(return_plan_source) == return_plan_hash, "Workflow modified the return-path plan")
             summary["return_path_refinement"] = refinement
             routed = refined
+        if cleanup_plan is not None:
+            cleanup_plan_copy = output / "copper-cleanup.json"
+            shutil.copy2(cleanup_plan_source, cleanup_plan_copy)
+            require(digest(cleanup_plan_copy) == cleanup_plan_hash,
+                    "Copied copper-cleanup plan does not match the input plan")
+            cleanup_output = output / "routed.kicad_pcb"
+            cleaned = demo.command("cleanup-copper", [
+                "cleanup-pcb", str(routed), "-o", str(cleanup_output), "--plan", str(cleanup_plan_copy),
+            ])
+            verify_cleanup(cleaned, cleanup_output, routed, len(cleanup_plan["protected_connections"]))
+            summary["copper_cleanup_plan"] = {"path": cleanup_plan_copy.name,
+                                              "source_sha256": cleanup_plan_hash,
+                                              "copied_sha256": digest(cleanup_plan_copy)}
+            require(digest(cleanup_plan_source) == cleanup_plan_hash,
+                    "Workflow modified the input copper-cleanup plan")
+            summary["copper_cleanup"] = cleaned
+            routed = cleanup_output
         summary["routing_drc"] = routing["drc"]
-        summary["drc"] = refinement["drc"] if return_plan is not None else routing["drc"]
+        summary["drc"] = cleaned["drc"] if cleanup_plan is not None else (
+            refinement["drc"] if return_plan is not None else routing["drc"]
+        )
         delivery = demo.command("assembly-gate", ["export-jlcpcb", str(spec), "--pcb", str(routed),
                                             "-o", str(output / "delivery")], exit_code=(0, 1))
         assembly_summary = verify_blocked_assembly_delivery(delivery, output / "delivery")
@@ -883,10 +965,22 @@ def main() -> int:
                     "Workflow modified the input return-path plan")
             require(digest(plan_copy) == return_plan_hash,
                     "Copied return-path plan does not match the input plan")
-        if return_plan is None:
+        if cleanup_plan_source is not None:
+            require(digest(cleanup_plan_source) == cleanup_plan_hash,
+                    "Workflow modified the input copper-cleanup plan")
+            require(digest(cleanup_plan_copy) == cleanup_plan_hash,
+                    "Copied copper-cleanup plan does not match the input plan")
+        if return_plan is None and cleanup_plan is None:
             verify_routing(routing, routed)
-        else:
+        elif return_plan is not None and cleanup_plan is None:
             verify_refinement(refinement, routed, routed_base, len(return_plan["connections"]))
+        elif return_plan is not None:
+            verify_refinement(refinement, output / "routed-refined.kicad_pcb", routed_base,
+                              len(return_plan["connections"]))
+            verify_cleanup(cleaned, routed, output / "routed-refined.kicad_pcb",
+                           len(cleanup_plan["protected_connections"]))
+        else:
+            verify_cleanup(cleaned, routed, routed_base, len(cleanup_plan["protected_connections"]))
         summary.update(status="PASS — prototype workflow validated; manufacturing export correctly blocked",
                        source_unchanged=True, board_sha256=digest(routed))
     except Exception as exc:

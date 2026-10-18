@@ -4032,6 +4032,15 @@ def main() -> None:
     returns_p.add_argument("--overwrite", action="store_true")
     returns_p.add_argument("--kicad-python-path", help="Python interpreter with KiCad pcbnew installed")
 
+    cleanup_p = subparsers.add_parser(
+        "cleanup-pcb", help="Remove selected unconnected copper from a separate KiCad board copy"
+    )
+    cleanup_p.add_argument("kicad_pcb", help="Input .kicad_pcb board that passes full KiCad DRC")
+    cleanup_p.add_argument("--output", "-o", required=True, help="Separate cleaned .kicad_pcb output")
+    cleanup_p.add_argument("--plan", required=True, help="Strict JSON plan with nets and protected pad connections")
+    cleanup_p.add_argument("--overwrite", action="store_true")
+    cleanup_p.add_argument("--kicad-python-path", help="Python interpreter with KiCad pcbnew installed")
+
     autoroute_p = subparsers.add_parser(
         "autoroute", help="Route PCB using Freerouting (optional; requires Freerouting JAR)"
     )
@@ -5410,6 +5419,20 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
             plan = load_return_plan(args.connections)
             result = _run_with_stderr_capture(lambda: refine_return_paths(
                 args.kicad_pcb, args.output, plan["connections"],
+                overwrite=args.overwrite, kicad_python_path=args.kicad_python_path,
+            ))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            result = {"status": "error", "message": str(exc)}
+        _print_json(result)
+        raise SystemExit(0 if result["status"] == "ok" else 1)
+
+    if args.command == "cleanup-pcb":
+        from .pcb_copper_cleanup import cleanup_copper, load_cleanup_plan
+
+        try:
+            plan = load_cleanup_plan(args.plan)
+            result = _run_with_stderr_capture(lambda: cleanup_copper(
+                args.kicad_pcb, args.output, plan["nets"], plan["protected_connections"],
                 overwrite=args.overwrite, kicad_python_path=args.kicad_python_path,
             ))
         except (OSError, ValueError, json.JSONDecodeError) as exc:

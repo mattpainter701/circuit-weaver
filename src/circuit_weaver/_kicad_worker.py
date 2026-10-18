@@ -43,6 +43,17 @@ def _copper_state(board):
     return Counter(rows)
 
 
+def _copper_state_for_nets(state, nets, *, include_selected=True, locked=None):
+    selected = set(nets)
+    result = Counter()
+    for raw, count in state.items():
+        row = json.loads(raw)
+        if ((row["net"] in selected) == include_selected
+                and (locked is None or row["locked"] is locked)):
+            result[raw] = count
+    return result
+
+
 def _fixed_layout_state(board):
     """Footprint and text state that a copper-only operation must preserve."""
     rows = {}
@@ -536,6 +547,8 @@ def execute(request):
     operation = request["operation"]
     tidy_summary = None
     refinement = None
+    cleanup = None
+    cleanup_removed_items = []
     original_copper = None
     original_layout = None
     if operation == "inspect":
@@ -563,6 +576,37 @@ def execute(request):
         refinement = refine(board, pcbnew, request.get("connections"))
         if original_copper - _copper_state(board) or original_layout != _fixed_layout_state(board):
             raise ValueError("Return refinement changed original copper, footprints or text")
+    elif operation == "cleanup_copper":
+        from _native_copper_cleanup import cleanup as cleanup_selected_copper
+
+        cleanup_nets = request.get("nets")
+        cleanup_connections = request.get("connections")
+        if (not isinstance(cleanup_nets, list) or not cleanup_nets
+                or any(not isinstance(net, str) or not net for net in cleanup_nets)
+                or len(cleanup_nets) != len(set(cleanup_nets))):
+            raise ValueError("Copper cleanup requires a nonempty unique list of net names")
+        if not isinstance(cleanup_connections, list) or not cleanup_connections:
+            raise ValueError("Copper cleanup requires protected connections")
+        original_copper = _copper_state(board)
+        original_layout = _fixed_layout_state(board)
+        cleanup = cleanup_selected_copper(board, pcbnew, cleanup_nets, cleanup_connections)
+        cleanup_removed_items = cleanup.pop("_native_removed_items", [])
+        if cleanup.get("status") == "refused":
+            raise ValueError(cleanup.get("reason") or "Native copper cleanup refused this board")
+        if _identity(board) != identity or original_layout != _fixed_layout_state(board):
+            raise ValueError("Copper cleanup changed pad/net identity, footprints or text")
+        current_copper = _copper_state(board)
+        cleanup["unselected_copper_preserved"] = (
+            _copper_state_for_nets(original_copper, cleanup_nets, include_selected=False)
+            == _copper_state_for_nets(current_copper, cleanup_nets, include_selected=False)
+        )
+        cleanup["locked_copper_preserved"] = (
+            _copper_state_for_nets(original_copper, set(), include_selected=False, locked=True)
+            == _copper_state_for_nets(current_copper, set(), include_selected=False, locked=True)
+        )
+        cleanup["copper_changes_limited_to_selected_nets"] = cleanup["unselected_copper_preserved"]
+        if not cleanup["unselected_copper_preserved"] or not cleanup["locked_copper_preserved"]:
+            raise ValueError("Copper cleanup modified unselected or locked copper")
     elif operation == "place":
         placements = request["placements"]
         if not placements or set(placements) - set(identity):
@@ -617,6 +661,46 @@ def execute(request):
     if refinement is not None and (original_copper - _copper_state(reloaded)
                                    or original_layout != _fixed_layout_state(reloaded)):
         raise ValueError("Saved return refinement failed original geometry preservation")
+    if cleanup is not None:
+        from _native_copper_cleanup import verify as verify_cleanup_after_reload
+
+        saved_copper = _copper_state(board)
+        if saved_copper != _copper_state(reloaded):
+            raise ValueError("Saved cleanup changed native copper during board reload")
+        if (_identity(reloaded) != identity
+                or original_layout != _fixed_layout_state(reloaded)):
+            raise ValueError("Saved cleanup failed pad/net, footprint or text preservation")
+        if (_copper_state_for_nets(original_copper, request["nets"], include_selected=False)
+                != _copper_state_for_nets(_copper_state(reloaded), request["nets"], include_selected=False)):
+            cleanup["unselected_copper_preserved"] = False
+            raise ValueError("Saved cleanup changed unselected copper")
+        reloaded_copper = _copper_state(reloaded)
+        if (_copper_state_for_nets(original_copper, set(), include_selected=False, locked=True)
+                != _copper_state_for_nets(reloaded_copper, set(), include_selected=False, locked=True)):
+            cleanup["locked_copper_preserved"] = False
+            raise ValueError("Saved cleanup changed locked copper")
+        cleanup["original_footprints_and_text_preserved"] = True
+        cleanup["copper_changes_limited_to_selected_nets"] = cleanup["unselected_copper_preserved"]
+        verification = verify_cleanup_after_reload(
+            reloaded, pcbnew, request["connections"], cleanup.get("protected_path_limits_mm", {}),
+            nets=request["nets"],
+        )
+        original_rows = cleanup.get("protected_connections", [])
+        verified_rows = verification.get("protected_connections", [])
+        if not isinstance(original_rows, list) or len(original_rows) != len(verified_rows):
+            raise ValueError("Saved cleanup report does not cover every protected connection")
+        for original_row, verified_row in zip(original_rows, verified_rows):
+            verified_row["baseline_length_mm"] = original_row.get("baseline_length_mm")
+            verified_row["limit_mm"] = original_row.get("limit_mm")
+        verification["protected_paths_preserved"] = all(
+            row.get("protected_path_preserved") is True for row in verified_rows
+        )
+        cleanup.update(verification)
+        cleanup["locked_copper_preserved"] = True
+        cleanup["unselected_copper_preserved"] = True
+        cleanup["original_footprints_and_text_preserved"] = True
+        if not cleanup.get("all_pads_connected") or not cleanup.get("protected_paths_preserved"):
+            raise ValueError("Saved cleanup failed native pad connectivity or protected-path verification")
     result = {"status": "ok", "version": pcbnew.Version(), **_inspect(reloaded, pcbnew)}
     if tidy_summary is not None:
         result["silkscreen"] = _reference_conflict_report(
@@ -627,6 +711,13 @@ def execute(request):
         result["refinement"] = {**refinement, "original_copper_preserved": True,
                                 "original_footprints_and_text_preserved": True}
         result["silkscreen"] = _reference_conflict_report(reloaded, pcbnew, 0, 0)
+    if cleanup is not None:
+        cleanup["original_footprints_and_text_preserved"] = True
+        result["cleanup"] = cleanup
+        result["silkscreen"] = _reference_conflict_report(reloaded, pcbnew, 0, 0)
+        # Keep SWIG wrappers alive through save, reload, and native inspection.
+        # The list is local only and never enters the JSON response.
+        cleanup_removed_items.clear()
     return result
 
 

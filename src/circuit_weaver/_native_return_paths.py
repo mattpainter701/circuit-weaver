@@ -162,7 +162,7 @@ def _valid_path(path, net, endpoint_pads, board, pcbnew, clearance, width, bound
     return True
 
 
-def _via_clear(point, net, endpoint_pads, board, pcbnew, clearance, diameter, bounds):
+def _via_clear(point, net, endpoint_pads, board, pcbnew, clearance, diameter, bounds, ignored_uuids=()):
     radius = diameter / 2 + clearance
     x0, y0, x1, y1 = bounds
     if point[0] < x0 + radius or point[0] > x1 - radius or point[1] < y0 + radius or point[1] > y1 - radius:
@@ -194,6 +194,8 @@ def _via_clear(point, net, endpoint_pads, board, pcbnew, clearance, diameter, bo
                     if box[0] <= point[0] <= box[2] and box[1] <= point[1] <= box[3]:
                         return False
     for item in board.GetTracks():
+        if ignored_uuids and item.m_Uuid.AsString() in ignored_uuids:
+            continue
         if item.GetClass() == "PCB_ARC":
             raise ValueError("native return routing does not support existing copper arcs")
         if item.GetClass() == "PCB_VIA":
