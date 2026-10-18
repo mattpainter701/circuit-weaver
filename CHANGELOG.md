@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Filled ground planes with preserved routing
+
+- Add an explicit native ground-plane command with thermal pad connections, island removal and saved fill/connectivity verification. Retain existing tracks, vias, placement and labels, and keep protected trace-only return and decoupling paths unchanged.
+- Allow automated workflows to apply a ground-plane plan after routing cleanup, retain every intermediate board and render the final assembled board from the verified filled PCB.
+
 ### Protected copper cleanup
 
 - Add explicit selected-net copper cleanup that removes redundant segments and searches for shared via pairs while keeping protected pad-to-pad paths within their original lengths. Retain component placement, labels, locked copper and unselected nets; native geometry, connectivity and full DRC gate publication.

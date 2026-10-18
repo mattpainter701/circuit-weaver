@@ -496,6 +496,35 @@ not a substitute for part-specific layout limits.
 `--tidy-references` relocates native reference fields to readable positions and
 reports unresolved collisions; locked footprints retain their reference fields.
 
+## plane-pcb
+
+Add native filled copper zones to an already routed board while retaining every
+existing track, via, component pose and reference field.
+
+```bash
+circuit-weaver plane-pcb cleaned.kicad_pcb -o grounded.kicad_pcb --plan ground-plane.json
+```
+
+The strict JSON plan specifies all zone settings and any protected same-net pad
+pairs. Protected pairs may belong to another net, such as a digital supply:
+
+```json
+{"net":"GND","layers":["F.Cu","B.Cu"],"edge_clearance_mm":0.5,"clearance_mm":0.25,"min_thickness_mm":0.2,"thermal_gap_mm":0.25,"thermal_spoke_width_mm":0.3,"protected_connections":[{"from_ref":"C1","from_pad":"1","to_ref":"U1","to_pad":"1"}]}
+```
+
+The current operation supports two-layer boards with one closed, axis-aligned
+rectangular Edge.Cuts outline and no existing zones. It creates one zone on each
+outer copper layer, uses thermal pad connections, removes unconnected islands,
+and fills with KiCad's native zone filler. Unsupported geometry is rejected.
+The report measures actual filled polygons after save/reload and retains
+trace-only path lengths independently of the added plane. These path measurements
+exclude via barrels and do not estimate impedance or inductance.
+
+Input and final native DRC, fill connectivity, exact original geometry, reference
+checks and unchanged board/project/rule snapshots gate atomic publication.
+Use a separate output board; `--overwrite` permits replacement only after all
+checks pass. `--kicad-python-path` overrides native interpreter discovery.
+
 ## cleanup-pcb
 
 Remove redundant selected-net copper and try shared via pairs without worsening

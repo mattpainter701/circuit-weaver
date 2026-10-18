@@ -69,6 +69,73 @@ def _fixed_layout_state(board):
     return rows
 
 
+def _vec3_state(value):
+    return tuple(getattr(value, axis, None) for axis in ("x", "y", "z"))
+
+
+def _ground_plane_graphic_state(item, pcbnew):
+    """Capture supported native drawing geometry; fail closed on unknown item types."""
+    kind = type(item).__name__
+    uuid = item.m_Uuid.AsString()
+    if kind == "PCB_SHAPE":
+        shape = item.GetShapeStr()
+        if item.GetShape() == pcbnew.SHAPE_T_SEGMENT:
+            geometry = ((item.GetStart().x, item.GetStart().y), (item.GetEnd().x, item.GetEnd().y))
+        elif shape == "Rect":
+            geometry = tuple((point.x, point.y) for point in item.GetRectCorners())
+        elif shape == "Polygon":
+            geometry = item.GetPolyShape().Format(False)
+        else:
+            raise ValueError(f"Ground-plane preservation does not support existing {shape} drawings")
+        return (kind, uuid, shape, int(item.GetLayer()), geometry, item.GetWidth(),
+                int(item.GetFillMode()), item.IsLocked(), item.GetNetname())
+    if kind == "PCB_TEXT":
+        position, size = item.GetTextPos(), item.GetTextSize()
+        return (kind, uuid, item.GetText(), (position.x, position.y), item.GetTextAngleDegrees(),
+                (size.x, size.y), item.GetTextThickness(), int(item.GetLayer()), item.IsMirrored(),
+                item.GetHorizJustify(), item.GetVertJustify(), item.IsLocked())
+    raise ValueError(f"Ground-plane preservation does not support existing drawing type {kind}")
+
+
+def _ground_plane_source_geometry_state(board, pcbnew):
+    """Fingerprint footprints, pad copper, 3D models and board/footprint drawings."""
+    footprints = []
+    for footprint in board.GetFootprints():
+        position = footprint.GetPosition()
+        pads = []
+        for pad in footprint.Pads():
+            pad_position, size, drill = pad.GetPosition(), pad.GetSize(), pad.GetDrillSize()
+            pad_shapes = []
+            for layer in pad.GetLayerSet().Seq():
+                shape = pad.GetEffectiveShape(int(layer))
+                if shape is None:
+                    raise ValueError(
+                        f"Cannot fingerprint native pad shape {footprint.GetReference()}.{pad.GetNumber()}"
+                    )
+                pad_shapes.append((int(layer), shape.Format()))
+            pads.append((str(pad.GetNumber()), str(pad.GetNetname()), pad.GetNetCode(),
+                         (pad_position.x, pad_position.y), pad.GetOrientationDegrees(),
+                         (size.x, size.y), (drill.x, drill.y), int(pad.GetShape()),
+                         int(pad.GetAttribute()), pad.GetLayerSet().FmtHex(), pad.IsLocked(),
+                         pad.GetLocalClearance(), pad.GetLocalSolderMaskMargin(),
+                         pad.GetLocalSolderPasteMargin(), pad.GetLocalSolderPasteMarginRatio(),
+                         pad.GetThermalGap(), pad.GetThermalSpokeAngleDegrees(), tuple(pad_shapes)))
+        models = []
+        for model in footprint.Models():
+            models.append((model.m_Filename, _vec3_state(model.m_Offset), _vec3_state(model.m_Rotation),
+                           _vec3_state(model.m_Scale), model.m_Opacity, model.m_Show))
+        graphics = sorted((_ground_plane_graphic_state(item, pcbnew) for item in footprint.GraphicalItems()),
+                          key=repr)
+        footprints.append((str(footprint.GetReference()), str(footprint.GetValueAsString()),
+                           footprint.GetFPIDAsString(),
+                           footprint.GetPath().AsString(), (position.x, position.y),
+                           footprint.GetOrientationDegrees(), int(footprint.GetLayer()),
+                           int(footprint.GetAttributes()), footprint.IsLocked(), tuple(sorted(pads)),
+                           tuple(sorted(models, key=repr)), tuple(graphics)))
+    drawings = sorted((_ground_plane_graphic_state(item, pcbnew) for item in board.GetDrawings()), key=repr)
+    return tuple(sorted(footprints, key=repr)), tuple(drawings)
+
+
 def _inspect(board, pcbnew):
     footprints = []
     for footprint in board.GetFootprints():
@@ -548,9 +615,11 @@ def execute(request):
     tidy_summary = None
     refinement = None
     cleanup = None
+    ground_plane = None
     cleanup_removed_items = []
     original_copper = None
     original_layout = None
+    original_board_geometry = None
     if operation == "inspect":
         return {"status": "ok", **_inspect(board, pcbnew)}
     if operation == "export_dsn":
@@ -607,6 +676,34 @@ def execute(request):
         cleanup["copper_changes_limited_to_selected_nets"] = cleanup["unselected_copper_preserved"]
         if not cleanup["unselected_copper_preserved"] or not cleanup["locked_copper_preserved"]:
             raise ValueError("Copper cleanup modified unselected or locked copper")
+    elif operation == "add_ground_plane":
+        from _native_ground_plane import apply as apply_ground_plane
+
+        plan = request.get("plan")
+        if not isinstance(plan, dict):
+            raise ValueError("Ground-plane operation requires a validated plan")
+        original_copper = _copper_state(board)
+        original_layout = _fixed_layout_state(board)
+        original_board_geometry = _ground_plane_source_geometry_state(board, pcbnew)
+        ground_plane = apply_ground_plane(
+            board, pcbnew, net=plan["net"], layers=tuple(plan["layers"]),
+            options={key: plan[key] for key in (
+                "edge_clearance_mm", "clearance_mm", "min_thickness_mm", "thermal_gap_mm",
+                "thermal_spoke_width_mm",
+            )},
+            protected_connections=plan["protected_connections"],
+        )
+        if not isinstance(ground_plane, dict) or ground_plane.get("status") != "ok":
+            raise ValueError("Native ground-plane operation did not return a successful report")
+        if _identity(board) != identity or original_layout != _fixed_layout_state(board):
+            raise ValueError("Ground-plane operation changed pad/net identity, footprints or text")
+        if original_board_geometry != _ground_plane_source_geometry_state(board, pcbnew):
+            raise ValueError("Ground-plane operation changed source footprint, pad, model, drawing or outline geometry")
+        if original_copper != _copper_state(board):
+            raise ValueError("Ground-plane operation removed or changed existing tracks or vias")
+        ground_plane["tracks_preserved"] = True
+        ground_plane["original_footprints_and_text_preserved"] = True
+        ground_plane["original_board_geometry_preserved"] = True
     elif operation == "place":
         placements = request["placements"]
         if not placements or set(placements) - set(identity):
@@ -718,6 +815,29 @@ def execute(request):
         # Keep SWIG wrappers alive through save, reload, and native inspection.
         # The list is local only and never enters the JSON response.
         cleanup_removed_items.clear()
+    if ground_plane is not None:
+        from _native_ground_plane import verify as verify_ground_plane_after_reload
+
+        if (_copper_state(board) != _copper_state(reloaded)
+                or original_layout != _fixed_layout_state(reloaded)
+                or _identity(reloaded) != identity):
+            raise ValueError("Saved ground-plane board changed tracks, vias, footprints, text or pad/net identity")
+        if original_board_geometry != _ground_plane_source_geometry_state(reloaded, pcbnew):
+            raise ValueError(
+                "Saved ground-plane board changed source footprint, pad, model, drawing or outline geometry"
+            )
+        verification = verify_ground_plane_after_reload(
+            reloaded, pcbnew, ground_plane, net=request["plan"]["net"],
+            protected_connections=request["plan"]["protected_connections"],
+        )
+        if not isinstance(verification, dict) or verification.get("status") != "ok":
+            raise ValueError("Saved ground-plane board failed fill geometry or connectivity verification")
+        ground_plane.update(verification)
+        ground_plane["tracks_preserved"] = True
+        ground_plane["original_footprints_and_text_preserved"] = True
+        ground_plane["original_board_geometry_preserved"] = True
+        result["ground_plane"] = ground_plane
+        result["silkscreen"] = _reference_conflict_report(reloaded, pcbnew, 0, 0)
     return result
 
 

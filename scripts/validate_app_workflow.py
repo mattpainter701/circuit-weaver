@@ -304,6 +304,55 @@ def verify_cleanup(payload: dict, board: Path, source: Path, expected_connection
             "Cleaned board failed native silkscreen verification")
 
 
+def verify_ground_plane(payload: dict, board: Path, source: Path, plan: dict) -> None:
+    """Require saved native fill and preserved routes for the exact final PCB."""
+    require(payload.get("status") == "ok" and payload.get("output_kind") == "ground_plane_kicad_board",
+            "Ground-plane operation produced no native board")
+    require(payload.get("source_sha256") == digest(source),
+            "Ground plane refers to different source board bytes")
+    drc = payload.get("drc", {})
+    require(drc.get("status") == "ok" and drc.get("passed") is True and drc.get("blocker_count") == 0,
+            "Ground-plane board did not pass full native DRC")
+    require(Path(drc.get("board", "")).resolve() == board.resolve(), "Final DRC refers to a different board")
+    require(drc.get("board_sha256") == digest(board), "Final DRC does not match final board bytes")
+    plane = payload.get("ground_plane", {})
+    for key in ("tracks_preserved", "original_footprints_and_text_preserved",
+                "original_board_geometry_preserved", "saved_fill_geometry_verified",
+                "saved_connectivity_verified"):
+        require(plane.get(key) is True, f"Native ground plane did not confirm {key.replace('_', ' ')}")
+    require(plane.get("net") == plan["net"] and plane.get("layers") == plan["layers"],
+            "Ground-plane net or layers disagree with the input plan")
+    require(plane.get("added_zones") == len(plan["layers"])
+            and plane.get("filled_zones") == len(plan["layers"]), "Ground plane has missing or unfilled zones")
+    area = plane.get("filled_area_mm2")
+    require(isinstance(area, (int, float)) and not isinstance(area, bool)
+            and math.isfinite(area) and area > 0,
+            "Ground plane has no native filled copper area")
+    stats = plane.get("zone_stats")
+    require(isinstance(stats, list) and len(stats) == len(plan["layers"])
+            and all(isinstance(row, dict) and isinstance(row.get("polygon_count"), int)
+                    and not isinstance(row["polygon_count"], bool) and row["polygon_count"] > 0
+                    and row.get("island_count") == 0 and isinstance(row.get("polygon_sha256"), str)
+                    and re.fullmatch(r"[0-9a-f]{64}", row["polygon_sha256"])
+                    for row in stats), "Ground plane lacks verified filled polygon inventory")
+    anchors = plane.get("zone_connected_copper_counts")
+    require(isinstance(anchors, list) and len(anchors) == len(plan["layers"])
+            and all(isinstance(count, int) and not isinstance(count, bool) and count > 0 for count in anchors),
+            "Ground plane lacks native copper connectivity")
+    require(plane.get("island_count") == 0, "Ground plane contains unconnected copper islands")
+    rows = plane.get("protected_connections")
+    require(isinstance(rows, list) and len(rows) == len(plan["protected_connections"]),
+            "Native ground-plane report does not cover every protected connection")
+    endpoints = ("from_ref", "from_pad", "to_ref", "to_pad")
+    require(all(isinstance(item, dict) and item.get("status") == "preserved"
+                and all(item.get(key) == connection[key] for key in endpoints)
+                for item, connection in zip(rows, plan["protected_connections"])),
+            "Native ground-plane report contains an unverified protected connection")
+    silkscreen = payload.get("silkscreen", {})
+    require(silkscreen.get("unresolved_count") == 0 and silkscreen.get("remaining_conflict_count") == 0,
+            "Ground-plane board failed native silkscreen verification")
+
+
 def verify_preview(payload: dict, board: Path, svg: Path, side: str, appearance: str = "layers") -> None:
     """Bind a native preview to the exact routed board and SVG bytes."""
     require(payload.get("status") == "ok", "Native board preview failed")
@@ -704,6 +753,31 @@ def load_cleanup_plan_in_runtime(path: Path, *, cwd: Path, env: dict[str, str]) 
     return payload
 
 
+def load_ground_plane_plan_in_runtime(path: Path, *, cwd: Path, env: dict[str, str]) -> dict:
+    """Validate the zone plan in the same source or installed package as the CLI."""
+    code = (
+        "import json, sys; "
+        "from circuit_weaver.pcb_ground_plane import load_ground_plane_plan; "
+        "print(json.dumps(load_ground_plane_plan(sys.argv[1])))"
+    )
+    process = subprocess.run(
+        [sys.executable, "-c", code, str(path)], cwd=cwd, env=env,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if process.returncode != 0:
+        detail = (process.stderr or process.stdout).strip()
+        raise ValueError(f"Ground-plane plan preflight failed: {detail}")
+    try:
+        payload = json.loads(process.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Ground-plane plan preflight returned invalid JSON") from exc
+    expected = {"net", "layers", "edge_clearance_mm", "clearance_mm", "min_thickness_mm",
+                "thermal_gap_mm", "thermal_spoke_width_mm", "protected_connections"}
+    if not isinstance(payload, dict) or set(payload) != expected:
+        raise ValueError("Ground-plane plan preflight returned an invalid plan")
+    return payload
+
+
 async def mcp_smoke(spec: Path, output: Path, env: dict) -> dict:
     """Exercise the real JSON-RPC stdio server, including error propagation."""
     import yaml
@@ -762,6 +836,8 @@ def main() -> int:
                         help="Opt in to local return-path shortcuts using a strict JSON connections plan")
     parser.add_argument("--cleanup-plan", type=Path,
                         help="Opt in to native copper cleanup using a strict nets/protected-connections plan")
+    parser.add_argument("--ground-plane", type=Path,
+                        help="Opt in to native filled ground zones using a strict JSON plane plan")
     parser.add_argument("--route-timeout", type=int, default=180)
     parser.add_argument("--clearance", type=float, default=0.127,
                         help="Prototype default clearance in mm (0.127 accommodates the sample USB connector)")
@@ -816,6 +892,8 @@ def main() -> int:
         return_plan_hash = digest(return_plan_source) if return_plan_source else None
         cleanup_plan_source = args.cleanup_plan.resolve() if args.cleanup_plan else None
         cleanup_plan_hash = digest(cleanup_plan_source) if cleanup_plan_source else None
+        ground_plan_source = args.ground_plane.resolve() if args.ground_plane else None
+        ground_plan_hash = digest(ground_plan_source) if ground_plan_source else None
         if return_plan_source is not None:
             try:
                 return_plan = load_return_plan_in_runtime(
@@ -834,6 +912,15 @@ def main() -> int:
                 raise ValueError(f"invalid --cleanup-plan: {exc}") from exc
         else:
             cleanup_plan = None
+        if ground_plan_source is not None:
+            try:
+                ground_plan = load_ground_plane_plan_in_runtime(
+                    ground_plan_source, cwd=demo.cwd, env=demo.env,
+                )
+            except (OSError, ValueError) as exc:
+                raise ValueError(f"invalid --ground-plane plan: {exc}") from exc
+        else:
+            ground_plan = None
         summary.update(prepare_working_spec(source_spec, spec, args.width, args.height))
         width, height = summary["board_size_effective_mm"]
         demo.command("doctor", ["doctor"], json_output=False)
@@ -863,7 +950,8 @@ def main() -> int:
                 "Native reference cleanup left unresolved collisions")
         require(summary["silkscreen"].get("remaining_conflict_count") == 0,
                 "Native silkscreen conflict check did not pass")
-        routed_base = output / ("routed-base.kicad_pcb" if return_plan is not None or cleanup_plan is not None
+        routed_base = output / ("routed-base.kicad_pcb" if any(
+            plan is not None for plan in (return_plan, cleanup_plan, ground_plan))
                                 else "routed.kicad_pcb")
         routing = demo.command("route", [
             "autoroute", str(output / "placed.kicad_pcb"), "--routed-board", str(routed_base),
@@ -877,7 +965,8 @@ def main() -> int:
             shutil.copy2(return_plan_source, plan_copy)
             require(digest(plan_copy) == return_plan_hash,
                     "Copied return-path plan does not match the input plan")
-            refined = output / ("routed-refined.kicad_pcb" if cleanup_plan is not None else "routed.kicad_pcb")
+            refined = output / ("routed-refined.kicad_pcb" if cleanup_plan is not None or ground_plan is not None
+                                else "routed.kicad_pcb")
             refinement = demo.command("refine-return-paths", [
                 "refine-pcb", str(routed_base), "-o", str(refined), "--connections", str(plan_copy),
             ])
@@ -892,7 +981,9 @@ def main() -> int:
             shutil.copy2(cleanup_plan_source, cleanup_plan_copy)
             require(digest(cleanup_plan_copy) == cleanup_plan_hash,
                     "Copied copper-cleanup plan does not match the input plan")
-            cleanup_output = output / "routed.kicad_pcb"
+            cleanup_source = routed
+            cleanup_output = output / ("routed-cleaned.kicad_pcb" if ground_plan is not None
+                                       else "routed.kicad_pcb")
             cleaned = demo.command("cleanup-copper", [
                 "cleanup-pcb", str(routed), "-o", str(cleanup_output), "--plan", str(cleanup_plan_copy),
             ])
@@ -904,9 +995,28 @@ def main() -> int:
                     "Workflow modified the input copper-cleanup plan")
             summary["copper_cleanup"] = cleaned
             routed = cleanup_output
+        if ground_plan is not None:
+            ground_plan_copy = output / "ground-plane.json"
+            shutil.copy2(ground_plan_source, ground_plan_copy)
+            require(digest(ground_plan_copy) == ground_plan_hash,
+                    "Copied ground-plane plan does not match the input plan")
+            ground_source = routed
+            ground_output = output / "routed.kicad_pcb"
+            grounded = demo.command("ground-plane", [
+                "plane-pcb", str(ground_source), "-o", str(ground_output), "--plan", str(ground_plan_copy),
+            ])
+            verify_ground_plane(grounded, ground_output, ground_source, ground_plan)
+            summary["ground_plane_plan"] = {"path": ground_plan_copy.name,
+                                           "source_sha256": ground_plan_hash,
+                                           "copied_sha256": digest(ground_plan_copy)}
+            require(digest(ground_plan_source) == ground_plan_hash,
+                    "Workflow modified the input ground-plane plan")
+            summary["ground_plane"] = grounded
+            routed = ground_output
         summary["routing_drc"] = routing["drc"]
-        summary["drc"] = cleaned["drc"] if cleanup_plan is not None else (
-            refinement["drc"] if return_plan is not None else routing["drc"]
+        summary["drc"] = grounded["drc"] if ground_plan is not None else (
+            cleaned["drc"] if cleanup_plan is not None else (
+                refinement["drc"] if return_plan is not None else routing["drc"])
         )
         delivery = demo.command("assembly-gate", ["export-jlcpcb", str(spec), "--pcb", str(routed),
                                             "-o", str(output / "delivery")], exit_code=(0, 1))
@@ -970,17 +1080,18 @@ def main() -> int:
                     "Workflow modified the input copper-cleanup plan")
             require(digest(cleanup_plan_copy) == cleanup_plan_hash,
                     "Copied copper-cleanup plan does not match the input plan")
-        if return_plan is None and cleanup_plan is None:
-            verify_routing(routing, routed)
-        elif return_plan is not None and cleanup_plan is None:
-            verify_refinement(refinement, routed, routed_base, len(return_plan["connections"]))
-        elif return_plan is not None:
-            verify_refinement(refinement, output / "routed-refined.kicad_pcb", routed_base,
-                              len(return_plan["connections"]))
-            verify_cleanup(cleaned, routed, output / "routed-refined.kicad_pcb",
-                           len(cleanup_plan["protected_connections"]))
-        else:
-            verify_cleanup(cleaned, routed, routed_base, len(cleanup_plan["protected_connections"]))
+        if ground_plan_source is not None:
+            require(digest(ground_plan_source) == ground_plan_hash,
+                    "Workflow modified the input ground-plane plan")
+            require(digest(ground_plan_copy) == ground_plan_hash,
+                    "Copied ground-plane plan does not match the input plan")
+        verify_routing(routing, routed_base)
+        if return_plan is not None:
+            verify_refinement(refinement, refined, routed_base, len(return_plan["connections"]))
+        if cleanup_plan is not None:
+            verify_cleanup(cleaned, cleanup_output, cleanup_source, len(cleanup_plan["protected_connections"]))
+        if ground_plan is not None:
+            verify_ground_plane(grounded, ground_output, ground_source, ground_plan)
         summary.update(status="PASS — prototype workflow validated; manufacturing export correctly blocked",
                        source_unchanged=True, board_sha256=digest(routed))
     except Exception as exc:
