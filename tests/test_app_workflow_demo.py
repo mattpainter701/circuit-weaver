@@ -1,10 +1,14 @@
 """The demo must reject plausible routing results for unverified board bytes."""
 
+import base64
 import csv
+import hashlib
 import importlib.util
 import json
+import struct
 import subprocess
 import zipfile
+import zlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -233,6 +237,144 @@ def test_demo_rejects_preview_for_stale_board_or_changed_svg(tmp_path):
     svg.write_text('<svg xmlns="http://www.w3.org/2000/svg"><path/></svg>')
     with pytest.raises(RuntimeError, match="SVG bytes"):
         _demo.verify_preview(payload, board, svg, "front")
+
+
+def _assembly_preview_fixture(tmp_path):
+    board = tmp_path / "routed.kicad_pcb"
+    board.write_text("board with native models")
+    model_file = tmp_path / "Part.step"
+    model_file.write_text("native model")
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff)
+
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 3, 8, 6, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(b"\x00" + b"\x00\x00\x00\xff" * 2
+                                          + b"\x00" + b"\x00\x00\x00\xff" * 2
+                                          + b"\x00" + b"\x00\x00\x00\xff" * 2))
+           + chunk(b"IEND", b""))
+    encoded = base64.b64encode(png).decode("ascii")
+    svg = tmp_path / "assembly.svg"
+    png_hash = hashlib.sha256(png).hexdigest()
+    svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="2px" height="3px" viewBox="0 0 2 3" '
+        'data-appearance="assembly" data-side="front">'
+        f'<metadata source_sha256="{_demo.digest(board)}" png_sha256="{png_hash}" '
+        'png_width="2" png_height="3" side="front" appearance="assembly" '
+        'model_expected="1" model_resolved="1" model_missing="0" '
+        'component_expected="1" component_represented="1" component_missing="0"/>'
+        f'<image id="assembled-board-models" x="0" y="0" width="2" height="3" '
+        f'preserveAspectRatio="xMidYMid meet" href="data:image/png;base64,{encoded}"/>'
+        '</svg>', encoding="utf-8",
+    )
+    payload = {
+        "status": "ok", "appearance": "assembly", "source_sha256": _demo.digest(board),
+        "svg_sha256": _demo.digest(svg), "output_path": str(svg), "side": "front", "prototype": True,
+        "embedded_png_sha256": png_hash, "png_width": 2, "png_height": 3,
+        "component_coverage": {"expected": 1, "represented": 1, "missing": 0,
+                               "missing_references": [],
+                               "components": [{"reference": "U1", "required": True, "visible_model_count": 1}]},
+        "model_preview": {
+            "status": "ok", "source_sha256": _demo.digest(board), "png_sha256": png_hash, "side": "top",
+            "png_width": 2, "png_height": 3,
+            "model_coverage": {"expected": 1, "resolved": 1, "missing": 0,
+                               "models": [{"source_path": "${KICAD9_3DMODEL_DIR}/Part.step",
+                                           "resolved_path": str(model_file), "sha256": _demo.digest(model_file)}]},
+        },
+    }
+    return board, svg, payload
+
+
+def test_demo_verifies_self_contained_assembly_preview(tmp_path):
+    board, svg, payload = _assembly_preview_fixture(tmp_path)
+
+    _demo.verify_preview(payload, board, svg, "front", "assembly")
+
+
+@pytest.mark.parametrize("mutation, message", [
+    ("missing_models", "no native 3D models"),
+    ("unresolved_model", "missing or unresolved models"),
+    ("missing_image", "exactly one embedded model image"),
+    ("external_image", "not embedded as a PNG data URL"),
+    ("invalid_png_base64", "invalid base64"),
+    ("wrong_png_hash", "hash does not match"),
+    ("stale_model", "source changed after rendering"),
+    ("missing_component", "omits one or more populated electrical components"),
+])
+def test_demo_rejects_invalid_assembly_preview_evidence(tmp_path, mutation, message):
+    board, svg, payload = _assembly_preview_fixture(tmp_path)
+    if mutation == "missing_models":
+        payload["model_preview"]["model_coverage"].update(expected=0, resolved=0, missing=0, models=[])
+    elif mutation == "unresolved_model":
+        payload["model_preview"]["model_coverage"].update(expected=2, resolved=1, missing=1)
+        payload["model_preview"]["model_coverage"]["models"].append({"resolved_path": None})
+    elif mutation == "missing_image":
+        svg.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" data-appearance="assembly" data-side="front"/>',
+            encoding="utf-8",
+        )
+        payload["svg_sha256"] = _demo.digest(svg)
+    elif mutation == "external_image":
+        svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" data-appearance="assembly" data-side="front">'
+                       '<image id="assembled-board-models" href="https://example.com/model.png"/></svg>',
+                       encoding="utf-8")
+        payload["svg_sha256"] = _demo.digest(svg)
+    elif mutation == "invalid_png_base64":
+        svg.write_text(svg.read_text(encoding="utf-8").replace(
+            "data:image/png;base64,", "data:image/png;base64,not-base64!"
+        ), encoding="utf-8")
+        payload["svg_sha256"] = _demo.digest(svg)
+    elif mutation == "wrong_png_hash":
+        payload["embedded_png_sha256"] = "0" * 64
+    elif mutation == "stale_model":
+        Path(payload["model_preview"]["model_coverage"]["models"][0]["resolved_path"]).write_text("changed")
+    elif mutation == "missing_component":
+        payload["component_coverage"].update(expected=2, represented=1, missing=1)
+
+    with pytest.raises(RuntimeError, match=message):
+        _demo.verify_preview(payload, board, svg, "front", "assembly")
+
+
+def test_demo_rejects_assembly_svg_external_resource_references(tmp_path):
+    board, svg, payload = _assembly_preview_fixture(tmp_path)
+    svg.write_text(svg.read_text(encoding="utf-8").replace(
+        "data-appearance=\"assembly\"", "data-appearance=\"assembly\" href=\"https://example.com/a.svg\""
+    ), encoding="utf-8")
+    payload["svg_sha256"] = _demo.digest(svg)
+
+    with pytest.raises(RuntimeError, match="external resource reference"):
+        _demo.verify_preview(payload, board, svg, "front", "assembly")
+
+
+def test_demo_rejects_stale_assembly_board_binding(tmp_path):
+    board, svg, payload = _assembly_preview_fixture(tmp_path)
+    board.write_text("changed after assembly render")
+
+    with pytest.raises(RuntimeError, match="different board bytes"):
+        _demo.verify_preview(payload, board, svg, "front", "assembly")
+
+
+@pytest.mark.parametrize("change, message", [
+    ("shift_image", "does not preserve the PNG aspect ratio"),
+    ("conflicting_fallback", "conflicting SVG2 and xlink image references"),
+])
+def test_demo_rejects_assembly_svg_frame_or_fallback_mismatch(tmp_path, change, message):
+    board, svg, payload = _assembly_preview_fixture(tmp_path)
+    content = svg.read_text(encoding="utf-8")
+    if change == "shift_image":
+        content = content.replace('x="0" y="0"', 'x="1" y="0"')
+    else:
+        content = content.replace(
+            'xmlns="http://www.w3.org/2000/svg"',
+            'xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"',
+        ).replace(
+            'href="data:image/png;base64,',
+            'xlink:href="data:image/png;base64,AAAA" href="data:image/png;base64,',
+        )
+    svg.write_text(content, encoding="utf-8")
+    payload["svg_sha256"] = _demo.digest(svg)
+
+    with pytest.raises(RuntimeError, match=message):
+        _demo.verify_preview(payload, board, svg, "front", "assembly")
 
 
 def test_demo_retains_captured_subprocess_error_detail():

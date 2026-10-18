@@ -4000,7 +4000,12 @@ def main() -> None:
     preview_p.add_argument("--output", "-o", required=True, help="Standalone .svg output")
     preview_p.add_argument("--side", choices=["front", "back"], default="front")
     preview_p.add_argument(
-        "--render-3d", action="store_true", help="Also render a native assembly-model PNG (KiCad 9+)"
+        "--appearance", choices=["layers", "assembly"], default="layers",
+        help="Render native vector layers (default) or a self-contained assembly view with embedded models",
+    )
+    preview_p.add_argument(
+        "--render-3d", action="store_true",
+        help="Legacy: also render a native assembly-model PNG; with --appearance assembly, use its embedded render",
     )
     preview_p.add_argument("--timeout", type=float, default=120)
     preview_p.add_argument("--overwrite", action="store_true")
@@ -5344,6 +5349,16 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
         raise SystemExit(0 if result["status"] == "ok" else 1)
 
     if args.command == "preview-pcb":
+        if args.appearance == "assembly":
+            from .pcb_assembly_preview import render_board_assembly
+
+            result = _run_with_stderr_capture(lambda: render_board_assembly(
+                args.kicad_pcb, args.output, kicad_cli=args.kicad_cli_path, side=args.side,
+                timeout_seconds=args.timeout, overwrite=args.overwrite,
+            ))
+            _print_json(result)
+            raise SystemExit(0 if result["status"] == "ok" else 1)
+
         from .pcb_preview import render_board_preview
 
         result = _run_with_stderr_capture(lambda: render_board_preview(

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
+import binascii
 import csv
 import hashlib
 import html
@@ -15,13 +17,16 @@ import io
 import json
 import math
 import os
+import re
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
 import zipfile
+import zlib
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import yaml
@@ -248,8 +253,8 @@ def verify_routing(payload: dict, board: Path) -> None:
     require(drc.get("board_sha256") == digest(board), "DRC does not match final board bytes")
 
 
-def verify_preview(payload: dict, board: Path, svg: Path, side: str) -> None:
-    """Bind a populated native preview to the exact routed board and SVG bytes."""
+def verify_preview(payload: dict, board: Path, svg: Path, side: str, appearance: str = "layers") -> None:
+    """Bind a native preview to the exact routed board and SVG bytes."""
     require(payload.get("status") == "ok", "Native board preview failed")
     require(payload.get("source_sha256") == digest(board), "Preview refers to different board bytes")
     require(payload.get("svg_sha256") == digest(svg), "Preview hash does not match SVG bytes")
@@ -257,15 +262,166 @@ def verify_preview(payload: dict, board: Path, svg: Path, side: str) -> None:
     require(payload.get("prototype") is True, "Preview omitted its review-only classification")
     root = ET.parse(svg).getroot()
     require(root.tag == "{http://www.w3.org/2000/svg}svg", "Preview is not an SVG document")
-    require(payload.get("outline_count", 0) > 0, "Preview has no actual board outline")
-    require(bool(payload.get("layers")), "Preview has no native layer inventory")
-    model = payload.get("model_preview")
-    if model is not None:
-        require(model.get("status") == "ok", "Requested model preview failed")
+    if appearance == "assembly":
+        require(payload.get("appearance") == "assembly", "Preview does not report assembly appearance")
+        require(root.get("data-appearance") == "assembly", "SVG is not marked as an assembly preview")
+        require(root.get("data-side") == side, "Assembly SVG shows the wrong board side")
+        require(payload.get("model_preview", {}).get("status") == "ok", "Assembly model render failed")
+        model = payload["model_preview"]
         require(model.get("source_sha256") == digest(board), "Model render refers to different board bytes")
-        png = Path(model.get("output_path", ""))
-        require(png.is_file() and png.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"), "Model render is not a PNG")
-        require(model.get("png_sha256") == digest(png), "Model render hash does not match PNG bytes")
+        coverage = model.get("model_coverage")
+        require(isinstance(coverage, dict), "Assembly preview omitted model coverage")
+        expected = coverage.get("expected")
+        resolved = coverage.get("resolved")
+        missing = coverage.get("missing")
+        require(isinstance(expected, int) and not isinstance(expected, bool) and expected > 0,
+                "Assembly preview found no native 3D models")
+        require(isinstance(resolved, int) and not isinstance(resolved, bool),
+                "Assembly model resolution count is invalid")
+        require(isinstance(missing, int) and not isinstance(missing, bool),
+                "Assembly missing model count is invalid")
+        require(resolved == expected and missing == 0, "Assembly preview has missing or unresolved models")
+        models = coverage.get("models")
+        require(isinstance(models, list) and len(models) == expected,
+                "Assembly model coverage inventory is incomplete")
+        require(all(isinstance(item, dict) and item.get("resolved_path") for item in models),
+                "Assembly model inventory contains an unresolved model")
+        for item in models:
+            model_path = Path(item["resolved_path"])
+            require(model_path.is_file(), "Assembly model source file is missing")
+            require(item.get("sha256") == digest(model_path), "Assembly model source changed after rendering")
+        components = payload.get("component_coverage")
+        require(isinstance(components, dict), "Assembly preview omitted component coverage")
+        component_expected = components.get("expected")
+        component_represented = components.get("represented")
+        component_missing = components.get("missing")
+        require(isinstance(component_expected, int) and not isinstance(component_expected, bool)
+                and component_expected > 0, "Assembly preview found no populated electrical components")
+        require(isinstance(component_represented, int) and not isinstance(component_represented, bool)
+                and isinstance(component_missing, int) and not isinstance(component_missing, bool),
+                "Assembly component coverage counts are invalid")
+        require(component_represented == component_expected and component_missing == 0,
+                "Assembly preview omits one or more populated electrical components")
+        require(components.get("missing_references") == [],
+                "Assembly preview has components without visible native models")
+        component_records = components.get("components")
+        require(isinstance(component_records, list), "Assembly component coverage inventory is missing")
+        references = [str(item.get("reference", "")).strip() for item in component_records
+                      if isinstance(item, dict)]
+        require(len(references) == len(component_records) and all(references),
+                "Assembly component coverage inventory is malformed")
+        require(len(references) == len(set(references)), "Assembly component coverage has duplicate references")
+        required_components = [item for item in component_records if item.get("required") is True]
+        require(len(required_components) == component_expected,
+                "Assembly required component inventory disagrees with expected count")
+        require(all(isinstance(item.get("visible_model_count"), int)
+                    and not isinstance(item.get("visible_model_count"), bool)
+                    and item["visible_model_count"] > 0 for item in required_components),
+                "Assembly preview omits one or more populated electrical components")
+        require(all(item.get("required") is True or item.get("required") is False
+                    for item in component_records), "Assembly component required flags are invalid")
+
+        image_nodes = [node for node in root.iter() if node.tag == "{http://www.w3.org/2000/svg}image"]
+        require(len(image_nodes) == 1 and image_nodes[0].get("id") == "assembled-board-models",
+                "Assembly SVG must contain exactly one embedded model image")
+        image_href = image_nodes[0].get("href") or image_nodes[0].get("{http://www.w3.org/1999/xlink}href")
+        require(isinstance(image_href, str) and image_href.startswith("data:image/png;base64,"),
+                "Assembly model image is not embedded as a PNG data URL")
+        xlink_href = image_nodes[0].get("{http://www.w3.org/1999/xlink}href")
+        require(xlink_href is None or xlink_href == image_href,
+                "Assembly SVG has conflicting SVG2 and xlink image references")
+        try:
+            png_bytes = base64.b64decode(image_href.partition(",")[2], validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise RuntimeError("Assembly model image contains invalid base64") from exc
+        require(png_bytes.startswith(b"\x89PNG\r\n\x1a\n"), "Embedded assembly image is not a PNG")
+        offset = 8
+        width = height = None
+        seen_idat = seen_iend = False
+        while offset < len(png_bytes):
+            require(len(png_bytes) - offset >= 12, "Embedded assembly PNG has a truncated chunk")
+            length = struct.unpack_from(">I", png_bytes, offset)[0]
+            end = offset + 8 + length
+            require(end + 4 <= len(png_bytes), "Embedded assembly PNG has a truncated chunk")
+            chunk_type = png_bytes[offset + 4:offset + 8]
+            chunk_data = png_bytes[offset + 8:end]
+            crc = struct.unpack_from(">I", png_bytes, end)[0]
+            require((zlib.crc32(chunk_type + chunk_data) & 0xffffffff) == crc,
+                    "Embedded assembly PNG has an invalid chunk checksum")
+            if offset == 8:
+                require(chunk_type == b"IHDR" and length == 13,
+                        "Embedded assembly PNG has an invalid header")
+                width, height = struct.unpack_from(">II", chunk_data)
+            if chunk_type == b"IDAT":
+                seen_idat = True
+            if chunk_type == b"IEND":
+                require(length == 0 and end + 4 == len(png_bytes),
+                        "Embedded assembly PNG has invalid trailing data")
+                seen_iend = True
+                break
+            offset = end + 4
+        require(seen_idat and seen_iend, "Embedded assembly PNG is incomplete")
+        require(width is not None and height is not None, "Embedded assembly PNG has no dimensions")
+        require(width > 0 and height > 0, "Embedded assembly PNG has invalid dimensions")
+        png_hash = hashlib.sha256(png_bytes).hexdigest()
+        require(payload.get("embedded_png_sha256") == png_hash,
+                "Embedded assembly PNG hash does not match renderer evidence")
+        require(model.get("png_sha256") == png_hash, "Model render hash does not match embedded PNG bytes")
+        require(model.get("png_width") == width and model.get("png_height") == height,
+                "Model render dimensions do not match embedded PNG bytes")
+        require(payload.get("png_width") == width and payload.get("png_height") == height,
+                "Assembly SVG dimensions do not match embedded PNG bytes")
+        expected_model_side = "top" if side == "front" else "bottom"
+        require(model.get("side") == expected_model_side, "Model render shows the wrong board side")
+        require(root.get("width") == f"{width}px" and root.get("height") == f"{height}px",
+                "Assembly SVG frame dimensions do not match the embedded PNG")
+        require(root.get("viewBox") == f"0 0 {width} {height}",
+                "Assembly SVG viewBox does not match the embedded PNG")
+        require(image_nodes[0].get("x") == "0" and image_nodes[0].get("y") == "0"
+                and image_nodes[0].get("width") == str(width)
+                and image_nodes[0].get("height") == str(height)
+                and image_nodes[0].get("preserveAspectRatio", "xMidYMid meet").endswith("meet"),
+                "Assembly image does not preserve the PNG aspect ratio in the SVG frame")
+        metadata_nodes = [node for node in root.iter()
+                          if node.tag == "{http://www.w3.org/2000/svg}metadata"]
+        require(len(metadata_nodes) == 1, "Assembly SVG metadata is missing or duplicated")
+        metadata = metadata_nodes[0]
+        require(metadata.get("source_sha256") == digest(board), "Assembly SVG metadata refers to different board bytes")
+        require(metadata.get("png_sha256") == png_hash, "Assembly SVG metadata PNG hash is stale")
+        require(metadata.get("png_width") == str(width) and metadata.get("png_height") == str(height),
+                "Assembly SVG metadata dimensions are stale")
+        require(metadata.get("side") == side and metadata.get("appearance") == "assembly",
+                "Assembly SVG metadata has the wrong view")
+        require(metadata.get("model_expected") == str(expected)
+                and metadata.get("model_resolved") == str(resolved)
+                and metadata.get("model_missing") == str(missing),
+                "Assembly SVG metadata model counts are stale")
+        require(metadata.get("component_expected") == str(component_expected)
+                and metadata.get("component_represented") == str(component_represented)
+                and metadata.get("component_missing") == str(component_missing),
+                "Assembly SVG metadata component counts are stale")
+        require(payload.get("output_path") and Path(payload["output_path"]).resolve() == svg.resolve(),
+                "Assembly preview points to a different SVG")
+        for node in root.iter():
+            for name, value in node.attrib.items():
+                if name.rsplit("}", 1)[-1] in {"href", "src"}:
+                    require(value.startswith("data:image/png;base64,") or value.startswith("#"),
+                            "Assembly SVG contains an external resource reference")
+        svg_text = svg.read_text(encoding="utf-8")
+        require(not re.search(r"url\(\s*(?!['\"]?#)(?:https?:|file:|//|[^)]+)", svg_text, re.I),
+                "Assembly SVG contains an external CSS resource reference")
+    else:
+        require(appearance == "layers", f"Unsupported preview appearance: {appearance}")
+        require(payload.get("outline_count", 0) > 0, "Preview has no actual board outline")
+        require(bool(payload.get("layers")), "Preview has no native layer inventory")
+        model = payload.get("model_preview")
+        if model is not None:
+            require(model.get("status") == "ok", "Requested model preview failed")
+            require(model.get("source_sha256") == digest(board), "Model render refers to different board bytes")
+            png = Path(model.get("output_path", ""))
+            require(png.is_file() and png.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"),
+                    "Model render is not a PNG")
+            require(model.get("png_sha256") == digest(png), "Model render hash does not match PNG bytes")
 
 
 def verify_blocked_assembly_delivery(payload: dict, delivery_dir: Path) -> dict:
@@ -375,13 +531,17 @@ class Demo:
             f"<a href='{s['name']}.stderr.log'>diagnostics</a></td></tr>" for s in self.steps
         )
         preview_views = [
-            ("models", "Assembly models", "board-preview.png",
-             "Native KiCad model render with the library's physical component bodies."),
+            ("assembly", "Assembly view", "board-preview.svg",
+             "Native 3D component models embedded in a standalone SVG.")
+            if summary.get("preview_appearance") == "assembly" else
             ("front", "Front layers", "board-preview.svg",
              "Actual copper, mask openings, silkscreen and footprint body outlines from KiCad."),
-            ("back", "Back layers", "board-preview-back.svg",
-             "Back-side native geometry, mirrored as viewed from beneath the board."),
         ]
+        if (self.output / "board-layers.svg").is_file():
+            preview_views.append(("front-layers", "Front layers", "board-layers.svg",
+                                  "Native copper, mask, silkscreen and footprint geometry from KiCad."))
+        preview_views.append(("back", "Back layers", "board-preview-back.svg",
+                              "Back-side native geometry, mirrored as viewed from beneath the board."))
         available = [view for view in preview_views if (self.output / view[2]).is_file()]
         buttons = "".join(
             f'<button type="button" data-board-view="{key}" aria-pressed="{str(i == 0).lower()}">{label}</button>'
@@ -614,15 +774,20 @@ def main() -> int:
                                                "--units", "mm", "-o", str(output / "prototype-positions.csv"),
                                                str(routed)])
         summary["previews"] = {}
-        for side, filename in (("front", "board-preview.svg"), ("back", "board-preview-back.svg")):
-            model_args = ["--render-3d"] if args.render_3d and side == "front" else []
+        summary["preview_appearance"] = "assembly" if args.render_3d else "layers"
+        preview_jobs = [("front", "board-preview.svg", "assembly" if args.render_3d else "layers"),
+                        ("back", "board-preview-back.svg", "layers")]
+        if args.render_3d:
+            preview_jobs.append(("front-layers", "board-layers.svg", "layers"))
+        for key, filename, appearance in preview_jobs:
             preview = output / filename
-            payload = demo.command(f"board-preview-{side}", [
+            side = "back" if key == "back" else "front"
+            payload = demo.command(f"board-preview-{key}", [
                 "preview-pcb", str(routed), "-o", str(preview), "--side", side,
-                "--kicad-cli-path", str(cli), *model_args,
+                "--kicad-cli-path", str(cli), "--appearance", appearance,
             ])
-            verify_preview(payload, routed, preview, side)
-            summary["previews"][side] = payload
+            verify_preview(payload, routed, preview, side, appearance)
+            summary["previews"][key] = payload
         if args.mcp_smoke:
             step = {"name": "mcp", "passed": False}
             demo.steps.append(step)

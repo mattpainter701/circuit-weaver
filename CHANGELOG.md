@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Assembled board SVG previews
+
+- Add `preview-pcb --appearance assembly` to embed KiCad's actual component-model render in a self-contained SVG. Retain native model orientation, dimensions and source/model hashes; missing or hidden-only populated-component models and unavailable rendering fail clearly without replacing an existing preview.
+- Make the automated workflow's `--render-3d` mode show the assembled board in `board-preview.svg` and keep native copper, mask and silkscreen geometry in a separate `board-layers.svg` view. Validate the embedded image against the routed board and model evidence.
+
 ### Related component placement and readable references
 
 - Start support parts beside their owner's actual shared signal pads, retaining body clearances and a deterministic fallback when pad geometry is unavailable. Refine related signal support parts onto common rows or columns, and include support parts in compactness scoring for small designs while preserving placement constraints.
