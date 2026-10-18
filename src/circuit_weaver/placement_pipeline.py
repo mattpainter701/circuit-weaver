@@ -159,6 +159,7 @@ def _support_component(item: AssemblyItem) -> ComponentDef:
     # ComponentDef permits runtime metadata and may also gain declared fields
     # in newer releases.  setattr works for both representations.
     component.placement_parent_ref = item.owner_ref  # type: ignore[attr-defined]
+    component.placement_parent_pin = item.owner_pin  # type: ignore[attr-defined]
     component.placement_role = item.role or item.source_kind  # type: ignore[attr-defined]
     component.assembly_source_kind = item.source_kind  # type: ignore[attr-defined]
     has_sourcing_id = bool(str(item.mpn or "").strip() or str(item.lcsc_pn or "").strip())

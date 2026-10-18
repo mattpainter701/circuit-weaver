@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from circuit_weaver.assembly_manifest import AssemblyManifestError, build_assembly_manifest
+from circuit_weaver.assembly_manifest import AssemblyManifest, AssemblyManifestError, build_assembly_manifest
 from circuit_weaver.component_db import BypassCap, ComponentDef, PinDef, StrapConfig
 
 
@@ -47,6 +47,21 @@ def test_manifest_is_exhaustive_stable_and_reserves_explicit_refs() -> None:
 def test_manifest_assigns_reference_to_primary_without_source_ref() -> None:
     manifest = build_assembly_manifest([ComponentDef(mpn="NOREF", ref_prefix="U")])
     assert [item.reference for item in manifest.items] == ["U1"]
+
+
+def test_support_pin_intent_survives_manifest_round_trip_and_legacy_payloads():
+    owner = ComponentDef(mpn="MCU", source_ref="U2", pins=_pins(9),
+                         power_pins={"9": "VDD", "8": "GND"},
+                         bypass_caps=[BypassCap("9", "VDD", "GND", "10nF", "Capacitor_SMD:C_0402")])
+    manifest = build_assembly_manifest([owner], include_auto_bypass=False)
+    cap = next(item for item in manifest.items if item.source_kind == "bypass")
+    assert cap.owner_pin == "9"
+    restored = AssemblyManifest.from_dict(manifest.to_dict())
+    assert next(item for item in restored.items if item.reference == cap.reference).owner_pin == "9"
+    legacy = manifest.to_dict()
+    for item in legacy["items"]:
+        item.pop("owner_pin")
+    assert all(item.owner_pin == "" for item in AssemblyManifest.from_dict(legacy).items)
 
 
 def test_reordered_same_block_parts_keep_reference_bound_to_physical_identity() -> None:

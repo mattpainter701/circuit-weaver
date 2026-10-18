@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Power and decoupling routing
+
+- Retain support capacitors' intended owner pins through assembly and native placement, and consider local supply and return legs together when arranging power support parts.
+- Prefer placements with nearby readable reference-label space, using native text dimensions without shrinking labels or weakening final clearance checks.
+- Rank complete, reported-clear routed candidates by measured copper length, then via and segment counts, so a long detour cannot win solely by avoiding vias. Report per-net wire lengths in millimeters, with unsupported geometry clearly marked unavailable.
+- Use the AP62300's documented floating-enable startup by default instead of tying its 8 V maximum enable input to a higher input rail. Explicit enable-net choices remain supported.
+
 ### Coherent support placement on larger boards
 
 - Anchor support parts to their dedicated signal connections before shared supply rails, keeping reset pull-ups on the reset-pin side of an MCU. Spread equivalent decouplers among actual shared-rail pad endpoints with deterministic seeds and retained body clearance.

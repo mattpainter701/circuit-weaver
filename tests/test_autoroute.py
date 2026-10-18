@@ -18,10 +18,12 @@ from circuit_weaver.autoroute import (
     _find_kicad_cli,
     _iter_sexpr_block_spans,
     _kicad_cli_supports_specctra,
+    _measure_session_trace_lengths,
     _native_placement_variant,
     _parse_freerouting_version,
     _parse_routing_stats,
     _probe_freerouting_capabilities,
+    _routing_rank,
     _validate_specctra_artifact,
     autoroute_pcb,
     export_dsn,
@@ -319,6 +321,85 @@ def test_portfolio_publishes_best_complete_candidate_and_removes_losers(tmp_path
     assert not list(tmp_path.glob(".cw-routing-*"))
     assert result["artifact"]["path"] == str(source.with_suffix(".ses"))
     assert source.read_bytes() == original_dsn
+
+
+@pytest.mark.parametrize(("unit", "scale", "coordinate", "expected"), [
+    ("mm", 1, 5, 5), ("um", 10, 50000, 5), ("mil", 1000, 1000, 0.0254),
+    ("inch", 100, 100, 25.4), ("cm", 10, 10, 10),
+])
+def test_session_length_uses_its_own_physical_resolution(unit, scale, coordinate, expected):
+    text = f'''(session "board" (routes (resolution {unit} {scale})
+      (network_out (net "supply rail" (wire (path "F.Cu" 20 0 0 {coordinate} 0))))))'''
+    measured = _measure_session_trace_lengths(text)
+    assert measured["trace_length_mm"] == pytest.approx(expected)
+    assert measured["trace_lengths_by_net_mm"] == {"supply rail": pytest.approx(expected)}
+
+
+def test_session_length_sums_every_polyline_edge_and_net_separately():
+    text = '''(session b (routes (resolution mm 1000) (network_out
+      (net GND (wire (path F.Cu 200 0 0 3000 4000 3000 8000)))
+      (net VDD (wire (path B.Cu 200 0 0 1500 0)) (via via600 0 0)))))'''
+    measured = _measure_session_trace_lengths(text)
+    assert measured["trace_length_mm"] == 10.5
+    assert measured["trace_lengths_by_net_mm"] == {"GND": 9.0, "VDD": 1.5}
+    assert "excludes via barrels" in measured["trace_length_scope"]
+
+
+@pytest.mark.parametrize("change", [
+    lambda text: text.replace("resolution mm 1000", "resolution unknown 1000"),
+    lambda text: text.replace("resolution mm 1000", "resolution mm 0"),
+    lambda text: text.replace("resolution mm 1000", "resolution mm nan"),
+    lambda text: text.replace("resolution mm 1000", "resolution mm 1000) (resolution mm 1"),
+    lambda text: text.replace("3000 4000", "nan 4000"),
+    lambda text: text.replace("3000 4000", "3000"),
+    lambda text: text.replace("path F.Cu", "qarc F.Cu"),
+    lambda text: text.replace("resolution mm 1000", "resolution inch 1").replace(
+        "path F.Cu 200 0 0 3000 4000", "path F.Cu 200 0 0 1e308 1e308 0 0"),
+])
+def test_unmeasurable_session_geometry_cannot_look_like_zero_copper(change):
+    text = '''(session b (routes (resolution mm 1000) (network_out
+      (net GND (wire (path F.Cu 200 0 0 3000 4000))))))'''
+    measured = _measure_session_trace_lengths(change(text))
+    assert measured["trace_length_mm"] is None
+    assert measured["trace_lengths_by_net_mm"] == {}
+    assert measured["trace_length_source"] == "unavailable"
+
+
+def test_portfolio_prefers_shorter_measured_copper_over_fewer_segments(tmp_path):
+    source = _write_dsn(tmp_path)
+    lengths = ["10500 10000 11000 10500 20000 10000", "10500 10000 15000 10000 20000 10000"]
+    seen = []
+    def run(command, **kwargs):
+        if "-help" in command:
+            return mock.Mock(returncode=0, stdout="Freerouting v2.2.4\n-random_seed seed", stderr="")
+        index = len(seen)
+        text = VALID_SES.replace("10500 10000 20000 10000", lengths[index])
+        seen.append(text)
+        Path(command[command.index("-do") + 1]).write_text(text)
+        return mock.Mock(returncode=0, stdout=_routing_output(vias=0, traces=1 + index), stderr="")
+    with mock.patch("circuit_weaver.autoroute._find_freerouting_command", return_value=["freerouting"]), \
+            mock.patch("subprocess.run", side_effect=run):
+        result = autoroute_pcb(source, attempts=2)
+    assert result["search"]["selected_attempt"] == 2
+    assert result["stats"]["trace_length_mm"] < result["search"]["attempts"][0]["stats"]["trace_length_mm"]
+    assert source.with_suffix(".ses").read_text() == seen[1]
+
+
+def test_length_ranking_preserves_hard_checks_and_unknown_measurements():
+    baseline = {"incomplete": 0, "clearance_violations": 0, "vias": 0,
+                "traces": 10, "trace_length_mm": 5.0}
+    assert _routing_rank(baseline) < _routing_rank({**baseline, "incomplete": 1, "trace_length_mm": 0})
+    assert _routing_rank(baseline) < _routing_rank({**baseline, "clearance_violations": None, "trace_length_mm": 0})
+    assert _routing_rank(baseline) < _routing_rank({**baseline, "vias": 1})
+    assert _routing_rank(baseline) < _routing_rank({**baseline, "trace_length_mm": None, "traces": 1})
+
+
+def test_shorter_routing_can_trade_vias_without_losing_completeness_priority():
+    long_route = {"incomplete": 0, "clearance_violations": 0, "vias": 0,
+                  "traces": 52, "trace_length_mm": 225.57}
+    short_route = {**long_route, "vias": 3, "trace_length_mm": 203.72}
+    assert _routing_rank(short_route) < _routing_rank(long_route)
+    assert _routing_rank(long_route) < _routing_rank({**short_route, "incomplete": 1})
 
 
 def test_portfolio_retains_success_after_timeout_and_preserves_partial_status(tmp_path):

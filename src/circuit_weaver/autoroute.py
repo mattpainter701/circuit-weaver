@@ -1186,10 +1186,12 @@ def _route_specctra(
             return _result_error(f"Freerouting produced an invalid SES: {validation['reason']}", artifact=validation)
         output_text = f"{result.stdout}\n{result.stderr}"
         stats = _parse_routing_stats(output_text)
+        session_text = staging.read_text(encoding="utf-8")
+        stats.update(_measure_session_trace_lengths(session_text))
         # Recent router logs omit trace/via counts. Measure the validated
         # session itself so alternative strategies can still be ranked.
         if stats["vias"] is None or stats["traces"] is None:
-            routes = _first_sexpr_block(staging.read_text(encoding="utf-8"), "network_out") or ""
+            routes = _first_sexpr_block(session_text, "network_out") or ""
             if stats["vias"] is None:
                 stats["vias"] = len(list(_iter_sexpr_blocks(routes, "via")))
             if stats["traces"] is None:
@@ -1249,15 +1251,90 @@ def _route_specctra(
         _remove_staging_file(staging)
 
 
+def _measure_session_trace_lengths(text: str) -> dict[str, Any]:
+    """Measure all SES wire centerlines, or report unavailable without a partial sum.
+
+    SES coordinates use the routes resolution (units per declared physical
+    unit), which can differ from the DSN export's coordinate scale. Unsupported
+    wire geometry must not look shorter than a fully measured candidate.
+    """
+    unavailable = {"trace_length_mm": None, "trace_lengths_by_net_mm": {},
+                   "trace_length_source": "unavailable"}
+    routes = _first_sexpr_block(text, "routes") or ""
+    resolutions = list(_iter_sexpr_blocks(routes, "resolution"))
+    if len(resolutions) != 1:
+        return {**unavailable, "trace_length_reason": "missing or ambiguous routes resolution"}
+    resolution = _payload_tokens(_block_payload(resolutions[0], "resolution"))
+    unit_mm = {"um": 0.001, "mm": 1.0, "cm": 10.0, "mil": 0.0254, "inch": 25.4}
+    try:
+        if len(resolution) != 2:
+            raise ValueError("invalid resolution")
+        scale = float(resolution[1])
+        if not math.isfinite(scale) or scale <= 0:
+            raise ValueError("invalid resolution scale")
+        factor = unit_mm[_decode_specctra_token(resolution[0]).casefold()] / scale
+        if not math.isfinite(factor) or factor <= 0:
+            raise ValueError("invalid physical coordinate scale")
+    except (ValueError, KeyError, OverflowError):
+        return {**unavailable, "trace_length_reason": "unsupported routes resolution"}
+
+    network = _first_sexpr_block(routes, "network_out") or ""
+    net_lengths: dict[str, float] = {}
+    wire_count = 0
+    for net in _iter_sexpr_blocks(network, "net"):
+        name = _first_payload_token(net, "net")
+        if not name or name in net_lengths:
+            return {**unavailable, "trace_length_reason": "missing or duplicate routed net identity"}
+        lengths = []
+        for wire in _iter_sexpr_blocks(net, "wire"):
+            paths = list(_iter_sexpr_blocks(wire, "path"))
+            if len(paths) != 1 or _first_sexpr_block(wire, "qarc") is not None:
+                return {**unavailable, "trace_length_reason": "unsupported wire geometry"}
+            tokens = _payload_tokens(_block_payload(paths[0], "path"))
+            try:
+                if len(tokens) < 6 or (len(tokens) - 2) % 2:
+                    raise ValueError("invalid path coordinate count")
+                values = [float(value) for value in tokens[1:]]
+                if not all(math.isfinite(value) for value in values) or values[0] < 0:
+                    raise ValueError("invalid path coordinate or width")
+                coordinates = list(zip(values[1::2], values[2::2], strict=True))
+                length = math.fsum(math.dist(first, second) * factor
+                                   for first, second in zip(coordinates, coordinates[1:]))
+                if not math.isfinite(length):
+                    raise ValueError("non-finite path length")
+            except (ValueError, OverflowError):
+                return {**unavailable, "trace_length_reason": "invalid path geometry"}
+            lengths.append(length)
+            wire_count += 1
+        try:
+            net_lengths[name] = math.fsum(lengths)
+        except OverflowError:
+            return {**unavailable, "trace_length_reason": "non-finite net length"}
+    if not wire_count:
+        return {**unavailable, "trace_length_reason": "no measurable wire paths"}
+    try:
+        total = math.fsum(net_lengths.values())
+    except OverflowError:
+        return {**unavailable, "trace_length_reason": "non-finite total length"}
+    if not math.isfinite(total):
+        return {**unavailable, "trace_length_reason": "non-finite total length"}
+    return {"trace_length_mm": round(total, 6),
+            "trace_lengths_by_net_mm": {net: round(value, 6) for net, value in sorted(net_lengths.items())},
+            "trace_length_source": "validated_session_polyline_centerlines",
+            "trace_length_scope": "summed wire centerlines; excludes via barrels and copper inside pads"}
+
+
 def _routing_rank(stats: dict[str, Any]) -> tuple[float, ...]:
-    """Prefer complete routes, reported-clear routes, then fewer vias/traces.
+    """Prefer complete, reported-clear routes, then shorter copper and fewer vias.
 
     Missing measurements cannot beat a measured zero. Segment count is only
-    a final tie-breaker, not a claim about copper length or signal integrity.
+    a final tie-breaker. Copper length is geometric, not a signal-integrity or
+    local loop-inductance measurement.
     """
     return (
         stats["incomplete"],
         0 if stats["clearance_violations"] == 0 else 1,
+        stats.get("trace_length_mm") if stats.get("trace_length_mm") is not None else math.inf,
         stats["vias"] if stats["vias"] is not None else math.inf,
         stats["traces"] if stats["traces"] is not None else math.inf,
     )
@@ -1367,7 +1444,7 @@ def _route_candidates(
                 "completed_attempts": len(attempt_rows),
                 "selected_attempt": winner_index,
                 "timeout_budget_seconds": timeout_seconds,
-                "ranking": ["incomplete", "clearance_unreported", "vias", "traces"],
+                "ranking": ["incomplete", "clearance_unreported", "trace_length_mm", "vias", "traces"],
                 "attempts": attempt_rows,
             }
             if winner is None or winner_path is None:

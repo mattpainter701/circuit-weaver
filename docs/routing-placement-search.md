@@ -66,6 +66,14 @@ parent-affinity measurements. A reset pull-up follows its reset pad even when
 its other terminal shares the MCU supply. Equivalent decouplers start beside
 successive real shared-rail pad endpoints, spreading them around an IC's supply
 pins. Missing pad evidence retains the deterministic support-ring fallback.
+Assembly support records retain their authored owner pin. Native placement
+uses its actual numbered pad when its net matches, so capacitors on a shared
+rail can remain associated with different digital and analog supply pins.
+Legacy records, symbolic pin labels and ambiguous duplicate physical pads
+retain the net-based fallback. Local supply/ground endpoint pairs receive a
+placement preference without adding a global attraction between ground nets.
+These two-leg straight-line measurements are reported separately from routed
+copper length.
 For supports sharing several dedicated nets, affinity uses the worst of each
 net's nearest endpoint distances, so one short connection cannot hide a long one.
 Related support parts receive bounded cohesion and row/column alignment
@@ -162,8 +170,14 @@ by the remaining attempts, so time saved by early completion can be reused.
 Each candidate must pass existing SES syntax, semantic, source correlation,
 connection-statistics, and reported-clearance checks. Candidates with clearance
 violations or unknown completeness are rejected. Remaining candidates are ranked
-by incomplete connections, whether clearance was reported clear, via count, and
-trace segment count. Unknown metrics rank after known metrics. Ties retain the
+by incomplete connections, whether clearance was reported clear, measured copper
+centerline length, via count, and trace segment count. A shorter valid route may
+use more vias; fewer vias break equal-length ties. Length is summed
+from every validated SES wire polyline using the session's own physical
+resolution; per-net lengths are retained in the routing statistics. Via barrels
+and copper inside pads are excluded. Unsupported geometry or units report an
+unavailable measurement instead of a partial or zero length. Unknown metrics
+rank after known metrics. Ties retain the
 earlier candidate. A session with unreported clearance still requires review;
 partial results retain their partial status.
 
@@ -174,6 +188,20 @@ returned `search` object explains the selection and failed attempts. The final
 artifact is a Specctra session by default. `--routed-board` performs the import
 and native DRC automatically when the input is a real PCB. No fabrication
 readiness or controlled-impedance guarantee is inferred.
+
+Native placement also reserves nearby reference-label space with a bounded
+soft preference. It uses the actual horizontal text bounds and courtyard
+geometry, including the existing silkscreen margins and same-prefix label
+association rule. This estimate ignores other movable labels; native reference
+cleanup and physical DRC remain the publication gates. Hidden and locked
+reference fields do not receive this preference, and text size is preserved.
+
+The AP62300 default enable policy follows its documented floating-EN automatic
+startup option. This avoids connecting the 8 V maximum EN input directly to
+higher input rails. An explicit enable-net choice retains precedence; other
+regulators keep their existing default. See the manufacturer's
+[AP62300 datasheet](https://www.diodes.com/datasheet/download/AP62300.pdf),
+TSOT26 pin descriptions and absolute maximum ratings (pages 3–4).
 
 ## Real-board regression corpus
 

@@ -197,7 +197,10 @@ def _build_switching_core(
     ref = params.get("ref", "U")
     rail_name = params.get("rail_name") or f"VDD_{vout:.1f}V".replace(".", "P")
     vin_net = params.get("vin_net", "VIN")
-    en_net = params.get("en_net", vin_net)
+    if "en_net" in params:
+        en_net = params["en_net"]
+    else:
+        en_net = None if ic_data.get("enable_default") == "floating" else vin_net
     vout_ripple = params.get("vout_ripple", 0.020)
     fsw = params.get("fsw", ic_data.get("fsw", 600e3))
 
@@ -467,7 +470,7 @@ def _build_switching_core(
             pin_nets[pin_sw] = sw_net
     if pin_fb:
         pin_nets[pin_fb] = fb_net
-    if pin_en:
+    if pin_en and en_net is not None:
         pin_nets[pin_en] = en_net
     if pin_bst and topology != "buck_boost":
         pin_nets[pin_bst] = bst_net
@@ -671,7 +674,7 @@ def _build_switching_core(
         BoundaryPort(rail_name, "output"),
         BoundaryPort("GND", "passive"),
     ]
-    if pin_en:
+    if pin_en and en_net is not None:
         ports.append(BoundaryPort(en_net, "input"))
     if topology == "buck_boost" and pin_pg:
         ports.append(BoundaryPort(pg_net, "output"))
