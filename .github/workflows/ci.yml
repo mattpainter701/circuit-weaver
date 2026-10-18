@@ -255,7 +255,7 @@ jobs:
         run: |
           curl --fail --location --retry 3 https://github.com/freerouting/freerouting/releases/download/v2.4.1/freerouting-2.4.1.jar -o /tmp/freerouting-2.4.1.jar
           echo '251101c3eeac22d7e7dfcf6796603279e5d1000283eb82d8f093780f7afc6aa9  /tmp/freerouting-2.4.1.jar' | sha256sum --check
-          python -m pytest tests/test_native_pcb_workflow.py tests/test_native_pcb_preview.py tests/test_native_silkscreen.py -q
+          python -m pytest tests/test_native_pcb_workflow.py tests/test_native_pcb_preview.py tests/test_native_silkscreen.py tests/test_native_return_paths_integration.py -q
 
       - name: Validate generated schematic through routed prototype and export gate
         env:

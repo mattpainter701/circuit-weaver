@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Local return-path refinement
+
+- Add an explicit `refine-pcb` connection-plan workflow that creates short same-net copper links while retaining existing tracks, component positions and labels. Bounded local candidates must pass native geometry, full DRC and reference checks before atomic publication.
+- Allow the automated workflow to apply an optional return-path plan after routing, retain its base board and input hashes, and render the final refined assembled board.
+
 ### Power and decoupling routing
 
 - Retain support capacitors' intended owner pins through assembly and native placement, and consider local supply and return legs together when arranging power support parts.

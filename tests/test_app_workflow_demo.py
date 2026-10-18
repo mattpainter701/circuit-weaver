@@ -5,6 +5,7 @@ import csv
 import hashlib
 import importlib.util
 import json
+import os
 import struct
 import subprocess
 import zipfile
@@ -36,6 +37,44 @@ def test_demo_rejects_stale_final_board_evidence(tmp_path):
 def test_demo_rejects_partial_routing_even_with_clean_drc(tmp_path):
     with pytest.raises(RuntimeError, match="incomplete"):
         _demo.verify_routing({"routing_complete": False, "drc": {"passed": True}}, tmp_path / "board.kicad_pcb")
+
+
+def test_demo_requires_return_refinement_preservation_and_connection_evidence(tmp_path):
+    source, board = tmp_path / "routed-base.kicad_pcb", tmp_path / "routed.kicad_pcb"
+    source.write_bytes(b"base")
+    board.write_bytes(b"refined")
+    payload = {
+        "status": "ok", "output_kind": "refined_kicad_board",
+        "source_sha256": _demo.digest(source),
+        "refinement": {
+            "original_copper_preserved": True,
+            "original_footprints_and_text_preserved": True,
+            "connections": [{"status": "routed"}],
+        },
+        "silkscreen": {"unresolved_count": 0, "remaining_conflict_count": 0},
+        "drc": {"status": "ok", "passed": True, "blocker_count": 0,
+                "board": str(board), "board_sha256": _demo.digest(board)},
+    }
+    _demo.verify_refinement(payload, board, source, 1)
+    payload["refinement"]["original_copper_preserved"] = False
+    with pytest.raises(RuntimeError, match="copper preservation"):
+        _demo.verify_refinement(payload, board, source, 1)
+
+
+def test_return_plan_preflight_uses_demo_source_package_environment(tmp_path):
+    plan = tmp_path / "return-paths.json"
+    plan.write_text('{"connections":[{"from_ref":"J1","from_pad":"1",'
+                    '"to_ref":"C1","to_pad":"2"}]}', encoding="utf-8")
+    demo = _demo.Demo(tmp_path, 30)
+    stale_package = tmp_path / "stale-site-packages" / "circuit_weaver"
+    stale_package.mkdir(parents=True)
+    (stale_package / "__init__.py").write_text("", encoding="utf-8")
+    env = demo.env.copy()
+    env["PYTHONPATH"] = os.pathsep.join((str(_demo.REPO / "src"), str(stale_package.parent)))
+
+    result = _demo.load_return_plan_in_runtime(plan, cwd=demo.cwd, env=env)
+
+    assert result == {"connections": [{"from_ref": "J1", "from_pad": "1", "to_ref": "C1", "to_pad": "2"}]}
 
 
 def test_working_spec_preserves_source_bytes_without_size_overrides(tmp_path):

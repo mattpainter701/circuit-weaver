@@ -4023,6 +4023,15 @@ def main() -> None:
     place_p.add_argument("--overwrite", action="store_true")
     place_p.add_argument("--kicad-python-path", help="Python interpreter with KiCad pcbnew installed")
 
+    returns_p = subparsers.add_parser(
+        "refine-pcb", help="Add explicit local return shortcuts to a separate KiCad board copy"
+    )
+    returns_p.add_argument("kicad_pcb", help="Input .kicad_pcb board that passes full KiCad DRC")
+    returns_p.add_argument("--output", "-o", required=True, help="Separate refined .kicad_pcb output")
+    returns_p.add_argument("--connections", required=True, help="Strict JSON plan with an array of pad connections")
+    returns_p.add_argument("--overwrite", action="store_true")
+    returns_p.add_argument("--kicad-python-path", help="Python interpreter with KiCad pcbnew installed")
+
     autoroute_p = subparsers.add_parser(
         "autoroute", help="Route PCB using Freerouting (optional; requires Freerouting JAR)"
     )
@@ -5391,6 +5400,20 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
             design_spec=_load_spec_file(args.design) if args.design else None,
             tidy_references=args.tidy_references,
         ))
+        _print_json(result)
+        raise SystemExit(0 if result["status"] == "ok" else 1)
+
+    if args.command == "refine-pcb":
+        from .pcb_return_paths import load_return_plan, refine_return_paths
+
+        try:
+            plan = load_return_plan(args.connections)
+            result = _run_with_stderr_capture(lambda: refine_return_paths(
+                args.kicad_pcb, args.output, plan["connections"],
+                overwrite=args.overwrite, kicad_python_path=args.kicad_python_path,
+            ))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            result = {"status": "error", "message": str(exc)}
         _print_json(result)
         raise SystemExit(0 if result["status"] == "ok" else 1)
 
