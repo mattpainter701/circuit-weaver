@@ -11,6 +11,7 @@ Usage:
 
 from __future__ import annotations
 
+import heapq
 import json
 import logging
 import math
@@ -620,6 +621,7 @@ def _init_placements(
     placement_by_ref: dict[str, ComponentPlacement] = {}
     zone_counters: dict[str, int] = {}
     support_counters: dict[str, int] = {}
+    support_seed_counters: dict[tuple[str, str, tuple[str, ...]], int] = {}
 
     # Owners must be placed before generated support parts so bypass,
     # bootstrap, feedback, and strap parts start next to the correct IC.
@@ -653,12 +655,23 @@ def _init_placements(
             radius_y = parent.height / 2 + h / 2 + config.min_component_gap_mm + 0.6 + ring * (h + 0.6)
             x = parent.x + ox * radius_x
             y = parent.y + oy * radius_y
+            seed_index = 0
+            if placement_role.strip().casefold() == "decoupling":
+                shared_nets = _shared_support_nets(
+                    parent, getattr(comp, "placement_pad_offsets", None)
+                )
+                seed_key = (parent_ref, "decoupling", tuple(shared_nets))
+                seed_index = support_seed_counters.get(seed_key, 0)
+                support_seed_counters[seed_key] = seed_index + 1
             pad_seed = _support_seed_position(
                 parent,
                 w,
                 h,
                 getattr(comp, "placement_pad_offsets", None),
                 config,
+                endpoint_index=seed_index
+                if placement_role.strip().casefold() == "decoupling"
+                else 0,
             )
             if pad_seed is not None:
                 x, y = pad_seed
@@ -902,6 +915,15 @@ def _net_weight(net_name: str) -> float:
     return 1.0
 
 
+def _is_voltage_rail(net_name: str) -> bool:
+    return bool(
+        re.search(
+            r"(?<![A-Z0-9])\+?\d+(?:\.\d+)?V\d*(?![A-Z0-9])",
+            (net_name or "").upper(),
+        )
+    )
+
+
 def _build_connectivity_pairs(components: list[ComponentDef]) -> dict[tuple[str, str], float]:
     """Collapse shared nets into weighted functional-block attractions.
 
@@ -1015,22 +1037,38 @@ def _parent_affinity_distance(
     support parts toward arbitrary ground pads.
     """
     if parent.net_pad_offsets is not None and support.net_pad_offsets is not None:
-        common_signal_nets = [
-            net
-            for net in parent.net_pad_offsets.keys() & support.net_pad_offsets.keys()
-            if _net_weight(net) > 0
-            and parent.net_pad_offsets.get(net)
-            and support.net_pad_offsets.get(net)
-        ]
-        endpoint_distances = [
-            math.hypot(parent_point[0] - support_point[0], parent_point[1] - support_point[1])
-            for net in common_signal_nets
-            for parent_point in _rotated_net_endpoints(parent, net)
-            for support_point in _rotated_net_endpoints(support, net)
-        ]
-        if endpoint_distances:
-            return min(endpoint_distances), "pad_endpoints"
+        common_signal_nets = _shared_support_nets(parent, support.net_pad_offsets)
+        per_net_distances = []
+        for net in common_signal_nets:
+            endpoint_distances = [
+                math.hypot(parent_point[0] - support_point[0], parent_point[1] - support_point[1])
+                for parent_point in _rotated_net_endpoints(parent, net)
+                for support_point in _rotated_net_endpoints(support, net)
+            ]
+            if endpoint_distances:
+                per_net_distances.append(min(endpoint_distances))
+        if per_net_distances:
+            return max(per_net_distances), "pad_endpoints"
     return math.hypot(parent.x - support.x, parent.y - support.y), "component_centers"
+
+
+def _shared_support_nets(
+    parent: ComponentPlacement,
+    support_pad_offsets: dict[str, list[tuple[float, float]]] | None,
+) -> list[str]:
+    if parent.net_pad_offsets is None or support_pad_offsets is None:
+        return []
+    common = sorted(
+        net
+        for net in parent.net_pad_offsets.keys() & support_pad_offsets.keys()
+        if _net_weight(net) > 0
+        and parent.net_pad_offsets.get(net)
+        and support_pad_offsets.get(net)
+    )
+    dedicated_signals = [
+        net for net in common if _net_weight(net) > 0.5 and not _is_voltage_rail(net)
+    ]
+    return dedicated_signals or common
 
 
 def _support_seed_position(
@@ -1039,15 +1077,13 @@ def _support_seed_position(
     support_height: float,
     support_pad_offsets: dict[str, list[tuple[float, float]]] | None,
     config: PlacementConfig,
+    *,
+    endpoint_index: int = 0,
 ) -> tuple[float, float] | None:
-    """Choose the owner's side with the strongest shared signal pad evidence."""
+    """Seed supports at real shared pads, balancing equivalent decouplers."""
     if parent.net_pad_offsets is None or support_pad_offsets is None:
         return None
-    shared = sorted(
-        net
-        for net in parent.net_pad_offsets.keys() & support_pad_offsets.keys()
-        if _net_weight(net) > 0 and parent.net_pad_offsets.get(net) and support_pad_offsets.get(net)
-    )
+    shared = _shared_support_nets(parent, support_pad_offsets)
     directions: list[tuple[float, float, str, float]] = []
     for net in shared:
         for x, y in _rotated_net_endpoints(parent, net):
@@ -1059,24 +1095,49 @@ def _support_seed_position(
     if not directions:
         return None
 
-    # A pad farthest from the owner's center identifies its outward side. Stable
-    # tie breaks make the initial layout reproducible across Python versions.
-    ux, uy, _net, _radius = max(
+    # Keep the strongest shared net and its outermost physical pad row. For
+    # equivalent bypass parts, rotate through those real pads in angular order
+    # instead of stacking every seed beside the same tied endpoint.
+    strongest = max(
         directions,
         key=lambda item: (item[3], item[2], item[1], item[0]),
     )
+    net_anchors = [item for item in directions if item[2] == strongest[2]]
+    farthest_radius = max(item[3] for item in net_anchors)
+    anchors = [
+        item for item in net_anchors if math.isclose(item[3], farthest_radius, abs_tol=1e-6)
+    ]
+    anchors.sort(key=lambda item: (math.atan2(item[1], item[0]), item[0], item[1]))
+    anchor_index = endpoint_index % len(anchors)
+    ux, uy, _net, _radius = anchors[anchor_index]
     parent_width, parent_height = _effective_dimensions(parent)
     separation = max(config.min_component_gap_mm, config.support_body_clearance_mm)
-    axis_distances = []
+    half_width = (parent_width + support_width) / 2
+    half_height = (parent_height + support_height) / 2
+
+    def clearance(distance: float) -> float:
+        dx = max(0.0, abs(ux * distance) - half_width)
+        dy = max(0.0, abs(uy * distance) - half_height)
+        return math.hypot(dx, dy)
+
+    low, high = 0.0, max(half_width, half_height, 1.0)
+    while clearance(high) < config.support_body_clearance_mm:
+        high *= 2
+    for _ in range(48):
+        middle = (low + high) / 2
+        if clearance(middle) < config.support_body_clearance_mm:
+            low = middle
+        else:
+            high = middle
+    body_clearance_distance = high
+    gap_distances = []
     if abs(ux) > 1e-9:
-        axis_distances.append(
-            (parent_width / 2 + support_width / 2 + separation) / abs(ux)
-        )
+        gap_distances.append((half_width + config.min_component_gap_mm) / abs(ux))
     if abs(uy) > 1e-9:
-        axis_distances.append(
-            (parent_height / 2 + support_height / 2 + separation) / abs(uy)
-        )
-    distance = min(axis_distances)
+        gap_distances.append((half_height + config.min_component_gap_mm) / abs(uy))
+    distance = max(body_clearance_distance, min(gap_distances))
+    ring = endpoint_index // len(anchors)
+    distance += ring * (max(support_width, support_height) + separation)
     return parent.x + ux * distance, parent.y + uy * distance
 
 
@@ -1121,35 +1182,37 @@ def _cost_compactness(
     placements: list[ComponentPlacement], config: PlacementConfig
 ) -> float:
     """Discourage sparse island placement when connectivity data is incomplete."""
-    internal = [
+    content = [
         placement
         for placement in placements
         if placement.category not in {"connector", "usb", "debug", "rf"}
-        and not placement.parent_ref
         and not placement.constraint_locked
     ]
-    # A generated design may have one primary IC and its entire passive
-    # support family. In that case include the supports so compactness still
-    # has a meaningful envelope; multi-block designs retain the owner-only set.
-    include_supports = len(internal) < 2
-    if include_supports:
-        internal = [
-            placement
-            for placement in placements
-            if placement.category not in {"connector", "usb", "debug", "rf"}
-            and not placement.constraint_locked
-        ]
-    if len(internal) < 2:
+    owners = [placement for placement in content if not placement.parent_ref]
+    if len(content) < 2:
         return 0.0
-    center_x = sum(placement.x for placement in internal) / len(internal)
-    center_y = sum(placement.y for placement in internal) / len(internal)
+    # Primary parts determine island cohesion. Every movable courtyard,
+    # including support parts, determines the occupied envelope and its center.
+    radial_members = owners if len(owners) >= 2 else content
+    center_x = sum(placement.x for placement in radial_members) / len(radial_members)
+    center_y = sum(placement.y for placement in radial_members) / len(radial_members)
     radial = sum(
-        math.hypot(placement.x - center_x, placement.y - center_y) for placement in internal
+        math.hypot(placement.x - center_x, placement.y - center_y)
+        for placement in radial_members
     )
-    min_x = min(placement.x for placement in internal)
-    max_x = max(placement.x for placement in internal)
-    min_y = min(placement.y for placement in internal)
-    max_y = max(placement.y for placement in internal)
+    bounds = [
+        (
+            placement.x - _effective_dimensions(placement)[0] / 2,
+            placement.y - _effective_dimensions(placement)[1] / 2,
+            placement.x + _effective_dimensions(placement)[0] / 2,
+            placement.y + _effective_dimensions(placement)[1] / 2,
+        )
+        for placement in content
+    ]
+    min_x = min(bound[0] for bound in bounds)
+    min_y = min(bound[1] for bound in bounds)
+    max_x = max(bound[2] for bound in bounds)
+    max_y = max(bound[3] for bound in bounds)
     content_center_x = (min_x + max_x) / 2
     content_center_y = (min_y + max_y) / 2
     board_center_x = config.board_width_mm / 2
@@ -1158,7 +1221,7 @@ def _cost_compactness(
         content_center_y - board_center_y
     ) ** 2
     area = (max_x - min_x) * (max_y - min_y)
-    if include_supports:
+    if len(owners) < 2:
         return radial * 2.5 + area + centering * 0.25
     return radial * 2.5 + area * 0.4 + centering * 20.0
 
@@ -1232,29 +1295,25 @@ def _cost_functional_grouping(placements: list[ComponentPlacement]) -> float:
 def _support_peer_groups(
     placements: list[ComponentPlacement],
 ) -> list[list[ComponentPlacement]]:
-    """Infer local support families from owner, role, and signal topology."""
-    candidates: dict[tuple[str, str, str], list[ComponentPlacement]] = {}
+    """Infer local support families from owner and dedicated signal topology."""
+    candidates: dict[tuple[str, str], list[ComponentPlacement]] = {}
     for placement in placements:
-        role = placement.placement_role.strip().casefold()
-        if not placement.parent_ref or not role:
+        if not placement.parent_ref:
             continue
         net_families = set()
         for net in (placement.net_pad_offsets or {}):
             # Ground and shared supply rails do not identify a local functional
             # relationship: unrelated pullups and remote decouplers often share them.
-            voltage_rail = re.search(
-                r"(?<![A-Z0-9])\+?\d+(?:\.\d+)?V\d*(?![A-Z0-9])", net.upper()
-            )
-            if _net_weight(net) <= 0.5 or voltage_rail:
+            if _net_weight(net) <= 0.5 or _is_voltage_rail(net):
                 continue
             net_families.add(re.sub(r"\d+", "", net).casefold())
         net_families = sorted(net_families)
         for net_family in net_families:
-            candidates.setdefault((placement.parent_ref, role, net_family), []).append(placement)
+            candidates.setdefault((placement.parent_ref, net_family), []).append(placement)
 
     groups = []
     seen_groups: set[tuple[str, ...]] = set()
-    for (_parent_ref, _role, _family), members in candidates.items():
+    for (_parent_ref, _family), members in candidates.items():
         unique_members = list({member.ref: member for member in members}.values())
         if len(unique_members) < 2:
             continue
@@ -1712,6 +1771,149 @@ def _placement_rank(
     return int(defects), _total_cost(state, config, pairs, plan)
 
 
+def _courtyard_envelope_center(
+    placements: list[ComponentPlacement],
+) -> tuple[float, float]:
+    bounds = []
+    for placement in placements:
+        width, height = _effective_dimensions(placement)
+        bounds.append(
+            (placement.x - width / 2, placement.y - height / 2,
+             placement.x + width / 2, placement.y + height / 2)
+        )
+    return (
+        (min(item[0] for item in bounds) + max(item[2] for item in bounds)) / 2,
+        (min(item[1] for item in bounds) + max(item[3] for item in bounds)) / 2,
+    )
+
+
+def _family_alignment_candidates(
+    state: list[ComponentPlacement], config: PlacementConfig,
+) -> list[list[ComponentPlacement]]:
+    """Align distinct owner families, optionally recentering the whole layout."""
+    excluded = {"connector", "usb", "debug", "rf", "passive"}
+    roots = [
+        placement
+        for placement in state
+        if not placement.parent_ref and placement.category not in excluded
+    ]
+    families: list[
+        tuple[str, list[int], tuple[float, float], tuple[float, float, float, float]]
+    ] = []
+    roots.sort(key=lambda placement: placement.ref)
+    for root in roots:
+        members = [
+            index
+            for index, placement in enumerate(state)
+            if placement.ref == root.ref or placement.parent_ref == root.ref
+        ]
+        if len(members) < 2 or any(
+            state[index].constraint_locked or state[index].edge_constrained
+            for index in members
+        ):
+            continue
+        member_placements = [state[index] for index in members]
+        bounds = (
+            min(member.x - _effective_dimensions(member)[0] / 2 for member in member_placements),
+            min(member.y - _effective_dimensions(member)[1] / 2 for member in member_placements),
+            max(member.x + _effective_dimensions(member)[0] / 2 for member in member_placements),
+            max(member.y + _effective_dimensions(member)[1] / 2 for member in member_placements),
+        )
+        families.append(
+            (root.ref, members, _courtyard_envelope_center(member_placements), bounds)
+        )
+
+    candidates = []
+    can_recenter = not any(
+        placement.constraint_locked or placement.edge_constrained for placement in state
+    )
+    nearest_pairs = heapq.nsmallest(
+        8,
+        (
+            (
+                math.dist(first[2], second[2]),
+                first[0],
+                second[0],
+                first,
+                second,
+            )
+            for first_index, first in enumerate(families)
+            for second in families[first_index + 1:]
+        ),
+        key=lambda pair: pair[:3],
+    )
+    for _distance, _first_ref, _second_ref, first, second in nearest_pairs:
+        _first_ref, first_members_indices, first_center, first_bounds = first
+        _second_ref, second_members_indices, second_center, second_bounds = second
+        align_y = abs(first_center[0] - second_center[0]) >= abs(
+            first_center[1] - second_center[1]
+        )
+        coordinate = 1 if align_y else 0
+        delta = second_center[coordinate] - first_center[coordinate]
+        separation_delta = (
+            second_center[0] - first_center[0]
+            if align_y
+            else second_center[1] - first_center[1]
+        )
+        if align_y:
+            gap = (
+                second_bounds[0] - first_bounds[2]
+                if separation_delta >= 0
+                else first_bounds[0] - second_bounds[2]
+            )
+        else:
+            gap = (
+                second_bounds[1] - first_bounds[3]
+                if separation_delta >= 0
+                else first_bounds[1] - second_bounds[3]
+            )
+        channel = max(
+            2 * config.support_body_clearance_mm,
+            4 * config.min_component_gap_mm,
+        )
+        spread = max(0.0, channel - gap) / 2
+        for fraction in (0.5, 1.0):
+            candidate = [replace(placement) for placement in state]
+            shift = delta * fraction / 2
+            for index in first_members_indices:
+                if align_y:
+                    candidate[index].y += shift
+                else:
+                    candidate[index].x += shift
+            for index in second_members_indices:
+                if align_y:
+                    candidate[index].y -= shift
+                else:
+                    candidate[index].x -= shift
+            if separation_delta >= 0:
+                spread_first, spread_second = -spread * fraction, spread * fraction
+            else:
+                spread_first, spread_second = spread * fraction, -spread * fraction
+            for index in first_members_indices:
+                if align_y:
+                    candidate[index].x += spread_first
+                else:
+                    candidate[index].y += spread_first
+            for index in second_members_indices:
+                if align_y:
+                    candidate[index].x += spread_second
+                else:
+                    candidate[index].y += spread_second
+            candidate = _quantize_state(candidate)
+            candidates.append(candidate)
+
+            if can_recenter:
+                center_x, center_y = _courtyard_envelope_center(candidate)
+                dx = config.board_width_mm / 2 - center_x
+                dy = config.board_height_mm / 2 - center_y
+                recentered = [replace(placement) for placement in candidate]
+                for placement in recentered:
+                    placement.x += dx
+                    placement.y += dy
+                candidates.append(_quantize_state(recentered))
+    return candidates
+
+
 def _refine_placement(
     state: list[ComponentPlacement], config: PlacementConfig,
     pairs: dict[tuple[str, str], float], plan: _ConstraintPlan,
@@ -1774,6 +1976,56 @@ def _refine_placement(
                         # Try a connected-block attraction as well as fine
                         # steps. Only a legal improvement can be accepted.
                         moves.extend([(dx / 2, dy / 2), (dx / 2, 0), (0, dy / 2)])
+                if len(group) > 1 and not placement.parent_ref:
+                    family_members = [state[i] for i in group]
+                    family_bounds = [
+                        (
+                            member.x - _effective_dimensions(member)[0] / 2,
+                            member.y - _effective_dimensions(member)[1] / 2,
+                            member.x + _effective_dimensions(member)[0] / 2,
+                            member.y + _effective_dimensions(member)[1] / 2,
+                        )
+                        for member in family_members
+                    ]
+                    family_center = (
+                        (min(bound[0] for bound in family_bounds) + max(bound[2] for bound in family_bounds)) / 2,
+                        (min(bound[1] for bound in family_bounds) + max(bound[3] for bound in family_bounds)) / 2,
+                    )
+                    content = [
+                        member
+                        for member in state
+                        if member.category not in {"connector", "usb", "debug", "rf"}
+                        and not member.constraint_locked
+                    ]
+                    content_bounds = [
+                        (
+                            member.x - _effective_dimensions(member)[0] / 2,
+                            member.y - _effective_dimensions(member)[1] / 2,
+                            member.x + _effective_dimensions(member)[0] / 2,
+                            member.y + _effective_dimensions(member)[1] / 2,
+                        )
+                        for member in content
+                    ]
+                    if content_bounds:
+                        layout_center = (
+                            (min(bound[0] for bound in content_bounds) + max(bound[2] for bound in content_bounds)) / 2,
+                            (min(bound[1] for bound in content_bounds) + max(bound[3] for bound in content_bounds)) / 2,
+                        )
+                        dx, dy = layout_center[0] - family_center[0], layout_center[1] - family_center[1]
+                        moves.extend((dx * fraction, dy * fraction) for fraction in (0.25, 0.5))
+
+                    other_owners = [
+                        member
+                        for member in state
+                        if not member.parent_ref
+                        and member.ref != placement.ref
+                        and member.category not in {"connector", "usb", "debug", "rf"}
+                    ]
+                    if other_owners:
+                        target_x = sum(member.x for member in other_owners) / len(other_owners)
+                        target_y = sum(member.y for member in other_owners) / len(other_owners)
+                        dx, dy = target_x - placement.x, target_y - placement.y
+                        moves.extend((dx * fraction, dy * fraction) for fraction in (0.125, 0.25, 0.375))
                 for dx, dy in moves:
                     candidate = [replace(p) for p in state]
                     for i in group:
@@ -1794,6 +2046,12 @@ def _refine_placement(
                     if candidate_rank < rank:
                         state, rank = candidate, candidate_rank
                         changed = True
+        for candidate in _family_alignment_candidates(state, config):
+            candidate_rank = _placement_rank(candidate, config, pairs, plan)
+            evaluations += 1
+            if candidate_rank < rank:
+                state, rank = candidate, candidate_rank
+                changed = True
         if not changed:
             break
     return state, evaluations

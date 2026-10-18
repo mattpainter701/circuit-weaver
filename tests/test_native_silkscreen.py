@@ -148,6 +148,67 @@ print("native class association behavior verified")
 '''
 
 
+_ASSOCIATION_MARGIN_SCRIPT = r'''
+import pcbnew, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[2])
+from circuit_weaver import _kicad_worker as worker
+
+root = Path(sys.argv[1])
+board = pcbnew.BOARD()
+for ref, x in (("C1", 15), ("C2", 23)):
+    footprint = pcbnew.FootprintLoad(str(root / "Capacitor_SMD.pretty"), "C_0603_1608Metric")
+    if footprint is None:
+        raise RuntimeError("missing test capacitor footprint")
+    board.Add(footprint)
+    footprint.SetReference(ref)
+    footprint.SetPosition(pcbnew.VECTOR2I(pcbnew.FromMM(x), pcbnew.FromMM(15)))
+
+obstacles = worker._silk_obstacles(board, pcbnew)[pcbnew.F_SilkS]
+own_fp = board.FindFootprintByReference("C1")
+own = worker._courtyard_box(own_fp, pcbnew)
+peer = next(box for kind, ref, box in obstacles if kind == "courtyard" and ref == "C2")
+field = own_fp.Reference()
+field.SetHorizJustify(pcbnew.GR_TEXT_H_ALIGN_CENTER)
+field.SetVertJustify(pcbnew.GR_TEXT_V_ALIGN_CENTER)
+field_box = worker._box(field, pcbnew, worker._SILK_CLEARANCE_MM)
+width = field_box[2] - field_box[0]
+height = field_box[3] - field_box[1]
+own_cx = (own[0] + own[2]) // 2
+own_top = own[1]
+peer_left = peer[0]
+# The weak option sits just on C1's side of the peer/own bisector. The strong
+# option has the same courtyard distance above C1, where C2 is much farther.
+gap_midpoint = (own[2] + peer_left) // 2
+weak = (gap_midpoint - pcbnew.FromMM(0.2), (own[1] + own[3]) // 2)
+weak_distance = int(worker._point_box_distance_sq(weak, own) ** 0.5)
+strong = (own_cx, own_top - weak_distance)
+
+def field_box_at(center):
+    return (center[0] - width // 2, center[1] - height // 2,
+            center[0] + width // 2, center[1] + height // 2)
+
+for center in (weak, strong):
+    if not worker._candidate_associated(center, own, "C1", obstacles):
+        raise AssertionError("candidate must pass the existing hard association guard")
+    if any(worker._boxes_overlap(field_box_at(center), box)
+           for _kind, owner, box in obstacles if owner != "C1"):
+        raise AssertionError("candidate must be physically clear of neighboring obstacles")
+
+if worker._association_margin(strong, own, "C1", obstacles) <= worker._association_margin(
+    weak, own, "C1", obstacles
+):
+    raise AssertionError("strong candidate must have a larger same-class association margin")
+chosen = worker._choose_associated_candidate(
+    [weak, strong], own, "C1", obstacles,
+    target_margin=height, max_extra_distance=pcbnew.FromMM(0.75),
+)
+if chosen != strong:
+    raise AssertionError(f"expected stronger nearby association {strong}, got {chosen}")
+print("native bounded association-margin preference verified")
+'''
+
+
 @pytest.fixture(scope="module")
 def native_tools():
     python = find_kicad_python()
@@ -382,6 +443,18 @@ def test_association_uses_reference_class_for_nearer_courtyards(native_tools):
                              capture_output=True, text=True, timeout=30)
     assert process.returncode == 0, process.stdout + process.stderr
     assert "native class association behavior verified" in process.stdout
+
+
+@pytest.mark.skip_category("optional-tool")
+def test_native_cleanup_prefers_a_stronger_nearby_association_margin(native_tools):
+    python, root = native_tools
+    source_root = Path(__file__).resolve().parents[1] / "src"
+    process = subprocess.run(
+        [python, "-c", _ASSOCIATION_MARGIN_SCRIPT, str(root), str(source_root)],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert process.returncode == 0, process.stdout + process.stderr
+    assert "native bounded association-margin preference verified" in process.stdout
 
 
 @pytest.mark.skip_category("optional-tool")
