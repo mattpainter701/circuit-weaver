@@ -418,23 +418,36 @@ manufacturing approval remain separate. See the [real workflow demo](automation-
 
 ## preview-pcb
 
-Draw a standalone board SVG from native KiCad geometry, including the actual
-outline/cutouts, copper, mask openings, silkscreen, and library footprint body
-outlines. Back views are mirrored to show the physical underside.
+Draw a standalone board SVG with either native layer geometry or the assembled
+board's actual KiCad component models. The default `--appearance layers` shows
+outline/cutouts, copper, mask openings, silkscreen and footprint body outlines.
+Layer back views are mirrored to show the physical underside.
 
 ```bash
 circuit-weaver preview-pcb routed.kicad_pcb -o board-preview.svg
 circuit-weaver preview-pcb routed.kicad_pcb -o board-preview-back.svg --side back
-circuit-weaver preview-pcb routed.kicad_pcb -o board-preview.svg --render-3d --overwrite
+circuit-weaver preview-pcb routed.kicad_pcb -o board-preview.svg --appearance assembly
+circuit-weaver preview-pcb routed.kicad_pcb -o board-preview-back.svg --appearance assembly --side back
 ```
 
-The SVG path requires KiCad 8–10 CLI and its `pcbnew` Python API. Optional
-`--render-3d` also creates a native assembly-model PNG beside the SVG; it requires
-KiCad 9+ with every declared model file resolvable. A missing model or unsupported
-renderer returns an error for that requested render, even if the SVG was created.
-The result records source/output hashes, side/layer geometry, native tool version,
-and model coverage when requested. Models come from the board's actual footprint
-references; no replacement icons are invented.
+The layer view requires KiCad 8–10 CLI and its `pcbnew` Python API.
+`--appearance assembly` requires KiCad 9+ with every declared model file resolvable.
+It embeds the native transparent PNG inside the SVG, preserving the render's
+pixel frame and aspect ratio. Component bodies, pads, board and printed labels
+come from KiCad's renderer and the footprint's actual model references. This is
+an embedded raster image in a portable SVG container; it does not convert 3D
+models into vector paths or register a raster overlay onto plotted layers.
+The SVG needs no adjacent PNG or model files to display.
+
+The result records source/output hashes, native tool version, embedded-image
+hash, model-file coverage and populated-component coverage. Populated electrical
+footprints must each declare a visible model; hidden-only models do not count.
+Explicit DNP/board-only and mechanical footprints without electrical pads are
+excluded from this component requirement. A missing model or unavailable renderer fails an
+assembly request without replacing an existing SVG. With the default layer
+appearance, the older `--render-3d` option still creates a separate native PNG
+beside the layer SVG. With assembly appearance it uses the same embedded render
+and does not create a second PNG.
 
 Use `--overwrite` to replace previews, `--timeout` for native process limits,
 `--kicad-cli-path` for an explicit CLI, and `--kicad-python-path` for its Python.

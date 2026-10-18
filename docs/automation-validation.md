@@ -51,11 +51,15 @@ python scripts/validate_app_workflow.py --output /path/to/new-mcp-demo --mcp-smo
 ```
 
 For a physical assembly preview with the board's installed library models, add
-`--render-3d` (requires KiCad 9+ and resolvable model files). The portable default
-produces front and mirrored-back SVG views on KiCad 8–10. The report has named
-view controls and full-size links; the SVGs use actual copper/mask, silkscreen,
-footprint body geometry, and the native board outline, including cutouts.
-The optional PNG is KiCad's model render, not an illustrated substitute.
+`--render-3d` (requires KiCad 9+ and resolvable model files). In this mode,
+`board-preview.svg` is the assembled front view: a self-contained SVG embedding
+KiCad's native model render at its original aspect ratio. It needs no external
+PNG or model files to display. `board-layers.svg` retains the front copper/mask,
+silkscreen, footprint body geometry and native outline, including cutouts.
+The report opens the assembled view first and provides a separate layer control.
+`board-preview-back.svg` remains the mirrored native back-layer view.
+Without `--render-3d`, the portable default produces front and mirrored-back
+layer SVG views on KiCad 8–10.
 
 The MCP pass lists all five tools, validates and generates the same design,
 discovers projects, and verifies that malformed input, an empty research query,
@@ -71,7 +75,12 @@ reporting, `build-pcb`, native placement, routing/session import, and native
 KiCad DRC on the final PCB. It checks BOM/CPL export and its identity/sourcing
 blockers, checks source preservation, exercises status/resume, and exports a
 front/back board previews. Preview evidence is bound to the routed board and
-output hashes, and native geometry must include a real outline and layer inventory.
+output hashes. Layer geometry must include a real outline and layer inventory.
+Assembly SVG evidence must include a valid embedded PNG whose bytes and dimensions
+match the native render, complete model-file and populated-component coverage,
+and the same source-board hash. An unsupported renderer, missing or hidden-only
+component model, or mismatched embedded image fails
+the requested assembly preview.
 Routing must be complete, DRC must have zero blockers,
 and its SHA-256 must match the published board bytes. An unavailable router,
 failed command, incomplete route, or mismatched DRC hash fails the run.
