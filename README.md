@@ -61,6 +61,7 @@ Verification is conservative: a capability only claims the evidence level its pu
 | `design-wizard` | experimental | CLI: `design-wizard`; Skill: `design-wizard` | `static-parse` → `static-parse` | `command-contract`, `static-parse` | 0.32.1 |
 | `build-pcb` | experimental | CLI: `build-pcb`; Python: `circuit_weaver.schematic_pcb:schematic_to_pcb`; Skill: `circuit-weaver` | `static-parse` → `kicad-load` | `command-contract`, `static-parse`, `kicad-load`, `external-tool` | 0.35.0 |
 | `place-pcb` | experimental | CLI: `place-pcb`; Skill: `circuit-weaver` | `static-parse` → `static-parse` | `command-contract`, `external-tool`, `user-supplied` | 0.32.1 |
+| `cleanup-pcb` | review_only | CLI: `cleanup-pcb`; Python: `circuit_weaver.pcb_copper_cleanup:cleanup_copper`; Skill: `circuit-weaver` | `static-parse` → `kicad-load` | `command-contract`, `kicad-load`, `external-tool`, `user-supplied` | 0.35.0 |
 | `refine-pcb` | review_only | CLI: `refine-pcb`; Python: `circuit_weaver.pcb_return_paths:refine_return_paths`; Skill: `circuit-weaver` | `static-parse` → `kicad-load` | `command-contract`, `kicad-load`, `external-tool`, `user-supplied` | 0.35.0 |
 | `preview-pcb` | review_only | CLI: `preview-pcb`; Python: `circuit_weaver.pcb_preview:render_board_preview`; Skill: `circuit-weaver` | `static-parse` → `kicad-load` | `command-contract`, `static-parse`, `kicad-load`, `external-tool` | 0.35.0 |
 | `log-status` | beta | CLI: `log-status` | not applicable (operational) | `command-contract` | 0.32.1 |

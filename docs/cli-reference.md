@@ -496,6 +496,36 @@ not a substitute for part-specific layout limits.
 `--tidy-references` relocates native reference fields to readable positions and
 reports unresolved collisions; locked footprints retain their reference fields.
 
+## cleanup-pcb
+
+Remove redundant selected-net copper and try shared via pairs without worsening
+explicitly protected pad-to-pad paths.
+
+```bash
+circuit-weaver cleanup-pcb routed.kicad_pcb -o cleaned.kicad_pcb --plan cleanup.json
+```
+
+The strict JSON plan has exactly `nets` and `protected_connections`:
+
+```json
+{"nets":["GND"],"protected_connections":[{"from_ref":"J1","from_pad":"1","to_ref":"J2","to_pad":"1"}]}
+```
+
+Protected entries can include a positive `max_length_mm`; the effective ceiling
+also retains the original measured path length, with a small numerical geometry
+tolerance. Unselected nets, locked copper, pad/net identity, component positions
+and reference fields remain unchanged. Bounded shared-via proposals may add new
+selected-net tracks while replacing several transitions with a common pair.
+The output reports before/after copper counts, removed/added item IDs and each
+protected path. These are planar centerline/contact proxies, excluding via
+barrels, rather than electromagnetic or current-capacity results.
+
+The current search supports two-layer boards without copper zones or copper
+arcs. Input and final boards must pass full native DRC, reference checks and
+save/reload verification. Board/project/rule snapshots must remain unchanged.
+Separate output is mandatory; `--overwrite` permits atomic replacement after
+all gates pass. `--kicad-python-path` overrides interpreter discovery.
+
 ## refine-pcb
 
 Add short, explicitly requested same-net connections to an already routed board.

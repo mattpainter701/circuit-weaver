@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Protected copper cleanup
+
+- Add explicit selected-net copper cleanup that removes redundant segments and searches for shared via pairs while keeping protected pad-to-pad paths within their original lengths. Retain component placement, labels, locked copper and unselected nets; native geometry, connectivity and full DRC gate publication.
+- Allow automated workflows to retain the routed and refined intermediate boards, apply an optional cleanup plan, and render the final cleaned assembled board with bound input and output hashes.
+
 ### Local return-path refinement
 
 - Add an explicit `refine-pcb` connection-plan workflow that creates short same-net copper links while retaining existing tracks, component positions and labels. Bounded local candidates must pass native geometry, full DRC and reference checks before atomic publication.

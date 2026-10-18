@@ -77,6 +77,61 @@ def test_return_plan_preflight_uses_demo_source_package_environment(tmp_path):
     assert result == {"connections": [{"from_ref": "J1", "from_pad": "1", "to_ref": "C1", "to_pad": "2"}]}
 
 
+def test_cleanup_plan_preflight_uses_demo_source_package_environment(tmp_path):
+    plan = tmp_path / "cleanup.json"
+    plan.write_text('{"nets":["GND"],"protected_connections":[{"from_ref":"J1",'
+                    '"from_pad":"1","to_ref":"C1","to_pad":"2"}]}', encoding="utf-8")
+    demo = _demo.Demo(tmp_path, 30)
+    stale_package = tmp_path / "stale-site-packages" / "circuit_weaver"
+    stale_package.mkdir(parents=True)
+    (stale_package / "__init__.py").write_text("", encoding="utf-8")
+    env = demo.env.copy()
+    env["PYTHONPATH"] = os.pathsep.join((str(_demo.REPO / "src"), str(stale_package.parent)))
+
+    result = _demo.load_cleanup_plan_in_runtime(plan, cwd=demo.cwd, env=env)
+
+    assert result == {"nets": ["GND"], "protected_connections": [
+        {"from_ref": "J1", "from_pad": "1", "to_ref": "C1", "to_pad": "2"},
+    ]}
+
+
+def test_demo_binds_cleanup_input_evidence_and_all_preservation_flags(tmp_path):
+    source, board = tmp_path / "routed.kicad_pcb", tmp_path / "cleaned.kicad_pcb"
+    source.write_bytes(b"routed")
+    board.write_bytes(b"cleaned")
+    cleanup = {
+        "all_pads_connected": True, "protected_paths_preserved": True,
+        "unselected_copper_preserved": True, "original_footprints_and_text_preserved": True,
+        "copper_changes_limited_to_selected_nets": True, "locked_copper_preserved": True,
+        "protected_connections": [{"status": "connected", "protected_path_preserved": True}],
+    }
+    payload = {
+        "status": "ok", "output_kind": "cleaned_kicad_board", "source_sha256": _demo.digest(source),
+        "cleanup": cleanup,
+        "silkscreen": {"unresolved_count": 0, "remaining_conflict_count": 0},
+        "drc": {"status": "ok", "passed": True, "blocker_count": 0,
+                "board": str(board), "board_sha256": _demo.digest(board)},
+    }
+
+    _demo.verify_cleanup(payload, board, source, 1)
+    cleanup["copper_changes_limited_to_selected_nets"] = False
+    with pytest.raises(RuntimeError, match="copper changes limited to selected nets"):
+        _demo.verify_cleanup(payload, board, source, 1)
+
+
+def test_demo_rejects_cleanup_bound_to_changed_refinement_input(tmp_path):
+    source, board = tmp_path / "routed-refined.kicad_pcb", tmp_path / "cleaned.kicad_pcb"
+    source.write_bytes(b"refined")
+    board.write_bytes(b"cleaned")
+    payload = {
+        "status": "ok", "output_kind": "cleaned_kicad_board", "source_sha256": "stale",
+        "cleanup": {}, "drc": {},
+    }
+
+    with pytest.raises(RuntimeError, match="different source board bytes"):
+        _demo.verify_cleanup(payload, board, source, 0)
+
+
 def test_working_spec_preserves_source_bytes_without_size_overrides(tmp_path):
     source = tmp_path / "design.yaml"
     destination = tmp_path / "out" / "design.yaml"
