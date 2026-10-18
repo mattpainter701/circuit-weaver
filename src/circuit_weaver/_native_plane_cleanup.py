@@ -43,13 +43,51 @@ def _track_from_geometry(board, pcbnew, geometry):
 
 def _shape_polygon(shape, pcbnew):
     polygon = pcbnew.SHAPE_POLY_SET()
-    # ERROR_OUTSIDE gives a conservative native tessellation for rounded
-    # track ends.  One IU avoids unbounded zero-error tessellation while
-    # rejecting shapes that depend on a sub-IU contact for coverage.
-    shape.TransformToPolygon(polygon, 1, pcbnew.ERROR_OUTSIDE)
+    error_outside = getattr(pcbnew, "ERROR_OUTSIDE", None)
+    if error_outside is not None:
+        # One IU avoids unbounded zero-error tessellation while rejecting
+        # shapes that depend on a sub-IU contact for coverage.
+        shape.TransformToPolygon(polygon, 1, error_outside)
+    else:
+        # KiCad 8's Python bindings expose TransformToPolygon's error-location
+        # parameter without exposing its ERROR_LOC enum/constants.  Construct
+        # an explicitly circumscribed capsule instead of guessing the enum's
+        # SWIG integer value or accepting an inside approximation.
+        _conservative_segment_bbox_polygon(shape, pcbnew, polygon)
     if polygon.OutlineCount() <= 0:
         raise ValueError("KiCad could not polygonize an effective copper shape")
     return polygon
+
+
+def _conservative_segment_bbox_polygon(shape, pcbnew, polygon):
+    """Add an integer-coordinate bounding polygon containing a segment capsule."""
+    try:
+        segment_shape = shape
+        if not hasattr(segment_shape, "GetSeg"):
+            segment_shape = shape.Cast()
+        segment = segment_shape.GetSeg()
+        start, end = segment.A, segment.B
+        width = int(segment_shape.GetWidth())
+    except (AttributeError, RuntimeError, TypeError) as exc:
+        raise ValueError("KiCad lacks ERROR_OUTSIDE and shape is not a straight segment") from exc
+    if width <= 0:
+        raise ValueError("Cannot conservatively polygonize a segment with nonpositive width")
+
+    x0, y0 = int(start.x), int(start.y)
+    x1, y1 = int(end.x), int(end.y)
+    # A bounding rectangle is coarser than the capsule but always contains it,
+    # including a half-IU radius on odd-width traces.  The containment check
+    # may therefore decline some safe KiCad 8 candidates, but cannot accept
+    # a shape that extends beyond the filled copper.
+    radius = (width + 1) // 2
+    left, right = min(x0, x1) - radius, max(x0, x1) + radius
+    top, bottom = min(y0, y1) - radius, max(y0, y1) + radius
+    corners = ((left, top), (right, top), (right, bottom), (left, bottom))
+    chain = pcbnew.SHAPE_LINE_CHAIN()
+    for x, y in corners:
+        chain.Append(pcbnew.VECTOR2I(x, y))
+    chain.SetClosed(True)
+    polygon.AddOutline(chain)
 
 
 def _boolean_mode(pcbnew):

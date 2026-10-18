@@ -67,6 +67,60 @@ def test_polygon_boolean_overloads_follow_native_api_features():
     assert legacy_destination.subtracted == ("subject", "clip", LegacyPolySet.PM_STRICTLY_SIMPLE)
 
 
+def test_legacy_shape_conversion_uses_a_conservative_bbox_without_error_enum():
+    class Vector:
+        def __init__(self, x, y):
+            self.x, self.y = x, y
+
+    class Chain:
+        def __init__(self):
+            self.points = []
+            self.closed = False
+
+        def Append(self, point):
+            self.points.append((point.x, point.y))
+
+        def SetClosed(self, value):
+            self.closed = value
+
+    class Polygon:
+        def __init__(self):
+            self.outlines = []
+
+        def AddOutline(self, chain):
+            self.outlines.append(chain)
+
+        def OutlineCount(self):
+            return len(self.outlines)
+
+    class LegacyPcbnew:
+        SHAPE_POLY_SET = Polygon
+        SHAPE_LINE_CHAIN = Chain
+        VECTOR2I = Vector
+
+    class Segment:
+        def GetSeg(self):
+            return type("SEG", (), {"A": Vector(100, 200), "B": Vector(1100, 200)})()
+
+        def GetWidth(self):
+            return 100
+
+    polygon = cleanup._shape_polygon(Segment(), LegacyPcbnew)
+    points = polygon.outlines[0].points
+    xs, ys = [point[0] for point in points], [point[1] for point in points]
+    assert polygon.outlines[0].closed is True
+    assert len(points) == 4
+    assert min(xs) <= 50 and max(xs) >= 1150
+    assert min(ys) <= 150 and max(ys) >= 250
+
+    class ShapeWrapper:
+        def Cast(self):
+            return Segment()
+
+    cast_polygon = cleanup._shape_polygon(ShapeWrapper(), LegacyPcbnew)
+    assert cast_polygon.OutlineCount() == 1
+
+
 @pytest.mark.skip_category("optional-tool")
 def test_native_cleanup_uses_full_filled_polygons_and_verifies_saved_board(tmp_path):
     native_python = find_kicad_python()
@@ -188,6 +242,17 @@ def test_native_cleanup_uses_full_filled_polygons_and_verifies_saved_board(tmp_p
             contained = pcbnew.SHAPE_SEGMENT(p(2.5, 3), p(3.5, 3), pcbnew.FromMM(0.25))
             hole_rejected = not cleanup._fully_covered(cleanup._shape_polygon(crossing, pcbnew), outside, pcbnew)
             solid_accepted = cleanup._fully_covered(cleanup._shape_polygon(contained, pcbnew), outside, pcbnew)
+            class LegacyPcbnew:
+                def __getattr__(self, name):
+                    if name == "ERROR_OUTSIDE": raise AttributeError(name)
+                    return getattr(pcbnew, name)
+            legacy_bbox_contains = True
+            for native_shape in (crossing, protected_track.GetEffectiveShape(pcbnew.F_Cu)):
+                legacy_bbox_contains = legacy_bbox_contains and cleanup._fully_covered(
+                    cleanup._shape_polygon(native_shape, pcbnew),
+                    cleanup._shape_polygon(native_shape, LegacyPcbnew()), pcbnew)
+            if not legacy_bbox_contains:
+                raise RuntimeError("legacy conservative polygon does not contain the native shape")
             removed_keepalive_count = len(removed_keepalive)
             print(json.dumps({"report": report, "verification": verification,
                               "removed_id": removed_id, "removed_absent": removed_id not in ids,
@@ -196,6 +261,7 @@ def test_native_cleanup_uses_full_filled_polygons_and_verifies_saved_board(tmp_p
                               "stale_fill_rejected": stale_fill_rejected,
                               "max_length_rejected": max_length_rejected,
                               "hole_rejected": hole_rejected, "solid_accepted": solid_accepted,
+                              "legacy_bbox_contains": legacy_bbox_contains,
                               "removed_keepalive_count": removed_keepalive_count}, sort_keys=True))
             """
         ),
@@ -217,6 +283,7 @@ def test_native_cleanup_uses_full_filled_polygons_and_verifies_saved_board(tmp_p
     assert result["max_length_rejected"] is True
     assert result["hole_rejected"] is True
     assert result["solid_accepted"] is True
+    assert result["legacy_bbox_contains"] is True
     assert report["track_count_before"] - report["track_count_after"] == report["removed_count"]
     assert report["length_removed_mm"] > 0
     assert report["protected_connections"][0]["frozen_item_uuids"]

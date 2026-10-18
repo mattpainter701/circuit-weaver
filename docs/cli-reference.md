@@ -546,6 +546,9 @@ traces and all vias. It refills the zones and verifies coverage again after
 save/reload; plane outlines and settings, other-net copper, components, models,
 pad nets and labels stay unchanged. Protected paths may include other nets such
 as VDD. Their trace-only geometry and metrics remain independent of the planes.
+On KiCad 8, missing curve-conversion bindings require a conservative enclosing
+rectangle for each straight trace. The complete rectangle must fit inside the
+plane; this can retain extra traces near plane boundaries or holes.
 
 Use a separate output file. Full input/final native DRC, saved filled geometry,
 native connectivity, exact permitted deletions, references and unchanged input
