@@ -253,6 +253,31 @@ def verify_routing(payload: dict, board: Path) -> None:
     require(drc.get("board_sha256") == digest(board), "DRC does not match final board bytes")
 
 
+def verify_refinement(payload: dict, board: Path, source: Path, expected_connections: int) -> None:
+    """Bind optional return refinement evidence to both exact board images."""
+    drc = payload.get("drc", {})
+    require(payload.get("status") == "ok" and payload.get("output_kind") == "refined_kicad_board",
+            "Return-path refinement produced no native board")
+    require(payload.get("source_sha256") == digest(source), "Refinement refers to different source board bytes")
+    require(drc.get("status") == "ok" and drc.get("passed") is True and drc.get("blocker_count") == 0,
+            "Refined board did not pass full native DRC")
+    require(Path(drc.get("board", "")).resolve() == board.resolve(), "Final DRC refers to a different board")
+    require(drc.get("board_sha256") == digest(board), "Final DRC does not match final board bytes")
+    refinement = payload.get("refinement", {})
+    require(refinement.get("original_copper_preserved") is True,
+            "Native refinement did not confirm original copper preservation")
+    require(refinement.get("original_footprints_and_text_preserved") is True,
+            "Native refinement did not confirm footprint and text preservation")
+    connections = refinement.get("connections")
+    require(isinstance(connections, list) and len(connections) == expected_connections,
+            "Native refinement report does not cover every requested connection")
+    require(all(isinstance(item, dict) and item.get("status") == "routed" for item in connections),
+            "Native refinement report contains an unrouted connection")
+    silkscreen = payload.get("silkscreen", {})
+    require(silkscreen.get("unresolved_count") == 0 and silkscreen.get("remaining_conflict_count") == 0,
+            "Refined board failed native silkscreen verification")
+
+
 def verify_preview(payload: dict, board: Path, svg: Path, side: str, appearance: str = "layers") -> None:
     """Bind a native preview to the exact routed board and SVG bytes."""
     require(payload.get("status") == "ok", "Native board preview failed")
@@ -607,6 +632,29 @@ panel.hidden = panel.id !== 'board-view-' + button.dataset.boardView; }});
         (self.output / "index.html").write_text(page, encoding="utf-8")
 
 
+def load_return_plan_in_runtime(path: Path, *, cwd: Path, env: dict[str, str]) -> dict:
+    """Validate a plan with the same package environment used by the demo CLI."""
+    code = (
+        "import json, sys; "
+        "from circuit_weaver.pcb_return_paths import load_return_plan; "
+        "print(json.dumps(load_return_plan(sys.argv[1])))"
+    )
+    process = subprocess.run(
+        [sys.executable, "-c", code, str(path)], cwd=cwd, env=env,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if process.returncode != 0:
+        detail = (process.stderr or process.stdout).strip()
+        raise ValueError(f"Return-path plan preflight failed: {detail}")
+    try:
+        payload = json.loads(process.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Return-path plan preflight returned invalid JSON") from exc
+    if not isinstance(payload, dict) or set(payload) != {"connections"}:
+        raise ValueError("Return-path plan preflight returned an invalid plan")
+    return payload
+
+
 async def mcp_smoke(spec: Path, output: Path, env: dict) -> dict:
     """Exercise the real JSON-RPC stdio server, including error propagation."""
     import yaml
@@ -661,6 +709,8 @@ def main() -> int:
     parser.add_argument("--height", type=float,
                         help="Prototype board height in mm; defaults to design constraint or 60")
     parser.add_argument("--attempts", type=int, default=3)
+    parser.add_argument("--return-paths", type=Path,
+                        help="Opt in to local return-path shortcuts using a strict JSON connections plan")
     parser.add_argument("--route-timeout", type=int, default=180)
     parser.add_argument("--clearance", type=float, default=0.127,
                         help="Prototype default clearance in mm (0.127 accommodates the sample USB connector)")
@@ -711,6 +761,17 @@ def main() -> int:
         summary["package_source_sha256"] = package_hash.hexdigest()
         summary["runner_sha256"] = digest(Path(__file__))
         original = digest(source_spec)
+        return_plan_source = args.return_paths.resolve() if args.return_paths else None
+        return_plan_hash = digest(return_plan_source) if return_plan_source else None
+        if return_plan_source is not None:
+            try:
+                return_plan = load_return_plan_in_runtime(
+                    return_plan_source, cwd=demo.cwd, env=demo.env,
+                )
+            except (OSError, ValueError) as exc:
+                raise ValueError(f"invalid --return-paths plan: {exc}") from exc
+        else:
+            return_plan = None
         summary.update(prepare_working_spec(source_spec, spec, args.width, args.height))
         width, height = summary["board_size_effective_mm"]
         demo.command("doctor", ["doctor"], json_output=False)
@@ -740,12 +801,31 @@ def main() -> int:
                 "Native reference cleanup left unresolved collisions")
         require(summary["silkscreen"].get("remaining_conflict_count") == 0,
                 "Native silkscreen conflict check did not pass")
-        routed = output / "routed.kicad_pcb"
-        routing = demo.command("route", ["autoroute", str(output / "placed.kicad_pcb"), "--routed-board", str(routed),
-                                         "--attempts", str(args.attempts), "--timeout", str(args.route_timeout),
-                                         "--max-passes", "20", "--optimization-threads", "0"])
-        verify_routing(routing, routed)
-        summary["drc"] = routing["drc"]
+        routed_base = output / ("routed-base.kicad_pcb" if return_plan is not None else "routed.kicad_pcb")
+        routing = demo.command("route", [
+            "autoroute", str(output / "placed.kicad_pcb"), "--routed-board", str(routed_base),
+            "--attempts", str(args.attempts), "--timeout", str(args.route_timeout),
+            "--max-passes", "20", "--optimization-threads", "0",
+        ])
+        verify_routing(routing, routed_base)
+        routed = routed_base
+        if return_plan is not None:
+            plan_copy = output / "return-paths.json"
+            shutil.copy2(return_plan_source, plan_copy)
+            require(digest(plan_copy) == return_plan_hash,
+                    "Copied return-path plan does not match the input plan")
+            refined = output / "routed.kicad_pcb"
+            refinement = demo.command("refine-return-paths", [
+                "refine-pcb", str(routed_base), "-o", str(refined), "--connections", str(plan_copy),
+            ])
+            verify_refinement(refinement, refined, routed_base, len(return_plan["connections"]))
+            summary["return_path_plan"] = {"path": plan_copy.name, "source_sha256": return_plan_hash,
+                                           "copied_sha256": digest(plan_copy)}
+            require(digest(return_plan_source) == return_plan_hash, "Workflow modified the return-path plan")
+            summary["return_path_refinement"] = refinement
+            routed = refined
+        summary["routing_drc"] = routing["drc"]
+        summary["drc"] = refinement["drc"] if return_plan is not None else routing["drc"]
         delivery = demo.command("assembly-gate", ["export-jlcpcb", str(spec), "--pcb", str(routed),
                                             "-o", str(output / "delivery")], exit_code=(0, 1))
         assembly_summary = verify_blocked_assembly_delivery(delivery, output / "delivery")
@@ -798,7 +878,15 @@ def main() -> int:
         require(digest(source_spec) == original, "Workflow modified the input design")
         require(digest(spec) == summary["working_spec_sha256"],
                 "Workflow modified the copied design specification")
-        verify_routing(routing, routed)
+        if return_plan_source is not None:
+            require(digest(return_plan_source) == return_plan_hash,
+                    "Workflow modified the input return-path plan")
+            require(digest(plan_copy) == return_plan_hash,
+                    "Copied return-path plan does not match the input plan")
+        if return_plan is None:
+            verify_routing(routing, routed)
+        else:
+            verify_refinement(refinement, routed, routed_base, len(return_plan["connections"]))
         summary.update(status="PASS — prototype workflow validated; manufacturing export correctly blocked",
                        source_unchanged=True, board_sha256=digest(routed))
     except Exception as exc:

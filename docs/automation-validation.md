@@ -61,6 +61,16 @@ The report opens the assembled view first and provides a separate layer control.
 Without `--render-3d`, the portable default produces front and mirrored-back
 layer SVG views on KiCad 8–10.
 
+To apply an explicit local-return connection plan after routing, add
+`--return-paths /path/to/return-paths.json`. The plan format is documented under
+[`refine-pcb`](cli-reference.md#refine-pcb). This adds one checked workflow stage:
+the original route is retained as `routed-base.kicad_pcb`, and the refined board
+becomes `routed.kicad_pcb` for the delivery gates and previews. The plan is copied
+into the evidence folder, and its input and copied hashes must remain unchanged.
+Refinement requires a fully routed, DRC-passing input and publishes only after
+full final DRC and reference verification. Component positions, labels, pad nets
+and original copper are preserved; blocked connections fail the run.
+
 The MCP pass lists all five tools, validates and generates the same design,
 discovers projects, and verifies that malformed input, an empty research query,
 and missing readiness evidence are returned as MCP tool errors.

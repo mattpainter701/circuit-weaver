@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import sys
+from collections import Counter
 
 _SILK_CLEARANCE_MM = 0.2
 _SILK_EDGE_MARGIN_MM = 0.4
@@ -19,6 +20,42 @@ def _identity(board):
             raise ValueError("Board footprints require unique, nonempty references")
         result[ref] = sorted((pad.GetNumber(), pad.GetNetname()) for pad in footprint.Pads())
     return result
+
+
+def _copper_state(board):
+    """Native copper identities and geometry; additions may not replace originals."""
+    rows = []
+    for item in board.GetTracks():
+        row = {"type": type(item).__name__, "uuid": item.m_Uuid.AsString(),
+               "net": item.GetNetname(), "locked": item.IsLocked()}
+        if hasattr(item, "GetDrillValue"):
+            try:
+                widths = (item.GetWidth(item.TopLayer()), item.GetWidth(item.BottomLayer()))
+            except TypeError:
+                widths = (item.GetWidth(), item.GetWidth())
+            row.update(position=(item.GetPosition().x, item.GetPosition().y),
+                       drill=item.GetDrillValue(), top=int(item.TopLayer()), bottom=int(item.BottomLayer()),
+                       via_type=int(item.GetViaType()), widths=widths)
+        else:
+            row.update(start=(item.GetStart().x, item.GetStart().y),
+                       end=(item.GetEnd().x, item.GetEnd().y), layer=int(item.GetLayer()), width=item.GetWidth())
+        rows.append(json.dumps(row, sort_keys=True))
+    return Counter(rows)
+
+
+def _fixed_layout_state(board):
+    """Footprint and text state that a copper-only operation must preserve."""
+    rows = {}
+    for footprint in board.GetFootprints():
+        fields = [footprint.Reference(), footprint.Value(), *list(footprint.GetFields())]
+        text = sorted((field.GetText(), field.GetTextPos().x, field.GetTextPos().y,
+                       field.GetTextAngleDegrees(), field.GetTextSize().x, field.GetTextSize().y,
+                       int(field.GetLayer()), _field_visible(field), field.IsLocked()) for field in fields)
+        rows[footprint.GetReference()] = (
+            footprint.GetPosition().x, footprint.GetPosition().y, footprint.GetOrientationDegrees(),
+            int(footprint.GetLayer()), footprint.IsLocked(), text,
+        )
+    return rows
 
 
 def _inspect(board, pcbnew):
@@ -498,6 +535,9 @@ def execute(request):
     identity = _identity(board)
     operation = request["operation"]
     tidy_summary = None
+    refinement = None
+    original_copper = None
+    original_layout = None
     if operation == "inspect":
         return {"status": "ok", **_inspect(board, pcbnew)}
     if operation == "export_dsn":
@@ -515,6 +555,14 @@ def execute(request):
                 raise ValueError(f"Session unexpectedly changed footprint {f.GetReference()}: "
                                  f"{placements[f.GetReference()]} -> "
                                  f"{(f.GetPosition().x, f.GetPosition().y, f.GetOrientationDegrees(), f.GetLayer())}")
+    elif operation == "refine_returns":
+        from _native_return_paths import refine
+
+        original_copper = _copper_state(board)
+        original_layout = _fixed_layout_state(board)
+        refinement = refine(board, pcbnew, request.get("connections"))
+        if original_copper - _copper_state(board) or original_layout != _fixed_layout_state(board):
+            raise ValueError("Return refinement changed original copper, footprints or text")
     elif operation == "place":
         placements = request["placements"]
         if not placements or set(placements) - set(identity):
@@ -566,12 +614,19 @@ def execute(request):
     reloaded = pcbnew.LoadBoard(request["output"])
     if reloaded is None or _identity(reloaded) != identity:
         raise ValueError("Saved board failed pad/net identity verification")
+    if refinement is not None and (original_copper - _copper_state(reloaded)
+                                   or original_layout != _fixed_layout_state(reloaded)):
+        raise ValueError("Saved return refinement failed original geometry preservation")
     result = {"status": "ok", "version": pcbnew.Version(), **_inspect(reloaded, pcbnew)}
     if tidy_summary is not None:
         result["silkscreen"] = _reference_conflict_report(
             reloaded, pcbnew, tidy_summary["moved_count"],
             tidy_summary["orientation_normalized_count"],
         )
+    if refinement is not None:
+        result["refinement"] = {**refinement, "original_copper_preserved": True,
+                                "original_footprints_and_text_preserved": True}
+        result["silkscreen"] = _reference_conflict_report(reloaded, pcbnew, 0, 0)
     return result
 
 

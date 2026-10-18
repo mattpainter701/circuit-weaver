@@ -203,6 +203,27 @@ regulators keep their existing default. See the manufacturer's
 [AP62300 datasheet](https://www.diodes.com/datasheet/download/AP62300.pdf),
 TSOT26 pin descriptions and absolute maximum ratings (pages 3–4).
 
+## Local return connections
+
+For a routed board with a known local-return detour, `refine-pcb` accepts an
+explicit JSON connection plan. It adds same-net copper without moving components,
+text or existing tracks. A per-connection `max_length_mm` can bound the new
+planar path. The bounded search may add front-side tracks or a back-side link
+through vias. Native copper collision checks screen candidates, and full KiCad
+DRC plus native label checks gate publication. Unsupported geometry or no legal
+local path fails while retaining the input and any previous output.
+The current search requires two copper layers, no copper zones, front-accessible
+endpoint pads and supported native copper shapes; same-net through vias can be
+reused without adding another hole.
+
+The automated workflow accepts `--return-paths plan.json` to run this optional
+phase after routing and before delivery gates and previews. It retains
+`routed-base.kicad_pcb`, renders the refined `routed.kicad_pcb`, checks the plan's
+source/copy hashes, and records refinement evidence. This adds one stage to the
+usual workflow. Existing routes are retained so adding a legal same-net link
+cannot remove an already available copper path; independent path extraction is
+still needed to assess the requested return improvement.
+
 ## Real-board regression corpus
 
 `tests/test_native_pcb_workflow.py` executes the public CLI against real KiCad and

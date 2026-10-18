@@ -496,6 +496,33 @@ not a substitute for part-specific layout limits.
 `--tidy-references` relocates native reference fields to readable positions and
 reports unresolved collisions; locked footprints retain their reference fields.
 
+## refine-pcb
+
+Add short, explicitly requested same-net connections to an already routed board.
+
+```bash
+circuit-weaver refine-pcb routed.kicad_pcb -o refined.kicad_pcb --connections return-paths.json
+```
+
+The strict JSON plan contains a `connections` list. Each entry names
+`from_ref`, `from_pad`, `to_ref`, and `to_pad`, with an optional positive
+`max_length_mm` limiting the added planar connection length. Endpoints must be
+unique physical pads on the same net. No component coordinates, pad nets,
+reference fields or original copper may change. The bounded local search tries
+front-side paths and back-side paths through vias; unsupported or blocked
+connections fail without replacing existing output.
+
+The current search supports two-layer boards without copper zones and endpoints
+accessible on front copper. It can reuse existing same-net through vias. Copper
+arcs and unsupported native geometry fail closed.
+
+Both input and final board must pass full native DRC. Native reference checks
+also remain enforced. Board/project/rule inputs are preserved, and publication
+is atomic. `--overwrite` permits replacing an existing output; a separate output
+is always required. `--kicad-python-path` overrides interpreter discovery.
+This command adds copper links; it does not claim electromagnetic simulation,
+loop inductance or manufacturing readiness.
+
 ## autoroute
 
 Route a real KiCad PCB or user-exported Specctra DSN using Freerouting.
