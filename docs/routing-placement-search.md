@@ -60,13 +60,26 @@ precision; movable coordinates are evaluated at their published precision.
 Unresolved or impossible constraints remain visible as review blockers.
 
 When native pad locations are available, support parts start beside their
-owner's shared non-ground pads, with the configured body clearance. Missing
-pad evidence retains the deterministic support-ring fallback. Related support
-parts, such as USB termination resistors, can be refined onto a common row or
-column using their owner, role and signal net family. A shared ground or power
-rail alone does not establish a group. Designs with fewer than two movable
-primary ICs include their support parts in the compactness objective; larger
-designs retain the objective based on their primary components.
+owner's shared non-ground pads, with the configured body clearance. Dedicated
+signals take priority over recognized shared supply rails in both seeding and
+parent-affinity measurements. A reset pull-up follows its reset pad even when
+its other terminal shares the MCU supply. Equivalent decouplers start beside
+successive real shared-rail pad endpoints, spreading them around an IC's supply
+pins. Missing pad evidence retains the deterministic support-ring fallback.
+For supports sharing several dedicated nets, affinity uses the worst of each
+net's nearest endpoint distances, so one short connection cannot hide a long one.
+Related support parts receive bounded cohesion and row/column alignment
+preferences using their owner and dedicated signal-net family. A reset pull-up
+and filter capacitor can form one local cell despite their different roles;
+shared ground and supply rails alone do not establish a group.
+Compactness measures the occupied envelope and centering using rotated movable
+courtyards, including support parts. Primary owners retain the radial cohesion
+term to balance the influence of large blocks and their passive banks.
+For multiple movable owner/support families, refinement tries bounded row or
+column alignment candidates with a channel derived from the configured body
+clearance and component gap. It can recenter the complete free envelope in the
+same candidate. Fixed or edge-constrained parts preserve their positions, and
+every candidate uses the existing hard-constraint rank.
 
 `--tidy-references` searches nearby horizontal native reference positions and
 places the most constrained fields first. Locked fields reserve their positions;
@@ -75,6 +88,11 @@ associated with its own component rather than a nearer component with the same
 designator prefix. An IC label can sit beside its support capacitors, while two
 neighboring capacitor or resistor labels remain distinguishable. Native checks
 also cover courtyard, pad/mask, silkscreen, reference and board-edge collisions.
+After finding a legal label slot, cleanup considers nearby alternatives with a
+clearer distance advantage over same-prefix neighbors. Both the soft penalty
+and additional courtyard distance are limited to 0.75 times the native label
+height. The first legal slot remains the fallback; font size, locked fields and
+all physical/association checks are preserved.
 
 If that placement leaves unresolved labels, the native placement command tries
 up to three private candidates using the requested seed, seed + 1 and seed + 2.

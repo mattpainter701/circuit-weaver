@@ -400,6 +400,89 @@ def test_support_seed_uses_shared_signal_pad_side_and_preserves_body_clearance()
     )
 
 
+def test_equivalent_decouplers_round_robin_real_shared_rail_pads():
+    from circuit_weaver.placement_optimizer import (
+        PlacementConfig,
+        _init_placements,
+        _rectangle_clearance,
+    )
+
+    owner = _make_comp("U1", category="digital", footprint="LQFP-48")
+    owner.placement_width_mm = 8.0
+    owner.placement_height_mm = 6.0
+    owner.placement_geometry_status = "board_geometry"
+    owner.placement_pad_offsets = {
+        "VDD_3P3": [(-4, -3), (4, -3), (4, 3), (-4, 3)],
+        "GND": [(-3, -3), (3, -3), (3, 3), (-3, 3)],
+    }
+    caps = []
+    for ref in ("C1", "C2", "C3", "C4"):
+        cap = _make_comp(ref, category="passive", footprint="0603")
+        cap.placement_width_mm = 1.6
+        cap.placement_height_mm = 0.8
+        cap.placement_parent_ref = "U1"
+        cap.placement_role = "decoupling"
+        cap.placement_pad_offsets = {"VDD_3P3": [(0, 0)], "GND": [(0, 0)]}
+        caps.append(cap)
+
+    placements = _init_placements(
+        [owner, *caps], PlacementConfig(board_width_mm=60, board_height_mm=50), {}, {},
+    )
+    by_ref = {placement.ref: placement for placement in placements}
+    parent = by_ref["U1"]
+    seeds = [(by_ref[ref].x - parent.x, by_ref[ref].y - parent.y) for ref in ("C1", "C2", "C3", "C4")]
+
+    assert len({(round(x, 2), round(y, 2)) for x, y in seeds}) == 4
+    assert len({(math.copysign(1, x), math.copysign(1, y)) for x, y in seeds}) == 4
+    assert all(_rectangle_clearance(by_ref[ref], parent) >= 1.5 for ref in ("C1", "C2", "C3", "C4"))
+
+
+def test_dedicated_reset_net_outweighs_shared_power_rail_for_pullup_affinity_and_seed():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        PlacementConfig,
+        _parent_affinity_distance,
+        _support_seed_position,
+    )
+
+    parent = ComponentPlacement(
+        "U2", 20, 20, width=8, height=6,
+        net_pad_offsets={"RESET_N": [(-2, 0)], "VDD_3P3": [(4, 0)]},
+    )
+    pullup = ComponentPlacement(
+        "R4", 25, 20, width=1.6, height=0.8, parent_ref="U2", placement_role="pullup",
+        net_pad_offsets={"RESET_N": [(0, 0)], "VDD_3P3": [(0, 0)]},
+    )
+
+    distance, model = _parent_affinity_distance(parent, pullup)
+    seed_x, seed_y = _support_seed_position(
+        parent, 1.6, 0.8, pullup.net_pad_offsets, PlacementConfig()
+    )
+
+    assert distance == pytest.approx(7.0)
+    assert model == "pad_endpoints"
+    assert seed_x < parent.x
+    assert seed_y == pytest.approx(parent.y)
+
+
+def test_parent_affinity_preserves_each_dedicated_signal_connection():
+    from circuit_weaver.placement_optimizer import ComponentPlacement, _parent_affinity_distance
+
+    parent = ComponentPlacement(
+        "U1", 10, 10,
+        net_pad_offsets={"BST": [(0, 0)], "SW": [(0, 0)]},
+    )
+    bootstrap_cap = ComponentPlacement(
+        "C3", 10, 10, parent_ref="U1", placement_role="bootstrap",
+        net_pad_offsets={"BST": [(0, 0)], "SW": [(8, 0)]},
+    )
+
+    distance, model = _parent_affinity_distance(parent, bootstrap_cap)
+
+    assert distance == pytest.approx(8.0)
+    assert model == "pad_endpoints"
+
+
 def test_support_seed_falls_back_to_ring_without_shared_signal_pads():
     from circuit_weaver.placement_optimizer import PlacementConfig, _init_placements
 
@@ -507,15 +590,22 @@ def test_support_families_use_signal_topology_and_ignore_shared_power_rails():
         "R3", 20, 10, parent_ref="U1", placement_role="pullup",
         net_pad_offsets={"RESET": [(0, 0)], "VDD_3P3": [(0, 0)]},
     )
+    reset_filter = ComponentPlacement(
+        "C5", 22, 12, parent_ref="U1", placement_role="decoupling",
+        net_pad_offsets={"RESET": [(0, 0)], "GND": [(0, 0)]},
+    )
     boot_pullup = ComponentPlacement(
         "R4", 20, 30, parent_ref="U1", placement_role="pullup",
         net_pad_offsets={"BOOT": [(0, 0)], "VDD_3P3": [(0, 0)]},
     )
 
     groups = {frozenset(member.ref for member in group) for group in _support_peer_groups([
-        parent, local_a, local_b, remote, cc1, cc2, reset_pullup, boot_pullup,
+        parent, local_a, local_b, remote, cc1, cc2, reset_pullup, reset_filter, boot_pullup,
     ])}
-    assert groups == {frozenset({"R1", "R2"})}
+    assert groups == {
+        frozenset({"R1", "R2"}),
+        frozenset({"R3", "C5"}),
+    }
 
 
 def test_support_families_ignore_numeric_voltage_rail_aliases():
@@ -546,6 +636,177 @@ def test_compactness_includes_an_owner_and_its_support_parts():
     spread[1].x = 35
 
     assert _cost_compactness(close, config) < _cost_compactness(spread, config)
+
+
+def test_multi_owner_compactness_centers_the_full_support_courtyard_envelope():
+    from circuit_weaver.placement_optimizer import ComponentPlacement, PlacementConfig, _cost_compactness
+
+    config = PlacementConfig(board_width_mm=50, board_height_mm=40)
+    state = [
+        ComponentPlacement("U1", 12, 20, width=6, height=6),
+        ComponentPlacement("U2", 38, 20, width=6, height=6),
+        ComponentPlacement("C1", 12, 28, width=2, height=1, parent_ref="U1"),
+        ComponentPlacement("C2", 38, 28, width=2, height=1, parent_ref="U2"),
+    ]
+    recentered_supports = [ComponentPlacement(**placement.__dict__) for placement in state]
+    recentered_supports[2].y -= 3
+    recentered_supports[3].y -= 3
+
+    assert _cost_compactness(recentered_supports, config) < _cost_compactness(state, config)
+
+
+def test_refinement_moves_owner_support_families_toward_other_owners():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        PlacementConfig,
+        _ConstraintPlan,
+        _refine_placement,
+    )
+
+    state = [
+        ComponentPlacement("U1", 12, 20, width=6, height=6),
+        ComponentPlacement("U2", 38, 20, width=6, height=6),
+        ComponentPlacement("C1", 12, 27, width=1.6, height=0.8, parent_ref="U1"),
+        ComponentPlacement("C2", 38, 27, width=1.6, height=0.8, parent_ref="U2"),
+    ]
+    config = PlacementConfig(board_width_mm=50, board_height_mm=40, refinement_passes=3)
+
+    refined, _ = _refine_placement(state, config, {}, _ConstraintPlan())
+    by_ref = {placement.ref: placement for placement in refined}
+
+    assert math.hypot(by_ref["U1"].x - by_ref["U2"].x, by_ref["U1"].y - by_ref["U2"].y) < 26
+    assert all(
+        _placement.parent_ref == "U1" and math.hypot(_placement.x - by_ref["U1"].x, _placement.y - by_ref["U1"].y) < 8
+        for _placement in [by_ref["C1"]]
+    )
+    assert all(
+        _placement.parent_ref == "U2" and math.hypot(_placement.x - by_ref["U2"].x, _placement.y - by_ref["U2"].y) < 8
+        for _placement in [by_ref["C2"]]
+    )
+
+
+def test_diagonal_family_alignment_recenters_asymmetric_courtyards_together():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        PlacementConfig,
+        _ConstraintPlan,
+        _placement_rank,
+        _refine_placement,
+    )
+
+    state = [
+        ComponentPlacement("U1", 10, 8, width=6, height=6),
+        ComponentPlacement("U2", 35, 26, width=6, height=6),
+        ComponentPlacement("C1", 10, 15, width=2, height=1, parent_ref="U1"),
+        ComponentPlacement("C2", 35, 33, width=2, height=1, parent_ref="U2"),
+    ]
+    config = PlacementConfig(board_width_mm=50, board_height_mm=40, strategy="cost")
+    plan = _ConstraintPlan()
+    initial_rank = _placement_rank(state, config, {}, plan)
+    single_family_move = [ComponentPlacement(**placement.__dict__) for placement in state]
+    single_family_move[0].y += 9
+    single_family_move[2].y += 9
+
+    assert _placement_rank(single_family_move, config, {}, plan) > initial_rank
+
+    refined, _ = _refine_placement(state, config, {}, plan)
+    by_ref = {placement.ref: placement for placement in refined}
+
+    assert _placement_rank(refined, config, {}, plan) < initial_rank
+    assert abs(by_ref["U1"].y - by_ref["U2"].y) < 0.1
+    assert abs(by_ref["C1"].y - by_ref["C2"].y) < 0.1
+
+
+@pytest.mark.parametrize("protected_field", ["constraint_locked", "edge_constrained"])
+def test_family_alignment_does_not_recenter_a_protected_layout(protected_field):
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        PlacementConfig,
+        _family_alignment_candidates,
+    )
+
+    state = [
+        ComponentPlacement("U1", 5, 5, width=3, height=3),
+        ComponentPlacement("U2", 15, 10, width=3, height=3),
+        ComponentPlacement("U3", 35, 20, width=3, height=3),
+        ComponentPlacement("C2", 15, 13, width=1, height=0.5, parent_ref="U2"),
+        ComponentPlacement("C3", 35, 23, width=1, height=0.5, parent_ref="U3"),
+    ]
+    setattr(state[0], protected_field, True)
+
+    candidates = _family_alignment_candidates(
+        state, PlacementConfig(board_width_mm=50, board_height_mm=40)
+    )
+
+    assert candidates
+    assert all((candidate[0].x, candidate[0].y) == (5, 5) for candidate in candidates)
+
+
+def test_family_alignment_ignores_unowned_components_without_support_families():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        PlacementConfig,
+        _family_alignment_candidates,
+    )
+
+    unowned = [
+        ComponentPlacement(f"U{index}", 5 * index, 5 * index, category="other")
+        for index in range(1, 10)
+    ]
+
+    assert _family_alignment_candidates(unowned, PlacementConfig()) == []
+
+
+def test_family_alignment_keeps_a_courtyard_channel_between_asymmetric_families():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        PlacementConfig,
+        _family_alignment_candidates,
+    )
+
+    state = [
+        ComponentPlacement("U1", 10, 8, width=6, height=6),
+        ComponentPlacement("U2", 27, 19, width=6, height=6),
+        ComponentPlacement("C1", 18, 8, width=2, height=1, parent_ref="U1"),
+        ComponentPlacement("C2", 20, 19, width=2, height=1, parent_ref="U2"),
+    ]
+    config = PlacementConfig(board_width_mm=50, board_height_mm=40)
+    channel = max(2 * config.support_body_clearance_mm, 4 * config.min_component_gap_mm)
+
+    candidates = _family_alignment_candidates(state, config)
+    aligned = [
+        candidate
+        for candidate in candidates
+        if abs(candidate[0].y - candidate[1].y) < 0.01
+    ]
+
+    def family_bounds(candidate, refs):
+        members = [placement for placement in candidate if placement.ref in refs]
+        return (
+            min(placement.x - placement.width / 2 for placement in members),
+            max(placement.x + placement.width / 2 for placement in members),
+        )
+
+    assert any(
+        family_bounds(candidate, {"U2", "C2"})[0]
+        - family_bounds(candidate, {"U1", "C1"})[1]
+        >= channel - 0.01
+        for candidate in aligned
+    )
+
+    reversed_state = [state[index] for index in (1, 0, 3, 2)]
+    reversed_candidates = _family_alignment_candidates(reversed_state, config)
+    assert any(
+        abs(candidate[0].y - candidate[1].y) < 0.01
+        and max(
+            family_bounds(candidate, {"U2", "C2"})[0]
+            - family_bounds(candidate, {"U1", "C1"})[1],
+            family_bounds(candidate, {"U1", "C1"})[0]
+            - family_bounds(candidate, {"U2", "C2"})[1],
+        )
+        >= channel - 0.01
+        for candidate in reversed_candidates
+    )
 
 
 def test_parent_affinity_ignores_ground_pad_coincidence_and_falls_back_to_centers():

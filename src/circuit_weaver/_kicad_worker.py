@@ -140,6 +140,38 @@ def _candidate_associated(center, own_courtyard, ref, obstacles):
     )
 
 
+def _association_margin(center, own_courtyard, ref, obstacles):
+    """Return the distance advantage over the nearest same-class courtyard."""
+    own_distance = math.sqrt(_point_box_distance_sq(center, own_courtyard))
+    peer_distances = [
+        math.sqrt(_point_box_distance_sq(center, box))
+        for kind, owner, box in obstacles
+        if kind == "courtyard" and owner != ref and _reference_class(owner) == _reference_class(ref)
+    ]
+    return min(peer_distances, default=math.inf) - own_distance
+
+
+def _choose_associated_candidate(candidates, own_courtyard, ref, obstacles,
+                                 target_margin, max_extra_distance):
+    """Prefer a clearer local association while retaining hard association."""
+    if not candidates:
+        return None
+    baseline_distance = math.sqrt(_point_box_distance_sq(candidates[0], own_courtyard))
+    max_distance = baseline_distance + max_extra_distance
+    eligible = []
+    for order, center in enumerate(candidates):
+        distance = math.sqrt(_point_box_distance_sq(center, own_courtyard))
+        if distance > max_distance or not _candidate_associated(center, own_courtyard, ref, obstacles):
+            continue
+        margin_shortfall = max(0.0, target_margin - _association_margin(
+            center, own_courtyard, ref, obstacles
+        ))
+        # Cap the soft cost and the search radius so a clearer label stays local.
+        score = distance + min(max_extra_distance, margin_shortfall)
+        eligible.append((score, order, center))
+    return min(eligible)[2] if eligible else candidates[0]
+
+
 def _courtyard_box(footprint, pcbnew):
     layer = pcbnew.B_CrtYd if footprint.GetLayer() == pcbnew.B_Cu else pcbnew.F_CrtYd
     courtyard = footprint.GetCourtyard(layer)
@@ -350,6 +382,46 @@ def _tidy_reference_fields(board, pcbnew):
                 continue
             chosen = (center, (center[0] + origin_offset[0], center[1] + origin_offset[1]))
             break
+        if chosen is not None:
+            # The first clear slot remains the fallback. Inspect only a bounded
+            # neighborhood around it for a slot with a more readable peer margin.
+            text_height = max(1, height)
+            max_extra = int(round(0.75 * text_height))
+            baseline_center = chosen[0]
+            baseline_distance = math.sqrt(_point_box_distance_sq(baseline_center, courtyard))
+            step = pcbnew.FromMM(_SILK_SEARCH_STEP_MM)
+            local_ring = int(math.ceil((baseline_distance + max_extra) / step)) + 2
+            valid_centers = [baseline_center]
+            seen_centers = {baseline_center}
+            max_local_distance = baseline_distance + max_extra
+            for center in _candidate_centers(
+                courtyard, width, height, bounds, pcbnew, max_ring=local_ring
+            ):
+                if center in seen_centers:
+                    continue
+                seen_centers.add(center)
+                if math.sqrt(_point_box_distance_sq(center, courtyard)) > max_local_distance:
+                    continue
+                dx, dy = center[0] - initial_center[0], center[1] - initial_center[1]
+                candidate_box = (current_box[0] + dx, current_box[1] + dy,
+                                 current_box[2] + dx, current_box[3] + dy)
+                if not _inside_bounds(candidate_box, bounds):
+                    continue
+                if any(_boxes_overlap(candidate_box, obstacle[2]) for obstacle in fixed_obstacles):
+                    continue
+                if any(_boxes_overlap(candidate_box, other_box)
+                       for other_box in occupied_refs[entry["layer"]]):
+                    continue
+                if not _candidate_associated(center, courtyard, entry["ref"], fixed_obstacles):
+                    continue
+                valid_centers.append(center)
+            preferred = _choose_associated_candidate(
+                valid_centers, courtyard, entry["ref"], fixed_obstacles,
+                target_margin=text_height, max_extra_distance=max_extra,
+            )
+            if preferred != baseline_center:
+                chosen = (preferred, (preferred[0] + origin_offset[0],
+                                      preferred[1] + origin_offset[1]))
         if chosen is None:
             occupied_refs[entry["layer"]].append(current_box)
             continue

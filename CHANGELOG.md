@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Coherent support placement on larger boards
+
+- Anchor support parts to their dedicated signal connections before shared supply rails, keeping reset pull-ups on the reset-pin side of an MCU. Spread equivalent decouplers among actual shared-rail pad endpoints with deterministic seeds and retained body clearance.
+- Center and compact complete movable courtyard envelopes, including owner/support families. Try bounded family row/column alignment with a clear channel between groups, and group mixed-role supports that share a dedicated signal, such as a reset pull-up and filter capacitor.
+- Give nearby native reference labels a bounded preference for clearer association with their own component. Retain font size, locked fields, strict physical checks and the first legal slot as a fallback.
+
 ### Assembled board SVG previews
 
 - Add `preview-pcb --appearance assembly` to embed KiCad's actual component-model render in a self-contained SVG. Retain native model orientation, dimensions and source/model hashes; missing or hidden-only populated-component models and unavailable rendering fail clearly without replacing an existing preview.
