@@ -12,6 +12,8 @@
 - Reduce repeated placement and label searches with conservative spatial candidates followed by the existing exact geometry checks. Add reproducible full-workflow corpus and diverse 100-part benchmark evidence, including package identity, native routing and assembled model coverage.
 - Use native label failures to increase placement spacing from real reference dimensions on later attempts. Retain authored minimum gaps, font sizes, board constraints and the three-attempt limit; incomplete native reports fail closed.
 
+## [0.36.0] - 2026-10-19
+
 ### Plane-backed ground trace cleanup
 
 - Remove redundant unlocked traces whose complete copper shape is covered by a same-net filled plane, while retaining every via, protected return and decoupling route, other-net copper, placement and labels. Native refill, saved coverage/connectivity verification and full DRC gate the result.
