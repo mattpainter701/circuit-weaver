@@ -204,7 +204,7 @@ jobs:
           - kicad-major: "9"
             container-image: ghcr.io/kicad/kicad:9.0@sha256:e638b79b0321f29395a5b783e94bb9f3c73303e8da15da27b8f5cb4b67a37729
           - kicad-major: "10"
-            container-image: ghcr.io/kicad/kicad:10.0-full@sha256:347d5b7d5d88207ba4217cdf594eeccd142279600d023e7a7e426f8599c77708
+            container-image: ghcr.io/kicad/kicad:10.0.6-full@sha256:e36e29b5f4a638a1a7238eba3d2fcbc8e061ffed1e99a8f39cb722706c94a58e
 
     steps:
       - name: Install checkout and validation prerequisites in the KiCad container
