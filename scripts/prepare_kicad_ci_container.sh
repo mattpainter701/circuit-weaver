@@ -39,6 +39,24 @@ test -s /usr/share/kicad/template/fp-lib-table
 test -s /usr/share/kicad/template/sym-lib-table
 test -s /usr/share/kicad/symbols/Device.kicad_sym
 test -d /usr/share/kicad/footprints/Resistor_SMD.pretty
+if [[ "$expected_major" == "10" ]]; then
+  model_dir=/usr/share/kicad/3dmodels
+  if [[ ! -d "$model_dir" ]]; then
+    echo "::error::KiCad 10 full image is missing $model_dir" >&2
+    exit 1
+  fi
+  for relative_path in \
+    Capacitor_SMD.3dshapes/C_0402_1005Metric.step \
+    Package_TO_SOT_SMD.3dshapes/SOT-223.step \
+    Connector_USB.3dshapes/USB_C_Receptacle_GCT_USB4085.step; do
+    if [[ ! -s "$model_dir/$relative_path" ]]; then
+      echo "::error::KiCad 10 3D model is missing: $model_dir/$relative_path" >&2
+      exit 1
+    fi
+  done
+  printf 'KICAD10_3DMODEL_DIR=%s\n' "$model_dir" >> "$GITHUB_ENV"
+fi
+
 install -D --mode=0644 \
   /usr/share/kicad/template/fp-lib-table \
   "$HOME/.config/kicad/${expected_major}.0/fp-lib-table"

@@ -87,7 +87,7 @@ def test_kicad_workflows_use_pinned_official_containers_and_native_runtime_check
     expected_images = {
         "8": "ghcr.io/kicad/kicad:8.0@sha256:5716d82aa247abdbe512650eb4e8fce5a4031cbbef0a2c8df83208a69fef87b2",
         "9": "ghcr.io/kicad/kicad:9.0@sha256:e638b79b0321f29395a5b783e94bb9f3c73303e8da15da27b8f5cb4b67a37729",
-        "10": "ghcr.io/kicad/kicad:10.0@sha256:18693567392b80da435f9fa952ce3a3e534c66eb5a6033f5b9c80aa3b19dd3ec",
+        "10": "ghcr.io/kicad/kicad:10.0-full@sha256:347d5b7d5d88207ba4217cdf594eeccd142279600d023e7a7e426f8599c77708",
     }
 
     assert "kicad-cli version" in runtime_text
@@ -95,6 +95,15 @@ def test_kicad_workflows_use_pinned_official_containers_and_native_runtime_check
     assert "pcbnew.BOARD()" in runtime_text
     assert "/usr/share/kicad/template/fp-lib-table" in runtime_text
     assert '"$HOME/.config/kicad/${expected_major}.0/fp-lib-table"' in runtime_text
+    for required_model in (
+        "Capacitor_SMD.3dshapes/C_0402_1005Metric.step",
+        "Package_TO_SOT_SMD.3dshapes/SOT-223.step",
+        "Connector_USB.3dshapes/USB_C_Receptacle_GCT_USB4085.step",
+    ):
+        assert required_model in runtime_text
+    assert "model_dir=/usr/share/kicad/3dmodels" in runtime_text
+    assert "KICAD10_3DMODEL_DIR=%s\\n" in runtime_text
+    assert '>> "$GITHUB_ENV"' in runtime_text
 
     for workflow_name in ("ci.yml", "release.yml"):
         workflow = repo_root / ".github" / "workflows" / workflow_name
