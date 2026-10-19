@@ -230,6 +230,9 @@ running the suite; every preview still verifies its complete per-component
 model inventory and hashes.
 The native CI job installs the MCP extra and imports its real stdio client
 before running the corpus, which requires an actual MCP session for each case.
+The harness preserves the selected virtual-environment executable path rather
+than resolving it to the base Python binary, and checks MCP in that interpreter
+before starting workflows.
 
 ## Physical inventory regression
 

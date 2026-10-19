@@ -75,6 +75,11 @@ def git_value(*args: str) -> str:
     return result.stdout.strip()
 
 
+def _python_executable(path: Path) -> Path:
+    """Make the executable path absolute without dereferencing venv symlinks."""
+    return path.expanduser().absolute()
+
+
 def source_state() -> dict[str, str]:
     status = git_value("status", "--porcelain")
     revision = git_value("rev-parse", "HEAD")
@@ -159,6 +164,7 @@ def _stage_inputs(suite_path: Path, suite: dict[str, Any], cases: list[dict[str,
 
 
 def _source_probe(python: Path, installed: bool, wheel: Path | None, timeout: int) -> dict[str, Any]:
+    python = _python_executable(python)
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
     if not installed:
@@ -167,6 +173,8 @@ def _source_probe(python: Path, installed: bool, wheel: Path | None, timeout: in
         env.pop("PYTHONPATH", None)
     probe = subprocess.run(
         [str(python), "-c", (
+            "from mcp import ClientSession, StdioServerParameters; "
+            "from mcp.client.stdio import stdio_client; "
             "import circuit_weaver, circuit_weaver.generator; "
             "print(circuit_weaver.__file__); print(circuit_weaver.generator.__file__)"
         )],
@@ -315,8 +323,9 @@ def _inspect_and_verify_connectivity(
     else:
         env["PYTHONPATH"] = str(REPO / "src")
     timeout = min(max(args.timeout, 120), 600)
+    python = _python_executable(args.python)
     result = subprocess.run(
-        [str(args.python.resolve()), "-c", script, str(board_path.resolve()), str(timeout),
+        [str(python), "-c", script, str(board_path.resolve()), str(timeout),
          str(helper_dir), str(contracts_path.resolve())],
         cwd=REPO, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout + 30,
     )
@@ -354,8 +363,9 @@ def _run_case(case: dict[str, Any], args: argparse.Namespace, output: Path) -> d
     log_dir.mkdir(exist_ok=True)
     log_stem = log_dir / case["id"]
     spec_path: Path = case["_spec_path"]
+    python = _python_executable(args.python)
     command = [
-        str(args.python.resolve()), str(WORKFLOW), "--spec", str(spec_path), "--output", str(run_dir),
+        str(python), str(WORKFLOW), "--spec", str(spec_path), "--output", str(run_dir),
         "--iterations", str(args.iterations), "--attempts", str(args.attempts),
         "--route-timeout", str(args.route_timeout),
         "--mcp-smoke", "--render-3d",
@@ -376,7 +386,7 @@ def _run_case(case: dict[str, Any], args: argparse.Namespace, output: Path) -> d
         "case_id": case["id"], "family": case["family"], "spec": str(spec_path),
         "spec_sha256": case["_spec_sha256"], "command": command,
         "minimum_drill_mm": case.get("minimum_drill_mm"),
-        "timeout_seconds": args.timeout, "python": str(args.python.resolve()),
+        "timeout_seconds": args.timeout, "python": str(python),
     }, indent=2) + "\n", encoding="utf-8")
     started = time.monotonic()
     status = "FAILED"
@@ -446,7 +456,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=int, default=7200, help="per-case hard timeout in seconds")
     parser.add_argument("--iterations", type=int, default=400, help="native placement search iterations")
     parser.add_argument("--attempts", type=int, default=2, help="autoroute attempts")
-    parser.add_argument("--route-timeout", type=int, default=300, help="per-attempt routing timeout")
+    parser.add_argument("--route-timeout", type=int, default=300,
+                        help="total routing budget shared across attempts")
     parser.add_argument("--require-clean", action="store_true",
                         help="refuse dirty source and fail if revision/tree changes during the workflow")
     args = parser.parse_args(argv)
@@ -481,7 +492,8 @@ def main(argv: list[str] | None = None) -> int:
         cases = [case for case in cases if case["id"] in set(args.case_ids)]
     initial_status = initial_source["status"]
     initial_revision = initial_source["revision"]
-    source = _source_probe(args.python.resolve(), args.installed, args.expected_wheel, min(args.timeout, 120))
+    source = _source_probe(_python_executable(args.python), args.installed,
+                           args.expected_wheel, min(args.timeout, 120))
     args.package_source_sha256 = source["package_source_sha256"]
     args.workflow_sha256 = initial_source["workflow_sha256"]
     run_manifest: dict[str, Any] = {

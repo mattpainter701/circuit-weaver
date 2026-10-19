@@ -46,6 +46,9 @@ harness verifies the Python import location before running and then checks the
 validator's wheel-payload evidence. It snapshots the suite and all input YAML
 files, records each full command and subprocess log, and preserves per-case
 failures in a new output directory. It never overwrites an existing run.
+The selected Python path retains its virtual environment even when its
+executable is a symlink. Import preflight checks the real MCP client in that
+same interpreter before any case starts.
 
 Run every compact reference design through the same 16-stage workflow with
 `--suite samples`. This integration suite has its own one-component minimum;

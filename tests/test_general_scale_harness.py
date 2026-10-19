@@ -6,7 +6,9 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 import subprocess
+import venv
 from pathlib import Path
 
 import pytest
@@ -161,6 +163,117 @@ def test_runner_leaves_output_directory_creation_to_workflow_validator(tmp_path:
     assert (output / "runs" / case["id"] / "evidence.json").is_file()
     assert (output / "runs" / case["id"] / "native-pcb-inventory.json").is_file()
     assert (output / "logs" / f"{case['id']}.invocation.json").is_file()
+
+
+def test_run_case_preserves_venv_interpreter_and_its_site_packages(tmp_path: Path, monkeypatch):
+    venv_root = tmp_path / "isolated-venv"
+    venv.EnvBuilder(
+        with_pip=False, system_site_packages=False, symlinks=(os.name != "nt"),
+    ).create(venv_root)
+    python = venv_root / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    if os.name != "nt":
+        assert python.is_symlink()
+    site_packages = subprocess.run(
+        [str(python), "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    (Path(site_packages) / "venv_only_marker.py").write_text("VALUE = 'loaded'\n", encoding="utf-8")
+    if os.name != "nt":
+        resolved_probe = subprocess.run(
+            [str(python.resolve()), "-c", (
+                "import importlib.util,sys; "
+                "print(sys.prefix); print(importlib.util.find_spec('venv_only_marker') is not None)"
+            )],
+            check=True, capture_output=True, text=True,
+        ).stdout.splitlines()
+        assert Path(resolved_probe[0]) != venv_root
+        assert resolved_probe[1] == "False"
+
+    workflow = tmp_path / "workflow_probe.py"
+    workflow.write_text(
+        "import json, pathlib, sys\n"
+        "try:\n"
+        " import venv_only_marker\n"
+        " marker_loaded = venv_only_marker.VALUE == 'loaded'\n"
+        "except ImportError:\n"
+        " marker_loaded = False\n"
+        "out = pathlib.Path(sys.argv[sys.argv.index('--output') + 1])\n"
+        "out.mkdir(parents=True)\n"
+        "(out / 'interpreter.json').write_text(json.dumps({'prefix': sys.prefix, 'marker_loaded': marker_loaded}))\n"
+        "raise SystemExit(23)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(HARNESS, "WORKFLOW", workflow)
+    spec_path = tmp_path / "fixture.yaml"
+    spec_path.write_text("name: fixture\n", encoding="utf-8")
+    case = {
+        "id": "venv_probe", "family": "test", "_spec_path": spec_path,
+        "_spec_sha256": HARNESS.sha256(spec_path), "_source_spec_path": spec_path,
+        "board_mm": [10, 10],
+    }
+    output = tmp_path / "run"
+    args = argparse.Namespace(
+        python=python, installed=False, expected_wheel=None,
+        iterations=1, attempts=1, route_timeout=1, timeout=60,
+        minimum_physical_parts=1,
+    )
+
+    result = HARNESS._run_case(case, args, output)
+    captured = json.loads((output / "runs" / case["id"] / "interpreter.json").read_text(encoding="utf-8"))
+    invocation = json.loads((output / "logs" / f"{case['id']}.invocation.json").read_text(encoding="utf-8"))
+
+    assert result["status"] == "FAILED"  # The probe deliberately stops before evidence validation.
+    assert os.path.normcase(os.path.abspath(captured["prefix"])) == os.path.normcase(str(venv_root.absolute()))
+    assert captured["marker_loaded"] is True
+    assert invocation["python"] == str(python.absolute())
+
+
+def test_source_probe_checks_mcp_in_the_selected_interpreter(tmp_path: Path, monkeypatch):
+    executable = tmp_path / "selected-venv" / "bin" / "python"
+    calls = []
+    package_init = HARNESS.REPO / "src" / "circuit_weaver" / "__init__.py"
+    generator = HARNESS.REPO / "src" / "circuit_weaver" / "generator.py"
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(
+            command, 0, f"{package_init}\n{generator}\n", "",
+        )
+
+    monkeypatch.setattr(HARNESS.subprocess, "run", fake_run)
+    HARNESS._source_probe(executable, installed=False, wheel=None, timeout=30)
+
+    assert calls[0][0] == str(executable.absolute())
+    assert "from mcp import ClientSession, StdioServerParameters" in calls[0][2]
+    assert "from mcp.client.stdio import stdio_client" in calls[0][2]
+
+
+def test_native_connectivity_probe_preserves_selected_executable(tmp_path: Path, monkeypatch):
+    executable = tmp_path / "selected-venv" / "bin" / "python"
+    board = tmp_path / "board.kicad_pcb"
+    board.write_bytes(b"native board")
+    output = tmp_path / "run"
+    logs = tmp_path / "logs"
+    output.mkdir()
+    logs.mkdir()
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(
+            command, 0,
+            json.dumps({"inventory": {"status": "ok", "footprints": []},
+                        "connectivity": {"status": "pass", "verified_channels": 0}}), "",
+        )
+
+    monkeypatch.setattr(HARNESS.subprocess, "run", fake_run)
+    HARNESS._inspect_and_verify_connectivity(
+        {"id": "native_probe", "required_channels": []},
+        argparse.Namespace(python=executable, installed=False, timeout=60),
+        output, logs, board,
+    )
+
+    assert commands[0][0] == str(executable.absolute())
 
 
 def test_main_aggregates_canonical_pass_with_verbose_workflow_status(tmp_path: Path, monkeypatch, capsys):
