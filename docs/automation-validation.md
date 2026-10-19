@@ -228,6 +228,8 @@ KiCad 10 uses the official `10.0.6-full` image so the assembled-preview corpus
 has the stock 3D library. Setup requires representative STEP files before
 running the suite; every preview still verifies its complete per-component
 model inventory and hashes.
+The native CI job installs the MCP extra and imports its real stdio client
+before running the corpus, which requires an actual MCP session for each case.
 
 ## Physical inventory regression
 

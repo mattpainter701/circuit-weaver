@@ -223,7 +223,10 @@ jobs:
         run: bash scripts/prepare_kicad_ci_container.sh "${{ matrix.kicad-major }}"
 
       - name: Install Circuit Weaver
-        run: python -m pip install . pytest
+        run: python -m pip install ".[mcp]" pytest
+
+      - name: Verify MCP workflow client dependency
+        run: python -c "from mcp import ClientSession, StdioServerParameters; from mcp.client.stdio import stdio_client"
 
       - name: Generate and verify representative final schematics
         run: |
