@@ -35,7 +35,7 @@ def _valid_evidence(tmp_path: Path, count: int = 100, *, spec_hash: str = "spec-
         for i in range(count)
     ]
     evidence = {
-        "status": "PASS",
+        "status": "PASS — prototype workflow validated; manufacturing export correctly blocked",
         "steps": [{"name": name, "passed": True} for name in names],
         "previews": {"front": {
             "model_coverage": {"expected": count, "resolved": count, "missing": 0},
@@ -157,14 +157,43 @@ def test_runner_leaves_output_directory_creation_to_workflow_validator(tmp_path:
     case["board_mm"] = [150, 110]
     result = HARNESS._run_case(case, args, output)
     assert result["status"] == "PASS", result
+    assert result["workflow_status"].startswith("PASS — prototype workflow validated")
     assert (output / "runs" / case["id"] / "evidence.json").is_file()
     assert (output / "runs" / case["id"] / "native-pcb-inventory.json").is_file()
     assert (output / "logs" / f"{case['id']}.invocation.json").is_file()
 
 
+def test_main_aggregates_canonical_pass_with_verbose_workflow_status(tmp_path: Path, monkeypatch, capsys):
+    suite_path = HARNESS.DEFAULT_SUITE
+    case = {"id": "fixture", "family": "test"}
+    source = {
+        "status": "", "revision": "r1", "workflow_sha256": "workflow-hash",
+        "benchmark_tree_sha256": "benchmark-hash", "package_tree_sha256": "package-hash",
+    }
+    monkeypatch.setattr(HARNESS, "source_state", lambda: dict(source))
+    monkeypatch.setattr(HARNESS, "_load_suite", lambda _path: ({"minimum_physical_parts": 1}, [case]))
+    monkeypatch.setattr(HARNESS, "_stage_inputs", lambda *_args: {"suite_path": "staged-suite.yaml"})
+    monkeypatch.setattr(HARNESS, "_source_probe", lambda *_args: {"package_source_sha256": "package-hash"})
+    monkeypatch.setattr(HARNESS, "_run_case", lambda *_args: {
+        "case_id": "fixture", "status": "PASS",
+        "workflow_status": "PASS — prototype workflow validated; manufacturing export correctly blocked",
+    })
+
+    output = tmp_path / "aggregate"
+    result = HARNESS.main(["--suite", str(suite_path), "--output", str(output)])
+    manifest = json.loads((output / "run-manifest.json").read_text(encoding="utf-8"))
+
+    assert result == 0
+    assert manifest["status"] == "PASS"
+    assert manifest["results"][0]["status"] == "PASS"
+    assert manifest["results"][0]["workflow_status"].startswith("PASS —")
+    assert json.loads(capsys.readouterr().out)["status"] == "PASS"
+
+
 def test_evidence_requires_all_stages_and_real_assembly_inventory(tmp_path: Path):
     run = _valid_evidence(tmp_path)
     result = HARNESS._validate_evidence(run, 100, expected_spec_hash="spec-hash")
+    assert result["workflow_status"].startswith("PASS — prototype workflow validated")
     assert result["physical_part_count"] == 100
     assert set(result["passed_stages"]) == HARNESS.REQUIRED_STEPS
 

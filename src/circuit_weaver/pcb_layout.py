@@ -189,10 +189,57 @@ def _publish(staged: Path, destination: Path, snapshots: dict[Path, str | None],
         _publish_staged_transaction(staged.parent, publications)
 
 
+def _design_min_component_gap(spec: dict[str, Any] | None) -> float:
+    """Return the effective default or authored board gap seen by the optimizer."""
+    minimum = PlacementConfig().min_component_gap_mm
+    if not isinstance(spec, dict):
+        return minimum
+    constraints = spec.get("pcb_constraints", [])
+    if not isinstance(constraints, list):
+        return minimum
+    board_targets = {"board", "board_outline", "pcb", "outline"}
+    for rule in constraints:
+        if not isinstance(rule, dict):
+            continue
+        kind = str(rule.get("kind") or rule.get("type") or "").strip().lower()
+        target = str(rule.get("target") or rule.get("ref") or "").strip().lower()
+        has_board_keys = (target in board_targets or "board_width_mm" in rule
+                          or "board_height_mm" in rule or isinstance(rule.get("board"), dict))
+        if kind != "placement" or not has_board_keys:
+            continue
+        value = rule.get("min_component_gap_mm")
+        if isinstance(value, bool):
+            continue
+        try:
+            value = float(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if math.isfinite(value) and value >= 0:
+            # _build_constraint_plan applies board gap rules in input order;
+            # mirror its last-valid-rule behavior for the attempt diagnostics.
+            minimum = value
+    return minimum
+
+
+def _native_reference_gap_floor(footprints: list[dict[str, Any]]) -> float:
+    """Estimate a useful spacing floor from native, clearance-padded reference boxes."""
+    heights = []
+    for footprint in footprints:
+        size = footprint.get("reference_size_mm")
+        if (isinstance(size, (list, tuple)) and len(size) == 2
+                and all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                        and math.isfinite(value) and value > 0 for value in size)):
+            heights.append(float(size[1]))
+    # Native reference boxes already include 0.2 mm silk clearance on every
+    # side. Add another 0.4 mm between labels and bodies as placement room.
+    return max(heights, default=0.1) + 0.4
+
+
 def _place_pcb_once(
     board_path: str | Path, output_path: str | Path, *, iterations: int = 5000, seed: int = 0,
     overwrite: bool = False, kicad_python_path: str | Path | None = None,
     design_spec: dict[str, Any] | None = None, tidy_references: bool = False,
+    feedback_min_component_gap_mm: float | None = None,
     expected_snapshots: dict[Path, str | None] | None = None,
 ) -> dict[str, Any]:
     """Place an unrouted rectangular board, preserving all real pads and nets."""
@@ -200,6 +247,12 @@ def _place_pcb_once(
     try:
         if not isinstance(tidy_references, bool):
             raise ValueError("tidy_references must be a boolean")
+        if (feedback_min_component_gap_mm is not None
+                and (isinstance(feedback_min_component_gap_mm, bool)
+                     or not isinstance(feedback_min_component_gap_mm, (int, float))
+                     or not math.isfinite(feedback_min_component_gap_mm)
+                     or feedback_min_component_gap_mm < 0)):
+            raise ValueError("feedback_min_component_gap_mm must be a finite non-negative number")
         if destination.suffix.lower() != ".kicad_pcb":
             raise ValueError("Placement output must be a .kicad_pcb file")
         if source == destination:
@@ -226,9 +279,13 @@ def _place_pcb_once(
         if inspection["track_count"] or inspection["zone_count"]:
             raise ValueError("Automatic placement requires an unrouted board without copper zones")
         bounds = inspection["bounds"]
+        reference_gap_floor = _native_reference_gap_floor(inspection["footprints"])
         intent, constraints = _design_intent(design_spec, inspection["footprints"], bounds)
         authored_constraints = constraints
         constraints = _center_constraints(constraints, inspection["footprints"], bounds)
+        if feedback_min_component_gap_mm is not None:
+            constraints.append({"kind": "placement", "target": "board",
+                                "min_component_gap_mm": feedback_min_component_gap_mm})
         components = []
         center_offsets = {}
         # Native iteration order may depend on regenerated KiCad UUIDs. A seed
@@ -295,6 +352,7 @@ def _place_pcb_once(
         result["placements"] = placements
         result["coordinate_origin"] = "kicad_board"
         result["movable_coordinate_resolution_mm"] = 0.0001
+        result["native_reference_gap_floor_mm"] = reference_gap_floor
         result["design_intent_sha256"] = (hashlib.sha256(json.dumps(design_spec, sort_keys=True).encode()).hexdigest()
                                            if design_spec is not None else None)
         result["layout_review"] = _layout_review(placements, components, authored_constraints, bounds)
@@ -356,6 +414,8 @@ def place_pcb(
         attempts: list[dict[str, Any]] = []
         best_result: dict[str, Any] | None = None
         best_score = math.inf
+        base_gap = _design_min_component_gap(design_spec)
+        feedback_gap: float | None = None
         with tempfile.TemporaryDirectory(prefix=".cw-place-retries-", dir=destination.parent) as folder:
             root = Path(folder)
             for attempt_index, attempt_seed in enumerate((seed, seed + 1, seed + 2), start=1):
@@ -366,6 +426,7 @@ def place_pcb(
                 candidate = _place_pcb_once(
                     source, candidate_path, iterations=iterations, seed=attempt_seed, overwrite=False,
                     kicad_python_path=kicad_python_path, design_spec=design_spec, tidy_references=True,
+                    feedback_min_component_gap_mm=feedback_gap,
                     expected_snapshots=original_snapshots,
                 )
                 # A concurrent source/project change invalidates the entire search,
@@ -382,6 +443,7 @@ def place_pcb(
                                and type(remaining) is int and remaining == 0)
                 success = candidate.get("status") == "ok" and label_clear
                 attempts.append({"attempt": attempt_index, "seed": attempt_seed, "iterations": iterations,
+                                 "min_component_gap_mm": (feedback_gap if feedback_gap is not None else base_gap),
                                  "status": "accepted" if success else "rejected",
                                  "candidate_status": candidate.get("status", "error"),
                                  "unresolved_count": unresolved, "remaining_conflict_count": remaining})
@@ -395,10 +457,21 @@ def place_pcb(
                 if best_result is None or score < best_score:
                     best_result, best_score = candidate, score
                 if not success:
-                    # Without a native silk report, this was an unrelated
-                    # placement/DRC/worker failure; a new seed cannot resolve it.
-                    if candidate.get("status") != "ok" and not has_native_report:
+                    # Retry only when placement/DRC passed and a complete native
+                    # report proves that labels alone need more spacing.
+                    if candidate.get("status") != "ok" or not has_native_report:
                         break
+                    if unresolved is None or remaining is None:
+                        break
+                    if not label_clear:
+                        current_gap = feedback_gap if feedback_gap is not None else base_gap
+                        placement = candidate.get("placement")
+                        raw_floor = (placement.get("native_reference_gap_floor_mm")
+                                     if isinstance(placement, dict) else None)
+                        reference_floor = (raw_floor if isinstance(raw_floor, (int, float))
+                                           and not isinstance(raw_floor, bool) and math.isfinite(raw_floor)
+                                           and raw_floor >= 0 else current_gap)
+                        feedback_gap = max(current_gap + 0.5, reference_floor)
                     continue
                 _publish(candidate_path, destination, original_snapshots, overwrite)
                 candidate["output_path"] = str(destination)

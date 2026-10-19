@@ -83,8 +83,7 @@ digital:
 
 passives:
   - ref: C_V3
-    ic: C_Small
-    value: 10nF
+    value: 100nF
     footprint: Capacitor_SMD:C_0402_1005Metric
     pin_nets_extra:
       "1": V3_U2

@@ -554,6 +554,18 @@ def _hydrate_ir_from_components(ir: DesignIR, components: list[ComponentDef]) ->
     )
 
 
+def _is_explicit_inferred_passive(block: DesignBlock) -> bool:
+    """Recognize only inferable standalone passives from the passives section."""
+    if block.section.strip().casefold() != "passives" or not block.ref or not block.value.strip():
+        return False
+    footprint = str((block.part_bindings or {}).get("footprint") or "").strip()
+    if not footprint:
+        return False
+    from .component_db import infer_passive_component
+
+    return infer_passive_component(block.ref, block.value.strip(), footprint) is not None
+
+
 def _validate_block_definitions(ir: DesignIR) -> tuple[list[ValidationMessage], list[ValidationMessage]]:
     structural: list[ValidationMessage] = []
     electrical: list[ValidationMessage] = []
@@ -642,7 +654,7 @@ def _validate_block_definitions(ir: DesignIR) -> tuple[list[ValidationMessage], 
                         )
                     )
         else:
-            if not block.ic:
+            if not block.ic and not _is_explicit_inferred_passive(block):
                 structural.append(
                     ValidationMessage(
                         category="structural",

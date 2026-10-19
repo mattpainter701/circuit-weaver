@@ -138,7 +138,7 @@ def test_tidy_placement_retries_and_publishes_first_native_clean_candidate(tmp_p
     source, destination = tmp_path / "source.kicad_pcb", tmp_path / "out.kicad_pcb"
     source.write_bytes(b"source")
     calls = _mock_place_attempt(monkeypatch, [
-        _candidate("error", 1, 1), _candidate("error", 0, 1), _candidate("ok", 0, 0),
+        _candidate("ok", 1, 1), _candidate("ok", 0, 1), _candidate("ok", 0, 0),
     ])
 
     result = place_pcb(source, destination, iterations=321, seed=7, tidy_references=True)
@@ -161,7 +161,7 @@ def test_tidy_placement_exhaustion_never_publishes_candidate(tmp_path, monkeypat
     source, destination = tmp_path / "source.kicad_pcb", tmp_path / "out.kicad_pcb"
     source.write_bytes(b"source")
     calls = _mock_place_attempt(monkeypatch, [
-        _candidate("error", 1, 0), _candidate("ok", 0, 1), _candidate("error", 0, 2),
+        _candidate("ok", 1, 0), _candidate("ok", 0, 1), _candidate("ok", 0, 2),
     ])
 
     result = place_pcb(source, destination, seed=11, tidy_references=True)
@@ -181,7 +181,7 @@ def test_tidy_exhaustion_preserves_existing_output_bundle(tmp_path, monkeypatch)
     project = destination.with_suffix(".kicad_pro")
     project.write_bytes(b"old project")
     _mock_place_attempt(monkeypatch, [
-        _candidate("error", 1, 0), _candidate("ok", 0, 1), _candidate("error", 0, 2),
+        _candidate("ok", 1, 0), _candidate("ok", 0, 1), _candidate("ok", 0, 2),
     ])
 
     result = place_pcb(source, destination, seed=11, tidy_references=True, overwrite=True)
@@ -196,12 +196,12 @@ def test_tidy_retry_requires_complete_native_silkscreen_report(tmp_path, monkeyp
     source.write_bytes(b"source")
     incomplete = _candidate("ok", 0, 0)
     incomplete["placement"]["silkscreen"].pop("remaining_conflict_count")
-    _mock_place_attempt(monkeypatch, [incomplete, incomplete, incomplete])
+    calls = _mock_place_attempt(monkeypatch, [incomplete, incomplete, incomplete])
 
     result = place_pcb(source, destination, tidy_references=True)
 
     assert result["status"] == "error"
-    assert len(result["placement_attempts"]) == 3
+    assert len(result["placement_attempts"]) == len(calls) == 1
     assert not destination.exists()
 
 
@@ -238,11 +238,12 @@ def test_missing_native_counts_are_json_finite_and_diagnostic(tmp_path, monkeypa
     source.write_bytes(b"source")
     incomplete = _candidate("ok", 0, 0)
     incomplete["placement"]["silkscreen"]["remaining_conflict_count"] = float("inf")
-    _mock_place_attempt(monkeypatch, [incomplete, incomplete, incomplete])
+    calls = _mock_place_attempt(monkeypatch, [incomplete, incomplete, incomplete])
 
     result = place_pcb(source, destination, tidy_references=True)
 
     assert result["status"] == "error"
+    assert len(result["placement_attempts"]) == len(calls) == 1
     assert result["placement_attempts"][0]["remaining_conflict_count"] is None
     assert result["placement_attempts"][0]["rejection_reason"] == "native_silkscreen_count_invalid"
     import json
@@ -283,7 +284,7 @@ def test_tidy_retry_preserves_existing_output_on_rejected_candidates(tmp_path, m
     destination.write_bytes(b"previous board")
     destination.with_suffix(".kicad_pro").write_bytes(b"previous project")
     calls = _mock_place_attempt(monkeypatch, [
-        _candidate("error", 1, 0), _candidate("ok", 0, 0),
+        _candidate("ok", 1, 0), _candidate("ok", 0, 0),
     ])
 
     rejected = place_pcb(source, destination, seed=1, tidy_references=True, overwrite=False)

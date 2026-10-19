@@ -175,6 +175,13 @@ Functional ownership and edge intent survive placement, while native reference
 cleanup is measured after saving and reloading. Layout review warnings and
 unresolved labels are retained in the report; successful DRC alone does not
 establish connector access or readable silkscreen.
+With `--tidy-references`, a complete native report showing label conflicts can
+trigger another placement attempt with more spacing, derived from the native
+reference boxes. The first attempt retains the authored placement policy;
+later attempts preserve its minimum gap, outline, locked parts and font sizes.
+The search remains limited to three seeds and publishes only after physical
+DRC and all native reference checks pass. Missing or invalid reports stop the
+search instead of counting as label feedback.
 Omitting `--clearance` preserves native defaults, and existing source board
 rules cannot be weakened by this option. Outputs remain separate from the input; replacement requires
 `--overwrite`. The prototype path supports direct sibling schematic sheets;

@@ -7,9 +7,9 @@ import os
 import subprocess
 from pathlib import Path
 
-import circuit_weaver
 import pytest
 
+import circuit_weaver
 from circuit_weaver.kicad_bridge import find_kicad_python, run_kicad
 
 _FIXTURE_SCRIPT = r'''

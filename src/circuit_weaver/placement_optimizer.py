@@ -18,6 +18,7 @@ import math
 import random
 import re
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from itertools import combinations
 from pathlib import Path
 from typing import Any
@@ -1549,6 +1550,7 @@ _LABEL_PROXY_BOARD_MARGIN_MM = 0.4
 _LABEL_PROXY_TARGET_SLOTS = 2
 _LABEL_PROXY_MISSING_SLOT_COST = 250.0
 _LABEL_SPACE_GRID_MM = 4.0
+_LABEL_SPACE_GRID_MAX_CELLS = 4096
 
 
 def _point_box_distance_sq(point: tuple[float, float], box: tuple[float, float, float, float]) -> float:
@@ -1580,6 +1582,14 @@ def _proxy_label_centers(
     if not all(math.isfinite(value) and value > 0 for value in (text_width, text_height)):
         return []
     courtyard = _placement_courtyard_box(placement)
+    return list(_proxy_label_centers_for_geometry(courtyard, text_width, text_height))
+
+
+@lru_cache(maxsize=4096)
+def _proxy_label_centers_for_geometry(
+    courtyard: tuple[float, float, float, float], text_width: float, text_height: float,
+) -> tuple[tuple[float, float], ...]:
+    """Cache pure label candidates for identical courtyard and text geometry."""
     left = courtyard[0] - text_width / 2
     right = courtyard[2] + text_width / 2
     top = courtyard[1] - text_height / 2
@@ -1604,14 +1614,52 @@ def _proxy_label_centers(
                 (right_x, bottom_y),
             }
         )
-    return sorted(
+    return tuple(sorted(
         centers,
         key=lambda point: (
             _point_box_distance_sq(point, courtyard),
             point[1],
             point[0],
         ),
-    )
+    ))
+
+
+@lru_cache(maxsize=8192)
+def _cached_reference_label_slots(
+    own_box: tuple[float, float, float, float],
+    text_width: float,
+    text_height: float,
+    board_width: float,
+    board_height: float,
+    obstacle_boxes: tuple[tuple[float, float, float, float], ...],
+    peer_boxes: tuple[tuple[float, float, float, float], ...],
+) -> int:
+    """Count slots in an exact, local geometry context shared across score calls."""
+    centers = _proxy_label_centers_for_geometry(own_box, text_width, text_height)
+    feasible: set[tuple[float, float]] = set()
+    for center in centers:
+        label_box = (
+            center[0] - text_width / 2,
+            center[1] - text_height / 2,
+            center[0] + text_width / 2,
+            center[1] + text_height / 2,
+        )
+        if (
+            label_box[0] < _LABEL_PROXY_BOARD_MARGIN_MM
+            or label_box[1] < _LABEL_PROXY_BOARD_MARGIN_MM
+            or label_box[2] > board_width - _LABEL_PROXY_BOARD_MARGIN_MM
+            or label_box[3] > board_height - _LABEL_PROXY_BOARD_MARGIN_MM
+        ):
+            continue
+        if any(_overlap_boxes(label_box, box) for box in obstacle_boxes):
+            continue
+        own_distance = _point_box_distance_sq(center, own_box)
+        if any(_point_box_distance_sq(center, box) < own_distance for box in peer_boxes):
+            continue
+        feasible.add(center)
+        if len(feasible) >= _LABEL_PROXY_TARGET_SLOTS:
+            break
+    return len(feasible)
 
 
 def _reference_label_space_metrics(
@@ -1649,50 +1697,55 @@ def _reference_label_space_metrics(
         obstacle_index = layer_indexes[layer]
         peer_index = class_indexes[class_key]
         placement_index = placement_indices[id(placement)]
-        feasible: set[tuple[float, float]] = set()
-        for center in _proxy_label_centers(placement):
-            label_box = (
-                center[0] - text_width / 2,
-                center[1] - text_height / 2,
-                center[0] + text_width / 2,
-                center[1] + text_height / 2,
-            )
-            if (
-                label_box[0] < _LABEL_PROXY_BOARD_MARGIN_MM
-                or label_box[1] < _LABEL_PROXY_BOARD_MARGIN_MM
-                or label_box[2] > config.board_width_mm - _LABEL_PROXY_BOARD_MARGIN_MM
-                or label_box[3] > config.board_height_mm - _LABEL_PROXY_BOARD_MARGIN_MM
-            ):
-                continue
-            if any(
-                _overlap_boxes(label_box, courtyards[placements[index].ref])
-                for index in obstacle_index.query(label_box)
+        # Every possible label box lies within this courtyard expansion. This
+        # query deliberately excludes unchanged far obstacles from the cache key.
+        obstacle_query = (
+            own_box[0] - text_width - _LABEL_PROXY_RADIUS_MM,
+            own_box[1] - text_height - _LABEL_PROXY_RADIUS_MM,
+            own_box[2] + text_width + _LABEL_PROXY_RADIUS_MM,
+            own_box[3] + text_height + _LABEL_PROXY_RADIUS_MM,
+        )
+        obstacle_boxes = tuple(
+            sorted(
+                courtyards[placements[index].ref]
+                for index in obstacle_index.query(obstacle_query)
                 if index != placement_index
-            ):
-                continue
-            own_distance = _point_box_distance_sq(center, own_box)
-            radius = math.sqrt(own_distance)
-            # Any peer closer than own_distance must intersect this conservative
-            # square; retain the exact point-to-box predicate after querying.
-            peer_query = (
-                center[0] - radius,
-                center[1] - radius,
-                center[0] + radius,
-                center[1] + radius,
             )
-            if any(
-                _point_box_distance_sq(center, courtyards[placements[index].ref]) < own_distance
+        )
+        # Candidate centers are at most half a text size plus the proxy radius
+        # from the own box; a closer peer must intersect this expanded square.
+        max_distance = math.hypot(
+            text_width / 2 + _LABEL_PROXY_RADIUS_MM,
+            text_height / 2 + _LABEL_PROXY_RADIUS_MM,
+        )
+        peer_expansion_x = text_width / 2 + _LABEL_PROXY_RADIUS_MM + max_distance
+        peer_expansion_y = text_height / 2 + _LABEL_PROXY_RADIUS_MM + max_distance
+        peer_query = (
+            own_box[0] - peer_expansion_x,
+            own_box[1] - peer_expansion_y,
+            own_box[2] + peer_expansion_x,
+            own_box[3] + peer_expansion_y,
+        )
+        peer_boxes = tuple(
+            sorted(
+                courtyards[placements[index].ref]
                 for index in peer_index.query(peer_query)
                 if index != placement_index
-            ):
-                continue
-            feasible.add(center)
-            if len(feasible) >= _LABEL_PROXY_TARGET_SLOTS:
-                break
+            )
+        )
+        slot_count = _cached_reference_label_slots(
+            own_box,
+            text_width,
+            text_height,
+            config.board_width_mm,
+            config.board_height_mm,
+            obstacle_boxes,
+            peer_boxes,
+        )
         metrics.append(
             {
                 "ref": placement.ref,
-                "nearby_associated_slots": len(feasible),
+                "nearby_associated_slots": slot_count,
                 "target_slots": _LABEL_PROXY_TARGET_SLOTS,
                 "model": "sampled_face_corner_proxy",
             }
@@ -1706,23 +1759,41 @@ class _BoxGridIndex:
     def __init__(self, boxes: dict[int, tuple[float, float, float, float]]) -> None:
         self._boxes = boxes
         self._cells: dict[tuple[int, int], set[int]] = {}
+        self._overflow: set[int] = set()
         for index, box in boxes.items():
+            if self._cell_count(box) > _LABEL_SPACE_GRID_MAX_CELLS:
+                self._overflow.add(index)
+                continue
             for cell in self._covered_cells(box):
                 self._cells.setdefault(cell, set()).add(index)
 
     @staticmethod
-    def _covered_cells(box: tuple[float, float, float, float]):
+    def _cell_bounds(box: tuple[float, float, float, float]) -> tuple[int, int, int, int]:
         left, top, right, bottom = box
-        first_x = math.floor(left / _LABEL_SPACE_GRID_MM)
-        last_x = math.floor(right / _LABEL_SPACE_GRID_MM)
-        first_y = math.floor(top / _LABEL_SPACE_GRID_MM)
-        last_y = math.floor(bottom / _LABEL_SPACE_GRID_MM)
+        return (
+            math.floor(left / _LABEL_SPACE_GRID_MM),
+            math.floor(top / _LABEL_SPACE_GRID_MM),
+            math.floor(right / _LABEL_SPACE_GRID_MM),
+            math.floor(bottom / _LABEL_SPACE_GRID_MM),
+        )
+
+    @classmethod
+    def _cell_count(cls, box: tuple[float, float, float, float]) -> int:
+        first_x, first_y, last_x, last_y = cls._cell_bounds(box)
+        return (last_x - first_x + 1) * (last_y - first_y + 1)
+
+    @staticmethod
+    def _covered_cells(box: tuple[float, float, float, float]):
+        first_x, first_y, last_x, last_y = _BoxGridIndex._cell_bounds(box)
         for x_cell in range(first_x, last_x + 1):
             for y_cell in range(first_y, last_y + 1):
                 yield x_cell, y_cell
 
     def query(self, box: tuple[float, float, float, float]) -> list[int]:
+        if self._cell_count(box) > _LABEL_SPACE_GRID_MAX_CELLS:
+            return sorted(self._boxes)
         candidates: set[int] = set()
+        candidates.update(self._overflow)
         for cell in self._covered_cells(box):
             candidates.update(self._cells.get(cell, ()))
         return sorted(candidates)
@@ -2191,6 +2262,13 @@ def _placement_rank(
     plan: _ConstraintPlan,
 ) -> tuple[int, float]:
     """Hard defects outrank every weighted placement preference."""
+    return _placement_hard_defects(state, config, plan), _total_cost(state, config, pairs, plan)
+
+
+def _placement_hard_defects(
+    state: list[ComponentPlacement], config: PlacementConfig, plan: _ConstraintPlan,
+) -> int:
+    """Compute only rank's primary key before paying for soft preference costs."""
     by_ref = {p.ref: p for p in state}
     defects = sum(not _inside_board(p, config) for p in state)
     defects += len(_overlapping_pairs(state, config.min_component_gap_mm))
@@ -2199,7 +2277,7 @@ def _placement_rank(
             parent = by_ref.get(p.parent_ref)
             defects += parent is None or _rectangle_clearance(p, parent) + 0.001 < config.support_body_clearance_mm
     defects += len(_constraint_evaluation(state, config, plan)["violations"])
-    return int(defects), _total_cost(state, config, pairs, plan)
+    return int(defects)
 
 
 def _courtyard_envelope_center(
@@ -2325,10 +2403,19 @@ def _refine_placement(
     config: PlacementConfig,
     pairs: dict[tuple[str, str], float],
     plan: _ConstraintPlan,
+    *,
+    skip_worse_hard_defects: bool = True,
 ) -> tuple[list[ComponentPlacement], int]:
     """Polish legal candidates with deterministic component and block moves."""
     rank = _placement_rank(state, config, pairs, plan)
     evaluations = 0
+
+    def score_candidate(candidate: list[ComponentPlacement]) -> tuple[int, float] | None:
+        defects = _placement_hard_defects(candidate, config, plan)
+        if skip_worse_hard_defects and defects > rank[0]:
+            return None
+        return defects, _total_cost(candidate, config, pairs, plan)
+
     for pass_index in range(config.refinement_passes):
         step = 1.0 / (2**pass_index)
         changed = False
@@ -2442,8 +2529,10 @@ def _refine_placement(
                         candidate[i].x += dx
                         candidate[i].y += dy
                     candidate = _quantize_state(candidate)
-                    candidate_rank = _placement_rank(candidate, config, pairs, plan)
                     evaluations += 1
+                    candidate_rank = score_candidate(candidate)
+                    if candidate_rank is None:
+                        continue
                     if candidate_rank < rank:
                         state, rank = candidate, candidate_rank
                         changed = True
@@ -2451,14 +2540,18 @@ def _refine_placement(
                 for rotation in (90, 180, 270):
                     candidate = [replace(p) for p in state]
                     candidate[index].rotation = (state[index].rotation + rotation) % 360
-                    candidate_rank = _placement_rank(candidate, config, pairs, plan)
                     evaluations += 1
+                    candidate_rank = score_candidate(candidate)
+                    if candidate_rank is None:
+                        continue
                     if candidate_rank < rank:
                         state, rank = candidate, candidate_rank
                         changed = True
         for candidate in _family_alignment_candidates(state, config):
-            candidate_rank = _placement_rank(candidate, config, pairs, plan)
             evaluations += 1
+            candidate_rank = score_candidate(candidate)
+            if candidate_rank is None:
+                continue
             if candidate_rank < rank:
                 state, rank = candidate, candidate_rank
                 changed = True

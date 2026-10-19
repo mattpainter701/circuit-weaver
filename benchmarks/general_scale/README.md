@@ -11,7 +11,7 @@ Guarded native generation and `build-pcb` preflight currently produce:
 
 | Case | Physical components | Pads | Nets |
 | --- | ---: | ---: | ---: |
-| `sensor_control_hub` | 141 | 451 | 81 |
+| `sensor_control_hub` | 149 | 480 | 85 |
 | `field_io_gateway` | 155 | 483 | 101 |
 | `precision_control_daq` | 145 | 457 | 81 |
 

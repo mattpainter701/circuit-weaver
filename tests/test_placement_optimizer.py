@@ -75,6 +75,50 @@ def test_search_shares_iteration_budget_and_selects_a_legal_candidate():
     assert result == optimize_placement(components, config=config)
 
 
+def test_refinement_hard_defect_pruning_matches_exhaustive_candidate_ranking(monkeypatch):
+    import circuit_weaver.placement_optimizer as optimizer
+
+    config = optimizer.PlacementConfig(
+        board_width_mm=30, board_height_mm=24, refinement_passes=2, min_component_gap_mm=0.5,
+    )
+    initial = [
+        optimizer.ComponentPlacement(
+            f"U{index + 1}",
+            8 + (index % 4) * 0.35,
+            8 + (index // 4) * 0.4,
+            width=3.2,
+            height=2.4,
+            reference_size_mm=(1.2, 0.8),
+        )
+        for index in range(8)
+    ]
+    plan = optimizer._ConstraintPlan()
+    pairs = {}
+    total_cost_calls = 0
+    original_total_cost = optimizer._total_cost
+
+    def count_total_cost(*args, **kwargs):
+        nonlocal total_cost_calls
+        total_cost_calls += 1
+        return original_total_cost(*args, **kwargs)
+
+    monkeypatch.setattr(optimizer, "_total_cost", count_total_cost)
+    pruned_state, pruned_evaluations = optimizer._refine_placement(
+        [optimizer.replace(item) for item in initial], config, pairs, plan,
+        skip_worse_hard_defects=True,
+    )
+    pruned_calls = total_cost_calls
+    total_cost_calls = 0
+    exhaustive_state, exhaustive_evaluations = optimizer._refine_placement(
+        [optimizer.replace(item) for item in initial], config, pairs, plan,
+        skip_worse_hard_defects=False,
+    )
+
+    assert pruned_state == exhaustive_state
+    assert pruned_evaluations == exhaustive_evaluations
+    assert pruned_calls < total_cost_calls
+
+
 def test_reference_label_space_grid_matches_exhaustive_geometry():
     from circuit_weaver.placement_optimizer import (
         _LABEL_PROXY_BOARD_MARGIN_MM,
@@ -162,6 +206,52 @@ def test_reference_label_space_grid_matches_exhaustive_geometry():
                 )
             )
         assert _reference_label_space_metrics(placements, config) == exhaustive(placements, config), trial
+
+
+def test_reference_label_local_cache_ignores_far_boxes_and_invalidates_nearby_boxes():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        PlacementConfig,
+        _cached_reference_label_slots,
+        _reference_label_space_metrics,
+    )
+
+    config = PlacementConfig(board_width_mm=40, board_height_mm=30)
+    target = ComponentPlacement(
+        "U1", 20, 15, width=4, height=3, reference_size_mm=(1.5, 1.2)
+    )
+    _cached_reference_label_slots.cache_clear()
+    baseline = _reference_label_space_metrics([target], config)
+    baseline_info = _cached_reference_label_slots.cache_info()
+
+    far = ComponentPlacement("R1", 38, 28, width=0.4, height=0.4)
+    assert _reference_label_space_metrics([target, far], config) == baseline
+    far_info = _cached_reference_label_slots.cache_info()
+    assert far_info.hits == baseline_info.hits + 1
+    assert far_info.misses == baseline_info.misses
+
+    # This component intersects the target's candidate-label region. Its
+    # courtyard geometry must participate in the key and invalidate the result.
+    near = ComponentPlacement("C1", 20, 12.7, width=0.2, height=0.2)
+    _reference_label_space_metrics([target, far, near], config)
+    near_info = _cached_reference_label_slots.cache_info()
+    assert near_info.misses == far_info.misses + 1
+
+
+def test_box_grid_large_ranges_use_conservative_overflow_fallback():
+    from circuit_weaver.placement_optimizer import _BoxGridIndex
+
+    index = _BoxGridIndex({
+        1: (-1_000_000.0, -1_000_000.0, 1_000_000.0, 1_000_000.0),
+        2: (0.0, 0.0, 1.0, 1.0),
+        3: (100.0, 100.0, 101.0, 101.0),
+    })
+    # Large indexed boxes are always included, so exact downstream geometry
+    # checks remain complete without allocating their millions of grid cells.
+    assert index.query((50.0, 50.0, 51.0, 51.0)) == [1]
+    # A large query falls back to every item instead of iterating an unbounded
+    # range; callers still apply their original exact predicates.
+    assert index.query((-1_000_000.0, -1_000_000.0, 1_000_000.0, 1_000_000.0)) == [1, 2, 3]
 
 
 def test_reference_label_spatial_pruning_preserves_seeded_search(monkeypatch):

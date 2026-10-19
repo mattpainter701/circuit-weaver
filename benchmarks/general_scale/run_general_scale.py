@@ -281,7 +281,7 @@ def _validate_evidence(run_dir: Path, minimum_parts: int, *, expected_spec_hash:
     if not transcript.is_file():
         raise RuntimeError("MCP workflow transcript is missing")
     return {
-        "status": evidence["status"],
+        "workflow_status": evidence["status"],
         "passed_stages": sorted(passed),
         "physical_part_count": count,
         "native_3d_model_count": coverage["resolved"],
