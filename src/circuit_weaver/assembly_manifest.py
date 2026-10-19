@@ -67,6 +67,10 @@ class AssemblyManifest:
     evidence_manifest: str = ""
     schema_version: int = 2
     prepared_components: list[ComponentDef] = field(default_factory=list, repr=False)
+    # Full schematic render inventory. Virtual containers stay here so their
+    # real support passives can be rendered, while prepared_components and
+    # items describe physical assembly parts only.
+    render_components: list[ComponentDef] = field(default_factory=list, repr=False)
 
     def to_dict(self) -> dict:
         return {
@@ -232,6 +236,7 @@ def build_assembly_manifest(
     evidence_manifest = validate_output_relative_evidence_manifest(evidence_manifest)
     auto_bypass_components = auto_generate_bypass_caps(prepared) if include_auto_bypass else 0
 
+    virtual_components = [bool(getattr(comp, "is_virtual_container", False)) for comp in prepared]
     semantic_counts: dict[str, int] = {}
     primary_semantics: list[str] = []
     support_semantics: list[list[str]] = []
@@ -295,7 +300,14 @@ def build_assembly_manifest(
         allocator.reserve(reference)
 
     primary_refs: list[str] = []
-    for comp, semantic_key in zip(prepared, primary_semantics):
+    for comp, semantic_key, is_virtual in zip(prepared, primary_semantics, virtual_components):
+        if is_virtual:
+            # The reference names a schematic container, not an assembly
+            # primary. Keep it as the support parts' logical owner.
+            reference = comp.source_ref or allocator.allocate(comp.ref_prefix)
+            allocator.reserve(reference)
+            primary_refs.append(reference)
+            continue
         prior_ref = previous_by_key.get(semantic_key, "")
         if comp.source_ref:
             reference = comp.source_ref
@@ -307,27 +319,30 @@ def build_assembly_manifest(
         primary_refs.append(reference)
 
     items: list[AssemblyItem] = []
-    for comp_index, (comp, owner_ref, owner_key) in enumerate(zip(prepared, primary_refs, primary_semantics)):
+    for comp_index, (comp, owner_ref, owner_key, is_virtual) in enumerate(
+        zip(prepared, primary_refs, primary_semantics, virtual_components)
+    ):
         # Generation consumes the prepared inventory directly. Persist every
         # allocated designator on that copy so functional-sheet reordering
         # cannot swap support-part identities relative to BOM/placement data.
         comp.source_ref = owner_ref
-        items.append(
-            AssemblyItem(
-                reference=owner_ref,
-                value=comp.source_value or comp.value or comp.mpn,
-                footprint=comp.footprint,
-                mpn=comp.source_mpn or comp.mpn,
-                manufacturer=comp.source_manufacturer,
-                lcsc_pn=comp.lcsc_pn,
-                source_kind="component",
-                semantic_key=owner_key,
-                owner_ref=owner_ref,
-                functional_section=getattr(comp, "functional_section", "") or "",
-                block_id=getattr(comp, "block_id", "") or "",
-                evidence_ids=evidence_by_reference.get(owner_ref, ()),
+        if not is_virtual:
+            items.append(
+                AssemblyItem(
+                    reference=owner_ref,
+                    value=comp.source_value or comp.value or comp.mpn,
+                    footprint=comp.footprint,
+                    mpn=comp.source_mpn or comp.mpn,
+                    manufacturer=comp.source_manufacturer,
+                    lcsc_pn=comp.lcsc_pn,
+                    source_kind="component",
+                    semantic_key=owner_key,
+                    owner_ref=owner_ref,
+                    functional_section=getattr(comp, "functional_section", "") or "",
+                    block_id=getattr(comp, "block_id", "") or "",
+                    evidence_ids=evidence_by_reference.get(owner_ref, ()),
+                )
             )
-        )
 
         support_index = 0
         for bypass in comp.bypass_caps:
@@ -391,7 +406,8 @@ def build_assembly_manifest(
         retired_references=sorted(retired_references),
         evidence_ids=manifest_evidence_ids,
         evidence_manifest=evidence_manifest,
-        prepared_components=prepared,
+        prepared_components=[comp for comp, is_virtual in zip(prepared, virtual_components) if not is_virtual],
+        render_components=prepared,
     )
 
 

@@ -49,6 +49,12 @@ def execute(request):
         raise ValueError("Board dimensions must be finite positive numbers")
     board = pcbnew.BOARD()
     board.SetCopperLayerCount(2)
+    minimum_drill_mm = request.get("minimum_drill_mm")
+    if minimum_drill_mm is not None:
+        minimum_drill_mm = float(minimum_drill_mm)
+        if not math.isfinite(minimum_drill_mm) or minimum_drill_mm <= 0:
+            raise ValueError("Minimum drill must be a finite positive millimeter value")
+        board.GetDesignSettings().m_MinThroughDrill = pcbnew.FromMM(minimum_drill_mm)
     clearance_mm = request.get("clearance_mm")
     if clearance_mm is not None:
         clearance_mm = float(clearance_mm)

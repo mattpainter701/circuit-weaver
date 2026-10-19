@@ -1,0 +1,72 @@
+schema_version: 1
+suite_kind: samples
+description: All 13 repository sample circuits as compact workflow integration references.
+minimum_physical_parts: 1
+cases:
+  - id: battery_iot_sensor
+    spec: ../../samples/battery_iot_sensor/battery_iot_sensor.yaml
+    family: battery_iot
+    required_sections: []
+    board_mm: [80, 60]
+    minimum_drill_mm: 0.2
+  - id: fpga_power_carrier
+    spec: ../../samples/fpga_power_carrier/fpga_power_carrier.yaml
+    family: fpga_power
+    required_sections: []
+    board_mm: [80, 60]
+  - id: high_voltage_isolation
+    spec: ../../samples/high_voltage_isolation/high_voltage_isolation.yaml
+    family: high_voltage_power
+    required_sections: []
+    board_mm: [80, 60]
+  - id: inverter_gate_driver
+    spec: ../../samples/inverter_gate_driver/inverter_gate_driver.yaml
+    family: motor_power
+    required_sections: []
+    board_mm: [80, 60]
+  - id: iot_sensor_node
+    spec: ../../samples/iot_sensor_node/iot_sensor_node.yaml
+    family: wireless_sensor
+    required_sections: []
+    board_mm: [80, 60]
+    minimum_drill_mm: 0.2
+  - id: led_power_indicator
+    spec: ../../samples/led_power_indicator/led_power_indicator.yaml
+    family: led_power
+    required_sections: []
+    board_mm: [36, 30]
+  - id: motor_controller
+    spec: ../../samples/motor_controller/motor_controller.yaml
+    family: motor_control
+    required_sections: []
+    board_mm: [45, 35]
+  - id: oled_display_module
+    spec: ../../samples/oled_display_module/oled_display_module.yaml
+    family: display
+    required_sections: []
+    board_mm: [80, 60]
+  - id: rf_frontend
+    spec: ../../samples/rf_frontend/rf_frontend.yaml
+    family: rf_signal_chain
+    required_sections: []
+    board_mm: [80, 60]
+  - id: usb_regulated_supply
+    spec: ../../samples/usb_regulated_supply/usb_regulated_supply.yaml
+    family: usb_power
+    required_sections: []
+    board_mm: [80, 60]
+  - id: usb_uart_bridge
+    spec: ../../samples/usb_uart_bridge/usb_uart_bridge.yaml
+    family: usb_digital
+    required_sections: []
+    board_mm: [80, 60]
+  - id: wearable_bms
+    spec: ../../samples/wearable_bms/wearable_bms.yaml
+    family: battery_management
+    required_sections: []
+    board_mm: [80, 60]
+  - id: zigbee_humidistat
+    spec: ../../samples/zigbee_humidistat/zigbee_humidistat.yaml
+    family: zigbee_control
+    required_sections: []
+    board_mm: [80, 60]

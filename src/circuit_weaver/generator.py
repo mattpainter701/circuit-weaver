@@ -19,6 +19,7 @@ import os
 import re
 import sys
 import zlib
+from collections import deque
 from pathlib import Path, PureWindowsPath
 from typing import Iterable
 
@@ -508,7 +509,7 @@ def _render_symbol_name_and_sexpr(comp: ComponentDef) -> tuple[str, str]:
         all_coords_normalized = _normalize_symbol_all_coordinates(normalized_sexpr)
         # Adjust Y coordinates to ensure all geometry has Y >= 0
         adjusted_sexpr = _adjust_symbol_y_coordinates(all_coords_normalized)
-        return sym_name, adjusted_sexpr
+        return sym_name, _symbol_assembly_visibility(adjusted_sexpr, comp)
     sym_name = re.sub(r"[^A-Za-z0-9_]", "_", comp.mpn or "UNKNOWN") or "UNKNOWN"
     generated_sexpr = create_generic_symbol(
         sym_name,
@@ -520,7 +521,15 @@ def _render_symbol_name_and_sexpr(comp: ComponentDef) -> tuple[str, str]:
     )
     # Apply Y-coordinate adjustment as final safeguard (should be minimal for generated symbols)
     adjusted_sexpr = _adjust_symbol_y_coordinates(generated_sexpr)
-    return sym_name, adjusted_sexpr
+    return sym_name, _symbol_assembly_visibility(adjusted_sexpr, comp)
+
+
+def _symbol_assembly_visibility(symbol_sexpr: str, comp: ComponentDef) -> str:
+    """Exclude explicit virtual containers from BOM and PCB netlist output."""
+    if not comp.is_virtual_container:
+        return symbol_sexpr
+    symbol_sexpr = re.sub(r"\(in_bom\s+yes\)", "(in_bom no)", symbol_sexpr, count=1)
+    return re.sub(r"\(on_board\s+yes\)", "(on_board no)", symbol_sexpr, count=1)
 
 
 def _safe_symbol_identifier(name: str) -> str:
@@ -1380,6 +1389,97 @@ def _perimeter_channel_candidates(
     return candidates
 
 
+def _orthogonal_grid_route(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    blockers: list[tuple[float, float, float, float]],
+    route_state: dict | None,
+    net_name: str,
+) -> list[tuple[float, float]] | None:
+    """Find a deterministic orthogonal path through a local visibility grid.
+
+    This is a last-resort router for dense pin fields where the hand-built L,
+    lane, and perimeter candidates cannot weave between nearby obstacles.
+    Grid edges are still checked against the exact obstacle and foreign-net
+    predicates used by the primary router.
+    """
+    margin = 25.4
+    left = min(start[0], end[0]) - margin
+    right = max(start[0], end[0]) + margin
+    top = min(start[1], end[1]) - margin
+    bottom = max(start[1], end[1]) + margin
+
+    xs = {start[0], end[0]}
+    ys = {start[1], end[1]}
+    step = 1.27
+    for index in range(math.floor(left / step), math.ceil(right / step) + 1):
+        xs.add(snap(index * step))
+    for index in range(math.floor(top / step), math.ceil(bottom / step) + 1):
+        ys.add(snap(index * step))
+
+    relevant_boxes = [
+        box for box in blockers
+        if box[2] >= left and box[0] <= right and box[3] >= top and box[1] <= bottom
+    ]
+    for box in relevant_boxes:
+        for value in (box[0], box[2]):
+            xs.update((snap(value - 0.02), snap(value + 0.02)))
+        for value in (box[1], box[3]):
+            ys.update((snap(value - 0.02), snap(value + 0.02)))
+
+    reserved = (route_state or {}).get("reserved_segments", [])
+    for owner_net, segment in reserved:
+        if owner_net == net_name:
+            continue
+        x1, y1, x2, y2 = segment
+        if max(x1, x2) < left or min(x1, x2) > right or max(y1, y2) < top or min(y1, y2) > bottom:
+            continue
+        if abs(x1 - x2) < 0.01:
+            xs.update((snap(x1 - 0.02), snap(x1 + 0.02)))
+            ys.update((snap(y1 - 0.02), snap(y1 + 0.02), snap(y2 - 0.02), snap(y2 + 0.02)))
+        else:
+            ys.update((snap(y1 - 0.02), snap(y1 + 0.02)))
+            xs.update((snap(x1 - 0.02), snap(x1 + 0.02), snap(x2 - 0.02), snap(x2 + 0.02)))
+
+    x_values = sorted(value for value in xs if left <= value <= right)
+    y_values = sorted(value for value in ys if top <= value <= bottom)
+    x_index = {value: index for index, value in enumerate(x_values)}
+    y_index = {value: index for index, value in enumerate(y_values)}
+    source = (x_index[start[0]], y_index[start[1]])
+    target = (x_index[end[0]], y_index[end[1]])
+
+    def edge_is_clear(first: tuple[float, float], second: tuple[float, float]) -> bool:
+        return all(_polyline_is_clear([first, second], box) for box in blockers) and not (
+            _candidate_contacts_foreign_net([first, second], route_state, net_name)
+        )
+
+    queue = deque([source])
+    previous: dict[tuple[int, int], tuple[int, int] | None] = {source: None}
+    while queue:
+        node = queue.popleft()
+        if node == target:
+            break
+        xi, yi = node
+        point = (x_values[xi], y_values[yi])
+        for neighbor in ((xi - 1, yi), (xi + 1, yi), (xi, yi - 1), (xi, yi + 1)):
+            nx, ny = neighbor
+            if not (0 <= nx < len(x_values) and 0 <= ny < len(y_values)) or neighbor in previous:
+                continue
+            next_point = (x_values[nx], y_values[ny])
+            if edge_is_clear(point, next_point):
+                previous[neighbor] = node
+                queue.append(neighbor)
+    if target not in previous:
+        return None
+
+    path = []
+    node: tuple[int, int] | None = target
+    while node is not None:
+        path.append((x_values[node[0]], y_values[node[1]]))
+        node = previous[node]
+    return _normalize_polyline(list(reversed(path)))
+
+
 def _route_local_connection(
     x1: float,
     y1: float,
@@ -1503,6 +1603,13 @@ def _route_local_connection(
             )
             _emit_polyline(best, wires)
             _reserve_route(best, route_state, net_name)
+            return
+
+    if route_state is not None:
+        grid_route = _orthogonal_grid_route(start, end, blockers, route_state, net_name)
+        if grid_route is not None:
+            _emit_polyline(grid_route, wires)
+            _reserve_route(grid_route, route_state, net_name)
             return
 
     direct = _pick_best(
@@ -2006,7 +2113,7 @@ def generate_from_components(
         components,
         previous_manifest=previous_assembly_manifest,
     )
-    components = assembly_manifest.prepared_components
+    components = assembly_manifest.render_components or assembly_manifest.prepared_components
 
     stable_mode = _env_flag_enabled() if stable_uuids is None else stable_uuids
     seed = None
@@ -2961,6 +3068,8 @@ def _render_sheet(
                 root_uuid=root_uuid,
                 sheet_uuid=sheet_uuid,
                 property_center_x=property_center_x,
+                in_bom=not comp.is_virtual_container,
+                on_board=not comp.is_virtual_container,
             )
         )
 
@@ -3177,6 +3286,30 @@ def _render_sheet(
     # rendered R/C/L review bodies are ~3.81mm squares centered on the pose.
     passive_body_boxes = sheet_body_boxes[len(layout.placed_ics):]
     ic_body_boxes = {ref: component_body_bounds(pc) for ref, pc in placed_ic_map.items()}
+
+    def _route_local_or_label_passive(
+        pin_x, pin_y, target_x, target_y, net_name, pin_angle, *, obstacle, route_state, obstacles, wire_len
+    ) -> None:
+        try:
+            _route_local_connection(
+                pin_x, pin_y, target_x, target_y, wires, net_name,
+                obstacle=obstacle, route_state=route_state, obstacles=obstacles,
+            )
+        except ValueError as exc:
+            if "without contacting a reserved foreign net" not in str(exc):
+                raise
+            # Keep the foreign-net guard intact. A same-sheet net label is an
+            # electrically exact connection when dense pins leave no clear wire corridor.
+            _logger.warning(
+                "local route for %s has no electrically clear corridor; using a net label", net_name
+            )
+            _render_passive_net_endpoint(
+                net_name, pin_x, pin_y, pin_angle, wires, labels, power_instances,
+                power_lib_names, _label_fn, project_name, root_uuid, sheet_uuid,
+                wire_len=wire_len, body_boxes=sheet_body_boxes,
+                net_anchors=reserved_net_anchors, route_state=endpoint_route_state,
+            )
+
     for pp in layout.placed_passives:
         if pp.symbol_variant == "review":
             endpoint_stub_len = 6.35
@@ -3222,16 +3355,17 @@ def _render_sheet(
         # Net1 (pin 1): local route only when explicitly requested.
         anchor1 = _nearest_local_anchor(layout, pp.net1, p1_x, p1_y) if use_topology_local else None
         if anchor1 is not None:
-            _route_local_connection(
+            _route_local_or_label_passive(
                 p1_x,
                 p1_y,
                 anchor1.x,
                 anchor1.y,
-                wires,
                 pp.net1,
+                p1_angle,
                 obstacle=parent_body,
                 route_state=route_state,
                 obstacles=route_obstacles,
+                wire_len=endpoint_stub_len,
             )
         else:
             topology_owner1 = (
@@ -3239,29 +3373,31 @@ def _render_sheet(
             )
             if topology_owner1 is not None:
                 ic_x, ic_y = topology_owner1
-                _route_local_connection(
+                _route_local_or_label_passive(
                     p1_x,
                     p1_y,
                     ic_x,
                     ic_y,
-                    wires,
                     pp.net1,
+                    p1_angle,
                     obstacle=parent_body,
                     route_state=route_state,
                     obstacles=route_obstacles,
+                    wire_len=endpoint_stub_len,
                 )
             elif use_literal_local and pp.net1 in parent_pins and parent_pins[pp.net1]:
                 ic_x, ic_y = parent_pins[pp.net1][0]
-                _route_local_connection(
+                _route_local_or_label_passive(
                     p1_x,
                     p1_y,
                     ic_x,
                     ic_y,
-                    wires,
                     pp.net1,
+                    p1_angle,
                     obstacle=parent_body,
                     route_state=route_state,
                     obstacles=route_obstacles,
+                    wire_len=endpoint_stub_len,
                 )
             else:
                 _render_passive_net_endpoint(
@@ -3286,16 +3422,17 @@ def _render_sheet(
         # Net2 (pin 2): local route only when explicitly requested.
         anchor2 = _nearest_local_anchor(layout, pp.net2, p2_x, p2_y) if use_topology_local else None
         if anchor2 is not None:
-            _route_local_connection(
+            _route_local_or_label_passive(
                 p2_x,
                 p2_y,
                 anchor2.x,
                 anchor2.y,
-                wires,
                 pp.net2,
+                p2_angle,
                 obstacle=parent_body,
                 route_state=route_state,
                 obstacles=route_obstacles,
+                wire_len=endpoint_stub_len,
             )
         else:
             topology_owner2 = (
@@ -3303,29 +3440,31 @@ def _render_sheet(
             )
             if topology_owner2 is not None:
                 ic_x, ic_y = topology_owner2
-                _route_local_connection(
+                _route_local_or_label_passive(
                     p2_x,
                     p2_y,
                     ic_x,
                     ic_y,
-                    wires,
                     pp.net2,
+                    p2_angle,
                     obstacle=parent_body,
                     route_state=route_state,
                     obstacles=route_obstacles,
+                    wire_len=endpoint_stub_len,
                 )
             elif use_literal_local and pp.net2 in parent_pins and parent_pins[pp.net2]:
                 ic_x, ic_y = parent_pins[pp.net2][0]
-                _route_local_connection(
+                _route_local_or_label_passive(
                     p2_x,
                     p2_y,
                     ic_x,
                     ic_y,
-                    wires,
                     pp.net2,
+                    p2_angle,
                     obstacle=parent_body,
                     route_state=route_state,
                     obstacles=route_obstacles,
+                    wire_len=endpoint_stub_len,
                 )
             else:
                 _render_passive_net_endpoint(

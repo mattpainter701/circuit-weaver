@@ -12,6 +12,7 @@ import pytest
 
 from circuit_weaver.autoroute import (
     _apply_specctra_clearance_margin,
+    _compare_clearance_reports,
     _effective_optimization_threads,
     _find_freerouting_command,
     _find_freerouting_jar,
@@ -23,7 +24,10 @@ from circuit_weaver.autoroute import (
     _parse_freerouting_version,
     _parse_routing_stats,
     _probe_freerouting_capabilities,
+    _route_specctra,
     _routing_rank,
+    _same_native_pad_clearance_pairs,
+    _specctra_physical_pad_index,
     _validate_specctra_artifact,
     autoroute_pcb,
     export_dsn,
@@ -301,6 +305,34 @@ def _portfolio_runner(outputs, seen, *, after_attempt=None):
             after_attempt()
         return mock.Mock(returncode=0, stdout=output, stderr="")
     return run
+
+
+def _same_pad_overlap_report(second_x: float = 10.7) -> dict:
+    return {
+        "$schema": "https://schemas.kicad.org/drc.v1.json",
+        "coordinateUnits": "mm",
+        "violations": [{
+            "type": "holeClearance",
+            "description": "Hole clearance violation between Pin [GND] and Pin [GND] "
+                           "(expected: 0.1370 mm, actual: 0.0000 mm)",
+            "items": [
+                {"description": "Pin [GND]", "pos": {"x": 10.0, "y": -20.0}, "uuid": "11"},
+                {"description": "Pin [GND]", "pos": {"x": second_x, "y": -20.0}, "uuid": "12"},
+            ],
+        }],
+    }
+
+
+def _same_pad_identity_fixture() -> tuple[list[dict], list[dict]]:
+    native = [
+        {"ref": "U1", "number": "39", "net": "GND", "x": 10.0, "y": 20.0},
+        {"ref": "U1", "number": "39", "net": "GND", "x": 10.7, "y": 20.0},
+    ]
+    dsn = [
+        {"ref": "U1", "number": "39", "net": "GND", "x": 10.0, "y": 20.0},
+        {"ref": "U1", "number": "39@1", "net": "GND", "x": 10.7, "y": 20.0},
+    ]
+    return native, dsn
 
 
 def test_portfolio_publishes_best_complete_candidate_and_removes_losers(tmp_path):
@@ -1081,6 +1113,124 @@ class TestAutoroute:
 
         assert result["status"] == "error"
         assert "3 clearance violation" in result["message"]
+        assert not destination.exists()
+
+    def test_only_exact_unchanged_same_native_pad_pair_can_be_classified(self):
+        native, dsn = _same_pad_identity_fixture()
+        baseline = _same_pad_overlap_report()
+        accepted = _compare_clearance_reports(baseline, baseline, native, dsn, 1)
+        assert accepted["valid"] is True
+        assert accepted["classification"] == "unchanged_preexisting_same_pad_overlaps"
+        assert accepted["count"] == 1
+        assert accepted["baseline_pairs"][0]["endpoints"][1]["source_dsn_pin_aliases"] == ["39@1"]
+
+        new_geometry = _compare_clearance_reports(
+            baseline, _same_pad_overlap_report(second_x=10.71), native, dsn, 1,
+        )
+        assert new_geometry["valid"] is False
+
+        foreign = _same_pad_overlap_report()
+        foreign["violations"][0]["items"][1]["pos"]["x"] = 30.0
+        foreign["violations"][0]["items"][1]["description"] = "Pin [VDD_3P3]"
+        foreign["violations"][0]["description"] = "Clearance violation between Pin [GND] and Pin [VDD_3P3]"
+        rejected_foreign = _compare_clearance_reports(baseline, foreign, native, dsn, 1)
+        assert rejected_foreign["valid"] is False
+
+        wrong_pad = [dict(row) for row in native]
+        wrong_pad[1] = {**wrong_pad[1], "number": "40"}
+        rejected_identity = _compare_clearance_reports(baseline, baseline, wrong_pad, dsn, 1)
+        assert rejected_identity["valid"] is False
+
+        wrong_count = _compare_clearance_reports(baseline, baseline, native, dsn, 0)
+        assert wrong_count["valid"] is False
+
+        wrong_units = {**baseline, "coordinateUnits": "mil"}
+        assert _compare_clearance_reports(wrong_units, baseline, native, dsn, 1)["valid"] is False
+
+        wrong_schema = {**baseline, "$schema": "https://example.invalid/drc.json"}
+        assert _compare_clearance_reports(wrong_schema, baseline, native, dsn, 1)["valid"] is False
+
+        nonfinite_position = _same_pad_overlap_report(second_x=float("nan"))
+        assert _compare_clearance_reports(nonfinite_position, baseline, native, dsn, 1)["valid"] is False
+
+        assert _same_native_pad_clearance_pairs(
+            baseline, native, dsn, tolerance_mm=float("inf"),
+        ) is None
+        assert _same_native_pad_clearance_pairs(
+            baseline, native, dsn, tolerance_mm="not-a-number",
+        ) is None
+
+    def test_specctra_pad_index_proves_alias_to_native_pad_number_and_net(self):
+        dsn_text = '''(pcb "board"
+          (unit um)
+          (library
+            (image "Package:U1"
+              (pin Rect[T] 39 0 0)
+              (pin Round[A] 39@1 700 0)
+              (pin Round[A] 2 1400 0)))
+          (placement (component "Package:U1" (place U1 10000 -20000 front 0)))
+          (network
+            (net GND (pins U1-39 U1-39@1))
+            (net VDD (pins U1-2))))'''
+        pads = _specctra_physical_pad_index(dsn_text)
+        assert pads is not None
+        assert pads == [
+            {"ref": "U1", "number": "39", "net": "GND", "x": 10.0, "y": 20.0,
+             "dsn_position_mm": {"x": 10.0, "y": -20.0}},
+            {"ref": "U1", "number": "39@1", "net": "GND", "x": 10.7, "y": 20.0,
+             "dsn_position_mm": {"x": 10.7, "y": -20.0}},
+            {"ref": "U1", "number": "2", "net": "VDD", "x": 11.4, "y": 20.0,
+             "dsn_position_mm": {"x": 11.4, "y": -20.0}},
+        ]
+
+    def test_preexisting_same_pad_router_pairs_still_require_native_board_output(self, tmp_path):
+        dsn_path = _write_dsn(tmp_path)
+        destination = tmp_path / "classified.ses"
+        native, dsn = _same_pad_identity_fixture()
+        baseline = _same_pad_overlap_report()
+        context = {"report": baseline, "native_pads": native, "dsn_pads": dsn}
+        with mock.patch(
+            "circuit_weaver.autoroute._freerouting_drc_report", return_value=baseline,
+        ):
+            with mock.patch(
+                "subprocess.run",
+                side_effect=_fake_freerouting_success(_routing_output(clearance_violations=1)),
+            ):
+                result = _route_specctra(
+                    dsn_path, destination, ["freerouting"], passes=10, timeout_seconds=30,
+                    overwrite=False, headless=True, optimization_threads=0, optimizer_strategy=None,
+                    optimizer_hybrid_ratio=None, optimizer_item_selection=None,
+                    optimizer_improvement_threshold=None, seed=None,
+                    capability_probe={"version": "2.4.1"}, clearance_baseline=context,
+                )
+        assert result["status"] == "ok"
+        assert result["stats"]["clearance_violations_raw"] == 1
+        assert result["stats"]["clearance_violations_classified_preexisting"] == 1
+        assert result["verification"]["clearance"] == "unchanged_preexisting_same_pad_overlaps_requires_native_drc"
+        assert result["clearance_audit"]["baseline_pairs"] == result["clearance_audit"]["final_pairs"]
+
+    def test_changed_baseline_pair_blocks_session_publication(self, tmp_path):
+        dsn_path = _write_dsn(tmp_path)
+        destination = tmp_path / "changed.ses"
+        native, dsn = _same_pad_identity_fixture()
+        context = {"report": _same_pad_overlap_report(), "native_pads": native, "dsn_pads": dsn}
+        changed = _same_pad_overlap_report(second_x=10.71)
+        with mock.patch(
+            "circuit_weaver.autoroute._freerouting_drc_report", return_value=changed,
+        ):
+            with mock.patch(
+                "subprocess.run",
+                side_effect=_fake_freerouting_success(_routing_output(clearance_violations=1)),
+            ):
+                result = _route_specctra(
+                    dsn_path, destination, ["freerouting"], passes=10, timeout_seconds=30,
+                    overwrite=False, headless=True, optimization_threads=0, optimizer_strategy=None,
+                    optimizer_hybrid_ratio=None, optimizer_item_selection=None,
+                    optimizer_improvement_threshold=None, seed=None,
+                    capability_probe={"version": "2.4.1"}, clearance_baseline=context,
+                )
+        assert result["status"] == "error"
+        assert "not a same-native-pad overlap" in result["message"]
         assert not destination.exists()
 
     def test_existing_destination_requires_overwrite_and_is_preserved_on_failure(self, tmp_path):

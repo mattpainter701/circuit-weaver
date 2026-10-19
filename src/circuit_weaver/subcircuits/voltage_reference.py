@@ -95,6 +95,10 @@ class VoltageReferenceTemplate(SubcircuitTemplate):
                 errors.append(
                     f"vin ({vin}V) below minimum {ic_db['vin_min']}V for {ic_name}"
                 )
+            if vin is not None and vin > ic_db.get("vin_max", float("inf")):
+                errors.append(
+                    f"vin ({vin}V) above maximum {ic_db['vin_max']}V for {ic_name}"
+                )
         return errors
 
     def generate(self, params: dict[str, Any]) -> SubcircuitResult:
@@ -270,6 +274,7 @@ class VoltageReferenceTemplate(SubcircuitTemplate):
             category="power",
             pins=list(ic_db["pins"]),
             pin_nets=pin_nets,
+            explicit_no_connects={str(pin) for pin in ic_db.get("explicit_no_connects", [])},
             straps=straps,
             bypass_caps=bypass_caps,
             annotations=annotations,

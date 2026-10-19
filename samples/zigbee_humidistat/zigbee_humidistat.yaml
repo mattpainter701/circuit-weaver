@@ -1,58 +1,91 @@
-project: Zigbee_Humidistat
+project: USB_UART_I2C_Prototype
 company: Demo
 version: "1.0"
-description: "Zigbee/BT humidistat — SHT40 sensor, CC2652R radio, LiPo powered, USB-C charging"
+description: "Minimal USB-UART and I2C expansion prototype; no humidity sensor, Zigbee radio, or battery charger is populated"
 auto_repair: false
 
 power:
-  - section: power
-    template: ldo
+  - type: ldo
     ref: U1
     ic: AP2112K-3.3
-    params:
-      vin: 5.0
-      vout: 3.3
-      iout: 0.6
-      rail_name: VDD_3P3
-      vin_net: VUSB
-      en_net: VUSB
-    pin_nets_extra:
-      "3": VUSB
-      "5": VUSB
+    vin: 5.0
+    vout: 3.3
+    iout: 0.6
+    rail_name: VDD_3P3
+    vin_net: VBUS_5V
+    en_net: VBUS_5V
 
 connectors:
   - section: connectors
     ref: J1
     ic: USB-C-PWR
+
+  - type: connector
+    ref: J2
+    ic: JST_PH_4P
+    positive_net: VDD_3P3
+    negative_net: GND
     pin_nets_extra:
-      "A4": VUSB
-    no_connects: ["B4", "A5", "B5"]
+      "3": I2C_SDA
+      "4": I2C_SCL
+
+  - type: connector
+    ref: J3
+    ic: PIN_HEADER_4P
+    positive_net: VDD_3P3
+    negative_net: GND
+    signal_nets: UART_TX,UART_RX
+
+  - type: connector
+    ref: J4
+    ic: PIN_HEADER_4P
+    positive_net: VBUS_5V
+    negative_net: GND
+    signal_nets: USB_DP,USB_DM
 
 digital:
-  - section: digital
-    template: usb_controller
+  - type: usb_controller
     ref: U2
     ic: CH340G
-    params:
-      mode: device
-      data_bus: UART
-      vdd_net: VDD_3P3
-      usb_dp_net: USB_DP
-      usb_dm_net: USB_DM
-      # CH340G pins unused in this minimal sample: RXD(3), D_P(5),
-      # D_N(6), XI(7), XO(8), modem/R232 straps (9-15)
-      no_connects: ["3", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"]
+    mode: device
+    data_bus: UART
+    vdd_net: VBUS_5V
+    usb_dp_net: USB_DP
+    usb_dm_net: USB_DM
+    pin_nets_extra:
+      "2": UART_TX
+      "3": UART_RX
+      "4": V3_U2
+      "15": GND
+    power_pins_extra:
+      "16": VBUS_5V
+    no_connects: ["9", "10", "11", "12", "13", "14"]
     terminal: true
 
-  - section: digital
-    template: i2c_bus
-    ref: U3
+  - type: crystal_oscillator
+    ref: Y1
+    ic: HC-49S
+    freq: 12000000
+    cl_spec: 20
+    c_stray: 3.0e-12
+    xtal_in_net: XI_U2
+    xtal_out_net: XO_U2
+
+  - type: i2c_bus
+    ref: RP1
     ic: PULLUPS_ONLY
-    params:
-      vdd: 3.3
-      speed: 400
-      c_bus: 50
-      vdd_net: VDD_3P3
-      sda_net: I2C_SDA
-      scl_net: I2C_SCL
-    terminal: true
+    vdd: 3.3
+    speed: 400000
+    c_bus: 5.0e-11
+    vdd_net: VDD_3P3
+    sda_net: I2C_SDA
+    scl_net: I2C_SCL
+
+passives:
+  - ref: C_V3
+    ic: C_Small
+    value: 10nF
+    footprint: Capacitor_SMD:C_0402_1005Metric
+    pin_nets_extra:
+      "1": V3_U2
+      "2": GND

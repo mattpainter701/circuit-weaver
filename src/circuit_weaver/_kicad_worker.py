@@ -260,29 +260,103 @@ def _reference_class(ref):
     return prefix.casefold() if prefix else ref.casefold()
 
 
-def _candidate_associated(center, own_courtyard, ref, obstacles):
+class _AabbIndex:
+    """Deterministic uniform-grid broadphase for native integer-coordinate boxes.
+
+    It only returns possible matches. Callers must retain their exact geometry
+    predicate (`_boxes_overlap` / `_point_box_distance_sq`) as the authority.
+    Items covering too many cells are kept in a small overflow list so large
+    board graphics cannot explode index construction time or memory.
+    """
+
+    _MAX_CELLS_PER_ITEM = 256
+
+    def __init__(self, boxes, cell_size):
+        self.boxes = boxes
+        self.cell_size = max(1, int(cell_size))
+        self.cells = {}
+        self.overflow = []
+        for index, box in enumerate(boxes):
+            keys = self._keys(box, self._MAX_CELLS_PER_ITEM)
+            if keys is None:
+                self.overflow.append(index)
+                continue
+            for key in keys:
+                self.cells.setdefault(key, []).append(index)
+
+    def _keys(self, box, limit):
+        size = self.cell_size
+        x0, y0 = box[0] // size, box[1] // size
+        x1, y1 = box[2] // size, box[3] // size
+        count = (x1 - x0 + 1) * (y1 - y0 + 1)
+        if count > limit:
+            return None
+        return ((x, y) for x in range(x0, x1 + 1) for y in range(y0, y1 + 1))
+
+    def query(self, box):
+        keys = self._keys(box, self._MAX_CELLS_PER_ITEM)
+        if keys is None:
+            # Wide queries are uncommon (normal reference text is small); a
+            # deterministic full scan is the safe broadphase fallback.
+            return range(len(self.boxes))
+        found = set(self.overflow)
+        for key in keys:
+            found.update(self.cells.get(key, ()))
+        return sorted(found)
+
+
+def _silk_indexes(obstacles, pcbnew):
+    cell = pcbnew.FromMM(5.0)
+    all_indexes = {}
+    peer_indexes = {}
+    for layer, rows in obstacles.items():
+        all_indexes[layer] = _AabbIndex([row[2] for row in rows], cell)
+        peers = {}
+        for row in rows:
+            kind, owner, box = row
+            if kind == "courtyard":
+                peers.setdefault(_reference_class(owner), []).append((owner, box))
+        peer_indexes[layer] = {
+            ref_class: (rows, _AabbIndex([box for _owner, box in rows], cell))
+            for ref_class, rows in peers.items()
+        }
+    return all_indexes, peer_indexes
+
+
+def _candidate_associated(center, own_courtyard, ref, obstacles, peer_index=None):
     own_distance = _point_box_distance_sq(center, own_courtyard)
     own_class = _reference_class(ref)
-    return not any(
-        kind == "courtyard" and owner != ref and _reference_class(owner) == own_class
-        and _point_box_distance_sq(center, obstacle) < own_distance
-        for kind, owner, obstacle in obstacles
-    )
+    if peer_index is None:
+        candidates = ((owner, obstacle) for kind, owner, obstacle in obstacles
+                      if kind == "courtyard" and _reference_class(owner) == own_class)
+    else:
+        rows, index = peer_index.get(own_class, ([], None))
+        if index is None:
+            return True
+        radius = math.isqrt(own_distance) + 1
+        query = (center[0] - radius, center[1] - radius,
+                 center[0] + radius, center[1] + radius)
+        candidates = (rows[i] for i in index.query(query))
+    return not any(owner != ref and _point_box_distance_sq(center, obstacle) < own_distance
+                   for owner, obstacle in candidates)
 
 
-def _association_margin(center, own_courtyard, ref, obstacles):
+def _association_margin(center, own_courtyard, ref, obstacles, peer_index=None):
     """Return the distance advantage over the nearest same-class courtyard."""
     own_distance = math.sqrt(_point_box_distance_sq(center, own_courtyard))
-    peer_distances = [
-        math.sqrt(_point_box_distance_sq(center, box))
-        for kind, owner, box in obstacles
-        if kind == "courtyard" and owner != ref and _reference_class(owner) == _reference_class(ref)
-    ]
+    if peer_index is None:
+        peers = ((owner, box) for kind, owner, box in obstacles
+                 if kind == "courtyard" and _reference_class(owner) == _reference_class(ref))
+    else:
+        rows, _index = peer_index.get(_reference_class(ref), ([], None))
+        peers = iter(rows)
+    peer_distances = [math.sqrt(_point_box_distance_sq(center, box))
+                      for owner, box in peers if owner != ref]
     return min(peer_distances, default=math.inf) - own_distance
 
 
 def _choose_associated_candidate(candidates, own_courtyard, ref, obstacles,
-                                 target_margin, max_extra_distance):
+                                 target_margin, max_extra_distance, peer_index=None):
     """Prefer a clearer local association while retaining hard association."""
     if not candidates:
         return None
@@ -291,10 +365,12 @@ def _choose_associated_candidate(candidates, own_courtyard, ref, obstacles,
     eligible = []
     for order, center in enumerate(candidates):
         distance = math.sqrt(_point_box_distance_sq(center, own_courtyard))
-        if distance > max_distance or not _candidate_associated(center, own_courtyard, ref, obstacles):
+        if distance > max_distance or not _candidate_associated(
+            center, own_courtyard, ref, obstacles, peer_index
+        ):
             continue
         margin_shortfall = max(0.0, target_margin - _association_margin(
-            center, own_courtyard, ref, obstacles
+            center, own_courtyard, ref, obstacles, peer_index
         ))
         # Cap the soft cost and the search radius so a clearer label stays local.
         score = distance + min(max_extra_distance, margin_shortfall)
@@ -420,6 +496,7 @@ def _tidy_reference_fields(board, pcbnew):
     Its text, UUID, layer, size, values, and footprint positions remain intact.
     """
     obstacles = _silk_obstacles(board, pcbnew)
+    obstacle_indexes, peer_indexes = _silk_indexes(obstacles, pcbnew)
     entries = _reference_entries(board, pcbnew)
     bounds = _board_text_bounds(board, pcbnew)
     moved = 0
@@ -460,9 +537,12 @@ def _tidy_reference_fields(board, pcbnew):
             candidate_box = (box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy)
             if not _inside_bounds(candidate_box, bounds):
                 continue
-            if any(_boxes_overlap(candidate_box, obstacle[2]) for obstacle in obstacles[entry["layer"]]):
+            rows = obstacles[entry["layer"]]
+            if any(_boxes_overlap(candidate_box, rows[i][2])
+                   for i in obstacle_indexes[entry["layer"]].query(candidate_box)):
                 continue
-            if not _candidate_associated(center, own_courtyard, entry["ref"], obstacles[entry["layer"]]):
+            if not _candidate_associated(center, own_courtyard, entry["ref"], rows,
+                                         peer_indexes[entry["layer"]]):
                 continue
             count += 1
         return count
@@ -474,9 +554,16 @@ def _tidy_reference_fields(board, pcbnew):
     )
     ordered = locked_entries + movable_entries
     occupied_refs = {pcbnew.F_SilkS: [], pcbnew.B_SilkS: []}
+    occupied_indexes = {layer: _AabbIndex([], pcbnew.FromMM(5.0))
+                        for layer in (pcbnew.F_SilkS, pcbnew.B_SilkS)}
+
+    def reserve_reference(layer, box):
+        occupied_refs[layer].append(box)
+        occupied_indexes[layer] = _AabbIndex(occupied_refs[layer], pcbnew.FromMM(5.0))
+
     for entry in ordered:
         if entry["locked"]:
-            occupied_refs[entry["layer"]].append(entry["box"])
+            reserve_reference(entry["layer"], entry["box"])
             continue
         field = entry["field"]
         pos = field.GetTextPos()
@@ -492,6 +579,8 @@ def _tidy_reference_fields(board, pcbnew):
         # translated native bboxes.
         origin_offset = (pos.x - initial_center[0], pos.y - initial_center[1])
         fixed_obstacles = obstacles[entry["layer"]]
+        obstacle_index = obstacle_indexes[entry["layer"]]
+        peer_index = peer_indexes[entry["layer"]]
         chosen = None
         for center in _candidate_centers(courtyard, width, height, bounds, pcbnew):
             dx, dy = center[0] - initial_center[0], center[1] - initial_center[1]
@@ -499,16 +588,17 @@ def _tidy_reference_fields(board, pcbnew):
                              current_box[2] + dx, current_box[3] + dy)
             if not _inside_bounds(candidate_box, bounds):
                 continue
-            if any(_boxes_overlap(candidate_box, obstacle[2]) for obstacle in fixed_obstacles):
+            if any(_boxes_overlap(candidate_box, fixed_obstacles[i][2])
+                   for i in obstacle_index.query(candidate_box)):
                 continue
-            if any(_boxes_overlap(candidate_box, other_box)
-                   for other_box in occupied_refs[entry["layer"]]):
+            if any(_boxes_overlap(candidate_box, occupied_refs[entry["layer"]][i])
+                   for i in occupied_indexes[entry["layer"]].query(candidate_box)):
                 continue
             # A clear label can still read as belonging to the wrong part when
             # its center is nearer a neighbor's courtyard than its own. Keep
             # searching for a local position that visually associates it with
             # its footprint whenever one is available.
-            if not _candidate_associated(center, courtyard, entry["ref"], fixed_obstacles):
+            if not _candidate_associated(center, courtyard, entry["ref"], fixed_obstacles, peer_index):
                 continue
             chosen = (center, (center[0] + origin_offset[0], center[1] + origin_offset[1]))
             break
@@ -537,23 +627,25 @@ def _tidy_reference_fields(board, pcbnew):
                                  current_box[2] + dx, current_box[3] + dy)
                 if not _inside_bounds(candidate_box, bounds):
                     continue
-                if any(_boxes_overlap(candidate_box, obstacle[2]) for obstacle in fixed_obstacles):
+                if any(_boxes_overlap(candidate_box, fixed_obstacles[i][2])
+                       for i in obstacle_index.query(candidate_box)):
                     continue
-                if any(_boxes_overlap(candidate_box, other_box)
-                       for other_box in occupied_refs[entry["layer"]]):
+                if any(_boxes_overlap(candidate_box, occupied_refs[entry["layer"]][i])
+                       for i in occupied_indexes[entry["layer"]].query(candidate_box)):
                     continue
-                if not _candidate_associated(center, courtyard, entry["ref"], fixed_obstacles):
+                if not _candidate_associated(center, courtyard, entry["ref"], fixed_obstacles, peer_index):
                     continue
                 valid_centers.append(center)
             preferred = _choose_associated_candidate(
                 valid_centers, courtyard, entry["ref"], fixed_obstacles,
                 target_margin=text_height, max_extra_distance=max_extra,
+                peer_index=peer_index,
             )
             if preferred != baseline_center:
                 chosen = (preferred, (preferred[0] + origin_offset[0],
                                       preferred[1] + origin_offset[1]))
         if chosen is None:
-            occupied_refs[entry["layer"]].append(current_box)
+            reserve_reference(entry["layer"], current_box)
             continue
         center, new_origin = chosen
         if center != initial_center:
@@ -562,12 +654,13 @@ def _tidy_reference_fields(board, pcbnew):
             delta = (center[0] - initial_center[0], center[1] - initial_center[1])
             entry["box"] = (current_box[0] + delta[0], current_box[1] + delta[1],
                             current_box[2] + delta[0], current_box[3] + delta[1])
-        occupied_refs[entry["layer"]].append(entry["box"])
+        reserve_reference(entry["layer"], entry["box"])
     return {"requested": True, "moved_count": moved, "orientation_normalized_count": normalized}
 
 
 def _reference_conflict_report(board, pcbnew, moved_count, orientation_normalized_count):
     obstacles = _silk_obstacles(board, pcbnew)
+    obstacle_indexes, peer_indexes = _silk_indexes(obstacles, pcbnew)
     entries = _reference_entries(board, pcbnew)
     bounds = _board_text_bounds(board, pcbnew)
     conflict_counts = {"courtyard": 0, "pad_mask": 0, "silkscreen_graphics": 0,
@@ -578,7 +671,9 @@ def _reference_conflict_report(board, pcbnew, moved_count, orientation_normalize
         if not _inside_bounds(box, bounds):
             conflict_counts["edge"] += 1
             conflicted_refs.add(entry["ref"])
-        for kind, _owner, obstacle in obstacles[entry["layer"]]:
+        rows = obstacles[entry["layer"]]
+        for index in obstacle_indexes[entry["layer"]].query(box):
+            kind, _owner, obstacle = rows[index]
             if _boxes_overlap(box, obstacle):
                 conflict_counts[kind] += 1
                 conflicted_refs.add(entry["ref"])
@@ -588,14 +683,23 @@ def _reference_conflict_report(board, pcbnew, moved_count, orientation_normalize
         # correct association anchor even when this field lives on opposite
         # side silk and therefore has no courtyard obstacle on its layer.
         own_courtyard = _courtyard_box(entry["footprint"], pcbnew)
-        if not _candidate_associated(center, own_courtyard, entry["ref"], obstacles[entry["layer"]]):
+        if not _candidate_associated(center, own_courtyard, entry["ref"], rows,
+                                     peer_indexes[entry["layer"]]):
             conflict_counts["association"] += 1
             conflicted_refs.add(entry["ref"])
-    for index, first in enumerate(entries):
-        for second in entries[index + 1:]:
-            if first["layer"] == second["layer"] and _boxes_overlap(first["box"], second["box"]):
-                conflict_counts["reference_reference"] += 1
-                conflicted_refs.update((first["ref"], second["ref"]))
+    by_layer = {pcbnew.F_SilkS: [], pcbnew.B_SilkS: []}
+    for entry in entries:
+        by_layer[entry["layer"]].append(entry)
+    for layer_entries in by_layer.values():
+        index = _AabbIndex([entry["box"] for entry in layer_entries], pcbnew.FromMM(5.0))
+        for first_index, first in enumerate(layer_entries):
+            for second_index in index.query(first["box"]):
+                if second_index <= first_index:
+                    continue
+                second = layer_entries[second_index]
+                if _boxes_overlap(first["box"], second["box"]):
+                    conflict_counts["reference_reference"] += 1
+                    conflicted_refs.update((first["ref"], second["ref"]))
     return {"requested": True, "moved_count": moved_count,
             "orientation_normalized_count": orientation_normalized_count,
             "unresolved_count": len(conflicted_refs),

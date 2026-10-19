@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
 
+import circuit_weaver
 import pytest
 
 from circuit_weaver.kicad_bridge import find_kicad_python, run_kicad
@@ -543,6 +545,37 @@ def test_dense_native_labels_stay_near_their_own_footprints_and_are_idempotent(t
     assert second["silkscreen"]["moved_count"] == 0
     assert second["silkscreen"]["conflict_counts"]["association"] == 0
     assert _field_snapshot(second_output, native_tools, refs) == after_first
+
+
+@pytest.mark.skip_category("optional-tool")
+def test_spatial_broadphase_is_geometry_equivalent_to_exhaustive_scan(tmp_path, native_tools):
+    source = _make_dense_board(tmp_path, native_tools)
+    worker_path = Path(circuit_weaver.__file__).with_name("_kicad_worker.py")
+    script = r'''
+import importlib.util, json, pcbnew, sys
+spec = importlib.util.spec_from_file_location("worker", sys.argv[1])
+worker = importlib.util.module_from_spec(spec); spec.loader.exec_module(worker)
+board = pcbnew.LoadBoard(sys.argv[2])
+if sys.argv[3] == "exhaustive":
+    worker._AabbIndex.query = lambda self, box: range(len(self.boxes))
+tidy = worker._tidy_reference_fields(board, pcbnew)
+report = worker._reference_conflict_report(board, pcbnew, tidy["moved_count"],
+                                           tidy["orientation_normalized_count"])
+positions = {}
+for footprint in board.GetFootprints():
+    field = footprint.Reference(); pos = field.GetTextPos()
+    positions[footprint.GetReference()] = [pos.x, pos.y, float(field.GetTextAngleDegrees())]
+print(json.dumps({"tidy": tidy, "report": report, "positions": positions}, sort_keys=True))
+'''
+    results = []
+    for mode in ("indexed", "exhaustive"):
+        process = subprocess.run(
+            [native_tools[0], "-c", script, str(worker_path), str(source), mode],
+            capture_output=True, text=True, timeout=120,
+        )
+        assert process.returncode == 0, process.stdout + process.stderr
+        results.append(json.loads(process.stdout.strip().splitlines()[-1]))
+    assert results[0] == results[1]
 
 
 @pytest.mark.skip_category("optional-tool")

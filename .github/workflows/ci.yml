@@ -194,7 +194,7 @@ jobs:
     container:
       image: ${{ matrix.container-image }}
       options: --user 0
-    timeout-minutes: 45
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -227,8 +227,8 @@ jobs:
 
       - name: Generate and verify representative final schematics
         run: |
-          python -m circuit_weaver generate samples/iot_sensor_node/iot_sensor_node.yaml --output .ci-kicad/iot --require-kicad --no-svg --no-require-valid --no-readiness-gate
-          python -m circuit_weaver generate samples/fpga_power_carrier/fpga_power_carrier.yaml --output .ci-kicad/fpga --require-kicad --no-svg --no-require-valid --no-readiness-gate
+          python -m circuit_weaver generate samples/iot_sensor_node/iot_sensor_node.yaml --output .ci-kicad/iot --require-kicad --no-svg
+          python -m circuit_weaver generate samples/fpga_power_carrier/fpga_power_carrier.yaml --output .ci-kicad/fpga --require-kicad --no-svg
 
       - name: Require zero KiCad ERC violations
         run: |
@@ -255,13 +255,33 @@ jobs:
         run: |
           curl --fail --location --retry 3 https://github.com/freerouting/freerouting/releases/download/v2.4.1/freerouting-2.4.1.jar -o /tmp/freerouting-2.4.1.jar
           echo '251101c3eeac22d7e7dfcf6796603279e5d1000283eb82d8f093780f7afc6aa9  /tmp/freerouting-2.4.1.jar' | sha256sum --check
-          python -m pytest tests/test_native_pcb_workflow.py tests/test_native_pcb_preview.py tests/test_native_silkscreen.py tests/test_native_return_paths_integration.py tests/test_native_pcb_copper_cleanup_integration.py tests/test_native_copper_cleanup_engine.py tests/test_native_ground_plane_engine.py tests/test_native_ground_plane_integration.py tests/test_native_plane_cleanup_engine.py tests/test_native_plane_cleanup_integration.py -q
+          python -m pytest tests/test_package_pin_bindings.py tests/test_voltage_reference_catalog_contract.py tests/test_native_sample_footprints.py tests/test_native_pcb_workflow.py tests/test_native_pcb_preview.py tests/test_native_silkscreen.py tests/test_native_return_paths_integration.py tests/test_native_pcb_copper_cleanup_integration.py tests/test_native_copper_cleanup_engine.py tests/test_native_ground_plane_engine.py tests/test_native_ground_plane_integration.py tests/test_native_plane_cleanup_engine.py tests/test_native_plane_cleanup_integration.py -q
 
       - name: Validate generated schematic through routed prototype and export gate
         env:
           CIRCUIT_WEAVER_KICAD_PYTHON: /usr/bin/python3
           CIRCUIT_WEAVER_FREEROUTING: /tmp/freerouting-2.4.1.jar
         run: python scripts/validate_app_workflow.py --output .ci-kicad/native-pcb/generated-workflow
+
+      - name: Validate all samples with native assembled previews and MCP
+        if: matrix.kicad-major == '10'
+        env:
+          CIRCUIT_WEAVER_KICAD_PYTHON: /usr/bin/python3
+          CIRCUIT_WEAVER_FREEROUTING: /tmp/freerouting-2.4.1.jar
+        run: >-
+          python benchmarks/general_scale/run_general_scale.py --suite samples
+          --output .ci-kicad/native-pcb/sample-workflows --require-clean
+          --workers 2 --iterations 6000 --attempts 3 --route-timeout 600
+
+      - name: Validate diverse 100-part native workflows and channel connectivity
+        if: matrix.kicad-major == '10'
+        env:
+          CIRCUIT_WEAVER_KICAD_PYTHON: /usr/bin/python3
+          CIRCUIT_WEAVER_FREEROUTING: /tmp/freerouting-2.4.1.jar
+        run: >-
+          python benchmarks/general_scale/run_general_scale.py
+          --output .ci-kicad/native-pcb/general-scale --require-clean
+          --workers 2 --iterations 6000 --attempts 3 --route-timeout 600
 
       - name: Preserve real PCB validation artifacts
         if: always()

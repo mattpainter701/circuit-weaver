@@ -128,7 +128,7 @@ def _ref_prefix(reference: str) -> str:
     return match.group(1).upper() if match else "U"
 
 
-def _support_component(item: AssemblyItem) -> ComponentDef:
+def _support_component(item: AssemblyItem, *, placement_parent_ref: str | None = None) -> ComponentDef:
     pin_nets: dict[str, str] = {}
     pins: list[PinDef] = []
     if item.net1:
@@ -158,7 +158,10 @@ def _support_component(item: AssemblyItem) -> ComponentDef:
     )
     # ComponentDef permits runtime metadata and may also gain declared fields
     # in newer releases.  setattr works for both representations.
-    component.placement_parent_ref = item.owner_ref  # type: ignore[attr-defined]
+    component.assembly_owner_ref = item.owner_ref  # type: ignore[attr-defined]
+    component.placement_parent_ref = (
+        item.owner_ref if placement_parent_ref is None else placement_parent_ref
+    )  # type: ignore[attr-defined]
     component.placement_parent_pin = item.owner_pin  # type: ignore[attr-defined]
     component.placement_role = item.role or item.source_kind  # type: ignore[attr-defined]
     component.assembly_source_kind = item.source_kind  # type: ignore[attr-defined]
@@ -233,6 +236,12 @@ def build_placement_inventory(
         component.straps = []
         primary_by_ref[item.reference] = component
 
+    virtual_owner_refs = {
+        str(comp.source_ref)
+        for comp in manifest.render_components
+        if getattr(comp, "is_virtual_container", False) and comp.source_ref
+    }
+
     flat_components: list[ComponentDef] = []
     for item in manifest.items:
         if item.source_kind == "component":
@@ -243,7 +252,18 @@ def build_placement_inventory(
                     f"Assembly primary {item.reference} has no prepared ComponentDef"
                 ) from exc
         elif item.source_kind in {"bypass", "strap"}:
-            flat_components.append(_support_component(item))
+            if item.owner_ref in primary_by_ref:
+                placement_parent_ref = item.owner_ref
+            elif item.owner_ref in virtual_owner_refs:
+                # Virtual topology containers have no physical placement.
+                # Their support parts remain roots in the functional group,
+                # while `assembly_owner_ref` preserves logical provenance.
+                placement_parent_ref = ""
+            else:
+                raise PlacementPipelineError(
+                    f"Support part {item.reference} references unknown assembly owner {item.owner_ref!r}"
+                )
+            flat_components.append(_support_component(item, placement_parent_ref=placement_parent_ref))
         else:
             raise PlacementPipelineError(
                 f"Unsupported assembly source kind for placement: {item.source_kind!r}"

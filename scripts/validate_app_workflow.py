@@ -146,6 +146,22 @@ def prepare_working_spec(source: Path, destination: Path, width: float | None,
     }
 
 
+def initialize_workflow_project(output: Path, *, cwd: Path, env: dict) -> None:
+    """Give each validation case private state before discovering any ancestors."""
+    process = subprocess.run(
+        [sys.executable, "-c",
+         "from pathlib import Path; import sys; "
+         "from circuit_weaver.project_state import ensure_project_state, save_project_state; "
+         "root=Path(sys.argv[1]); save_project_state(root, ensure_project_state(root))", str(output)],
+        cwd=cwd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+    )
+    if process.returncode:
+        raise RuntimeError(f"Cannot initialize private workflow project: {process.stderr.strip()}")
+    state = output / ".circuit-weaver" / "project.json"
+    if not state.is_file():
+        raise RuntimeError("Workflow project initialization did not produce a local state manifest")
+
+
 def _payload_hash(files: dict[str, str]) -> str:
     hasher = hashlib.sha256()
     for name, content_hash in sorted(files.items()):
@@ -901,6 +917,8 @@ def main() -> int:
     parser.add_argument("--route-timeout", type=int, default=180)
     parser.add_argument("--clearance", type=float, default=0.127,
                         help="Prototype default clearance in mm (0.127 accommodates the sample USB connector)")
+    parser.add_argument("--minimum-drill", type=float,
+                        help="Explicit new-project minimum drill in mm; existing rules cannot be overridden")
     parser.add_argument("--mcp-smoke", action="store_true")
     parser.add_argument("--render-3d", action="store_true", help="Require a native assembly-model PNG (KiCad 9+)")
     parser.add_argument("--installed", action="store_true",
@@ -943,12 +961,14 @@ def main() -> int:
                 package_root, args.expected_wheel.resolve()
             )
         source_files = [p for p in package_root.rglob("*")
-                        if p.suffix in {".py", ".json"}]
+                        if p.suffix in {".py", ".json", ".step", ".md", ".yaml"}]
         package_hash = hashlib.sha256()
         for path in sorted(source_files):
             package_hash.update(f"{path.relative_to(package_root).as_posix()}:{digest(path)}\n".encode())
         summary["package_source_sha256"] = package_hash.hexdigest()
         summary["runner_sha256"] = digest(Path(__file__))
+        initialize_workflow_project(output, cwd=demo.cwd, env=demo.env)
+        summary["project_state_root"] = str(output)
         original = digest(source_spec)
         return_plan_source = args.return_paths.resolve() if args.return_paths else None
         return_plan_hash = digest(return_plan_source) if return_plan_source else None
@@ -1005,11 +1025,14 @@ def main() -> int:
         root = Path(generated["root_schematic"])
         demo.command("confidence", ["confidence", str(spec), "--run-sims", "--json",
                                     "-o", str(output / "generated/confidence_report.html")])
-        built = demo.command("build", ["build-pcb", str(root), "-o", str(output / "unplaced.kicad_pcb"),
-                                      "--clearance", str(args.clearance), "--width", str(width),
-                                      "--height", str(height)])
+        build_args = ["build-pcb", str(root), "-o", str(output / "unplaced.kicad_pcb"),
+                      "--clearance", str(args.clearance), "--width", str(width), "--height", str(height)]
+        if args.minimum_drill is not None:
+            build_args.extend(["--minimum-drill", str(args.minimum_drill)])
+        built = demo.command("build", build_args)
         require(built.get("fabrication_ready") is False, "Prototype board incorrectly claims fabrication readiness")
         summary["prototype_clearance_mm"] = args.clearance
+        summary["prototype_minimum_drill_mm"] = args.minimum_drill
         placement = demo.command("place", ["place-pcb", str(output / "unplaced.kicad_pcb"),
                                           "-o", str(output / "placed.kicad_pcb"),
                                           "--iterations", str(args.iterations), "--seed", "7",

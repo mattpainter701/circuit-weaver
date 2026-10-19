@@ -280,6 +280,7 @@ class I2CBusTemplate(SubcircuitTemplate):
             annotations=annotations,
         )
         ic_comp.source_ref = ref
+        ic_comp.is_virtual_container = True
 
         # ---- Boundary ports ----
         ports = [

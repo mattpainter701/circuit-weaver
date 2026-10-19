@@ -87,7 +87,7 @@
   "AP2112K-3.3": {
     "topology": "ldo",
     "description": "600mA LDO 3.3V Fixed Low-Noise",
-    "footprint": "SOT-23-5",
+    "footprint": "Package_TO_SOT_SMD:SOT-23-5",
     "vout_fixed": 3.3,
     "adjustable": false,
     "iout_max": 0.6,
@@ -135,7 +135,7 @@
   "MCP1700-3302E": {
     "topology": "ldo",
     "description": "250mA LDO 3.3V Low-Iq",
-    "footprint": "SOT-23",
+    "footprint": "Package_TO_SOT_SMD:SOT-23",
     "vout_fixed": 3.3,
     "adjustable": false,
     "iout_max": 0.25,
@@ -171,7 +171,7 @@
   "MCP1700-1802E": {
     "topology": "ldo",
     "description": "250mA LDO 1.8V Low-Iq",
-    "footprint": "SOT-23",
+    "footprint": "Package_TO_SOT_SMD:SOT-23",
     "vout_fixed": 1.8,
     "adjustable": false,
     "iout_max": 0.25,
@@ -325,7 +325,9 @@
     "iq_ua": 100,
     "iout_max": 0.025,
     "vin_min": 3.1,
-    "vin_max": 12.0,
+    "vin_max": 5.5,
+    "vin_abs_max": 7.0,
+    "datasheet_url": "https://www.ti.com/lit/ds/symlink/ref30.pdf",
     "pins": [
       {
         "number": "1",
@@ -361,7 +363,9 @@
     "iq_ua": 100,
     "iout_max": 0.025,
     "vin_min": 3.4,
-    "vin_max": 12.0,
+    "vin_max": 5.5,
+    "vin_abs_max": 7.0,
+    "datasheet_url": "https://www.ti.com/lit/ds/symlink/ref30.pdf",
     "pins": [
       {
         "number": "1",
@@ -389,8 +393,9 @@
   "LM4040-2.5": {
     "topology": "voltage_reference",
     "topology_subtype": "shunt",
-    "description": "2.5V Precision Shunt Voltage Reference SOT-23",
+    "description": "2.5V Precision Shunt Voltage Reference SOT-23-3 (pin 3 NC)",
     "footprint": "Package_TO_SOT_SMD:SOT-23",
+    "datasheet_url": "https://www.ti.com/lit/ds/symlink/lm4040-n.pdf",
     "vout": 2.5,
     "accuracy_pct": 0.1,
     "tempco_ppm": 100,
@@ -408,16 +413,24 @@
         "name": "A",
         "type": "passive",
         "side": "R"
+      },
+      {
+        "number": "3",
+        "name": "NC",
+        "type": "no_connect",
+        "side": "B"
       }
     ],
     "pin_cathode": "1",
-    "pin_anode": "2"
+    "pin_anode": "2",
+    "explicit_no_connects": ["3"]
   },
   "LM4040-4.1": {
     "topology": "voltage_reference",
     "topology_subtype": "shunt",
-    "description": "4.096V Precision Shunt Voltage Reference SOT-23",
+    "description": "4.096V Precision Shunt Voltage Reference SOT-23-3 (pin 3 NC)",
     "footprint": "Package_TO_SOT_SMD:SOT-23",
+    "datasheet_url": "https://www.ti.com/lit/ds/symlink/lm4040-n.pdf",
     "vout": 4.096,
     "accuracy_pct": 0.1,
     "tempco_ppm": 100,
@@ -435,10 +448,17 @@
         "name": "A",
         "type": "passive",
         "side": "R"
+      },
+      {
+        "number": "3",
+        "name": "NC",
+        "type": "no_connect",
+        "side": "B"
       }
     ],
     "pin_cathode": "1",
-    "pin_anode": "2"
+    "pin_anode": "2",
+    "explicit_no_connects": ["3"]
   },
   "MCP73831T-2ACI/OT": {
     "topology": "battery_charger",

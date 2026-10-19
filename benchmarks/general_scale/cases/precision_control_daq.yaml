@@ -1,0 +1,366 @@
+project: GeneralScale_Precision_Control_DAQ
+company: Circuit Weaver Benchmark
+version: '1.0'
+description: Precision acquisition and setpoint controller with eight bridge/load channels, ADC reference, and a dual-channel SPI DAC. Each INA128 uses a 5V supply, local 3.0V REF, 2.5V input common mode, and +/-50mV maximum differential at gain 5, yielding nominal 2.75-3.25V ADC inputs.
+pcb_constraints:
+- kind: placement
+  target: board
+  width_mm: 150
+  height_mm: 110
+power:
+- type: connector
+  ic: BARREL_JACK_2.1MM
+  ref: J1
+  positive_net: VIN_12V
+  negative_net: GND
+  decoupling: true
+- type: buck
+  ic: AP62300
+  ref: U1
+  vin: 12
+  vout: 5
+  iout: 2
+  vin_net: VIN_12V
+  rail_name: VDD_5V
+- type: buck
+  ic: AP62300
+  ref: U2
+  vin: 5
+  vout: 3.3
+  iout: 1
+  vin_net: VDD_5V
+  rail_name: VDD_3P3
+- type: ldo
+  ic: TLV75518
+  ref: U3
+  vin: 3.3
+  vout: 1.8
+  vin_net: VDD_3P3
+  rail_name: VDD_1P8
+digital:
+- ic: STM32F103C8T6
+  ref: U4
+  pin_nets_extra:
+    '25': ADC_CS_N
+    '26': SPI_SCK
+    '27': SPI_MISO
+    '28': SPI_MOSI
+    '14': DAC_SYNC_N
+  no_connects:
+  - '2'
+  - '3'
+  - '4'
+  - '5'
+  - '6'
+  - '10'
+  - '11'
+  - '12'
+  - '13'
+  - '15'
+  - '16'
+  - '17'
+  - '18'
+  - '19'
+  - '20'
+  - '21'
+  - '22'
+  - '29'
+  - '30'
+  - '31'
+  - '32'
+  - '33'
+  - '34'
+  - '37'
+  - '38'
+  - '39'
+  - '40'
+  - '41'
+  - '42'
+  - '43'
+  - '45'
+  - '46'
+analog:
+- type: adc
+  ic: MCP3208-CI/SL
+  params:
+    ic: MCP3208-CI/SL
+  ref: U5
+  vdd_net: VDD_3P3
+  vref_net: ADC_REF_3V3
+  channels: 8
+  input_filter_bw: 100
+  cs_net: ADC_CS_N
+  spi_mosi_net: SPI_MOSI
+  spi_miso_net: SPI_MISO
+  spi_sck_net: SPI_SCK
+  interfaces:
+  - name: ADC_REF_3V3
+    direction: input
+- type: voltage_reference
+  ic: REF3033
+  params:
+    ic: REF3033
+  ref: U6
+  vin: 5
+  vin_net: VDD_5V
+  vref_net: ADC_REF_3V3
+  iload: 0.01
+  interfaces:
+  - name: ADC_REF_3V3
+    direction: output
+- type: voltage_reference
+  ic: REF3030
+  params:
+    ic: REF3030
+  ref: U18
+  vin: 5
+  vin_net: VDD_5V
+  vref_net: REF_U7
+  interfaces:
+  - name: REF_U7
+    direction: output
+- type: voltage_reference
+  ic: REF3030
+  params:
+    ic: REF3030
+  ref: U19
+  vin: 5
+  vin_net: VDD_5V
+  vref_net: REF_U8
+  interfaces:
+  - name: REF_U8
+    direction: output
+- type: voltage_reference
+  ic: REF3030
+  params:
+    ic: REF3030
+  ref: U20
+  vin: 5
+  vin_net: VDD_5V
+  vref_net: REF_U9
+  interfaces:
+  - name: REF_U9
+    direction: output
+- type: voltage_reference
+  ic: REF3030
+  params:
+    ic: REF3030
+  ref: U21
+  vin: 5
+  vin_net: VDD_5V
+  vref_net: REF_U10
+  interfaces:
+  - name: REF_U10
+    direction: output
+- type: voltage_reference
+  ic: REF3030
+  params:
+    ic: REF3030
+  ref: U22
+  vin: 5
+  vin_net: VDD_5V
+  vref_net: REF_U11
+  interfaces:
+  - name: REF_U11
+    direction: output
+- type: voltage_reference
+  ic: REF3030
+  params:
+    ic: REF3030
+  ref: U23
+  vin: 5
+  vin_net: VDD_5V
+  vref_net: REF_U12
+  interfaces:
+  - name: REF_U12
+    direction: output
+- type: voltage_reference
+  ic: REF3030
+  params:
+    ic: REF3030
+  ref: U24
+  vin: 5
+  vin_net: VDD_5V
+  vref_net: REF_U13
+  interfaces:
+  - name: REF_U13
+    direction: output
+- type: voltage_reference
+  ic: REF3030
+  params:
+    ic: REF3030
+  ref: U25
+  vin: 5
+  vin_net: VDD_5V
+  vref_net: REF_U14
+  interfaces:
+  - name: REF_U14
+    direction: output
+- type: sensor_frontend
+  ic: INA128PA
+  ref: U7
+  gain: 5
+  vdd_net: VDD_5V
+  sensor_p_net: BRIDGE0_P
+  sensor_n_net: BRIDGE0_N
+  output_net: CH0_U5
+  interfaces:
+  - name: REF_U7
+    direction: input
+- type: sensor_frontend
+  ic: INA128PA
+  ref: U8
+  gain: 5
+  vdd_net: VDD_5V
+  sensor_p_net: BRIDGE1_P
+  sensor_n_net: BRIDGE1_N
+  output_net: CH1_U5
+  interfaces:
+  - name: REF_U8
+    direction: input
+- type: sensor_frontend
+  ic: INA128PA
+  ref: U9
+  gain: 5
+  vdd_net: VDD_5V
+  sensor_p_net: BRIDGE2_P
+  sensor_n_net: BRIDGE2_N
+  output_net: CH2_U5
+  interfaces:
+  - name: REF_U9
+    direction: input
+- type: sensor_frontend
+  ic: INA128PA
+  ref: U10
+  gain: 5
+  vdd_net: VDD_5V
+  sensor_p_net: BRIDGE3_P
+  sensor_n_net: BRIDGE3_N
+  output_net: CH3_U5
+  interfaces:
+  - name: REF_U10
+    direction: input
+- type: sensor_frontend
+  ic: INA128PA
+  ref: U11
+  gain: 5
+  vdd_net: VDD_5V
+  sensor_p_net: LOAD0_IN
+  sensor_n_net: LOAD0_OUT
+  output_net: CH4_U5
+  interfaces:
+  - name: REF_U11
+    direction: input
+- type: sensor_frontend
+  ic: INA128PA
+  ref: U12
+  gain: 5
+  vdd_net: VDD_5V
+  sensor_p_net: LOAD1_IN
+  sensor_n_net: LOAD1_OUT
+  output_net: CH5_U5
+  interfaces:
+  - name: REF_U12
+    direction: input
+- type: sensor_frontend
+  ic: INA128PA
+  ref: U13
+  gain: 5
+  vdd_net: VDD_5V
+  sensor_p_net: LOAD2_IN
+  sensor_n_net: LOAD2_OUT
+  output_net: CH6_U5
+  interfaces:
+  - name: REF_U13
+    direction: input
+- type: sensor_frontend
+  ic: INA128PA
+  ref: U14
+  gain: 5
+  vdd_net: VDD_5V
+  sensor_p_net: LOAD3_IN
+  sensor_n_net: LOAD3_OUT
+  output_net: CH7_U5
+  interfaces:
+  - name: REF_U14
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U15
+  vdd_net: VDD_3P3
+  vref: ADC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_N
+  output_net: DAC_SETPOINT_A
+  output_b_net: DAC_SETPOINT_B
+  interfaces:
+  - name: ADC_REF_3V3
+    direction: input
+- type: opamp
+  ic: OPA2340
+  params:
+    ic: OPA2340
+  ref: U26
+  config: follower
+  vdd_net: VDD_5V
+  in_net: DAC_SETPOINT_A
+  out_net: ACTUATOR_SETPOINT_A
+- type: opamp
+  ic: OPA2340
+  params:
+    ic: OPA2340
+  ref: U27
+  config: follower
+  vdd_net: VDD_5V
+  in_net: DAC_SETPOINT_B
+  out_net: ACTUATOR_SETPOINT_B
+connectors:
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J2
+  signal_nets: BRIDGE0_P,BRIDGE0_N,VDD_5V,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J3
+  signal_nets: BRIDGE1_P,BRIDGE1_N,VDD_5V,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J4
+  signal_nets: BRIDGE2_P,BRIDGE2_N,VDD_5V,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J5
+  signal_nets: BRIDGE3_P,BRIDGE3_N,VDD_5V,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J6
+  signal_nets: LOAD0_IN,LOAD0_OUT,VDD_5V,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J7
+  signal_nets: LOAD1_IN,LOAD1_OUT,VDD_5V,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J8
+  signal_nets: LOAD2_IN,LOAD2_OUT,VDD_5V,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J9
+  signal_nets: LOAD3_IN,LOAD3_OUT,VDD_5V,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J10
+  signal_nets: ACTUATOR_SETPOINT_A,ACTUATOR_SETPOINT_B,VDD_3P3,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J11
+  signal_nets: SPI_MOSI,SPI_SCK,DAC_SYNC_N,GND
+protection:
+- type: protection
+  ic: SMBJ12A
+  ref: D1
+  protect_net: VIN_12V
+  protection_type: tvs

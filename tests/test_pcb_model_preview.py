@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import struct
 import zlib
 from pathlib import Path
@@ -206,6 +207,37 @@ def test_unset_custom_model_alias_does_not_fall_back_to_kicad_roots(tmp_path, mo
 
     assert resolved_custom is None
     assert resolved_standard == model.resolve()
+
+
+def test_exact_bundled_model_is_dimensioned_and_hash_bound(tmp_path, monkeypatch):
+    root = Path(pcb_model_preview.__file__).with_name("model_assets")
+    registry = json.loads((root / "inventory.json").read_text(encoding="utf-8"))
+    assert registry["models"]
+    for relative, metadata in registry["models"].items():
+        expected = (root / metadata["file"]).resolve()
+        assert pcb_model_preview._bundled_model(relative) == expected
+        assert metadata["sha256"] == _sha256(expected)
+        assert metadata["body_mm"] == [2.0, 2.0, 0.75]
+        assert metadata["pins"] == 8 and metadata["pitch_mm"] == 0.5
+        assert metadata["exposed_pad_mm"] == [0.8, 1.2]
+        assert metadata["generator_commit"] == "a903a695bf4e69905e9e56548f44dd46cdc1130e"
+        assert "ISO-10303-21" in expected.read_text(encoding="utf-8")
+        assert "Creative Commons" in expected.read_text(encoding="utf-8")
+        for major in (8, 9, 10):
+            alias = f"KICAD{major}_3DMODEL_DIR"
+            monkeypatch.delenv(alias, raising=False)
+            raw = "${" + alias + "}/" + relative
+            assert pcb_model_preview._resolve_model_path(raw, tmp_path, {}) == expected
+            # A configured library remains authoritative even if incomplete.
+            monkeypatch.setenv(alias, str(tmp_path / "custom-model-root"))
+            assert pcb_model_preview._resolve_model_path(raw, tmp_path, {}) is None
+            standard_root = tmp_path / "installed-kicad-models"
+            monkeypatch.setenv(alias, str(standard_root))
+            assert pcb_model_preview._resolve_model_path(raw, tmp_path, {alias: [standard_root]}) == expected
+        assert pcb_model_preview._resolve_model_path("${CUSTOM}/" + relative, tmp_path, {}) is None
+    assert pcb_model_preview._bundled_model("Package_DFN_QFN.3dshapes/unknown.step") is None
+    monkeypatch.setattr(pcb_model_preview, "_sha256", lambda _path: "tampered")
+    assert pcb_model_preview._bundled_model(next(iter(registry["models"]))) is None
 
 
 def test_failed_atomic_publish_preserves_existing_output(tmp_path, monkeypatch):

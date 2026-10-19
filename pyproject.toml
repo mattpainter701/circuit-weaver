@@ -91,6 +91,10 @@ circuit_weaver = [
   "_bundled_skills/**/*.py",
   "examples/*.yaml",
   "ic_data/*.json",
+  "model_assets/*.json",
+  "model_assets/*.md",
+  "model_assets/*.yaml",
+  "model_assets/*.step",
 ]
 
 [tool.ruff]

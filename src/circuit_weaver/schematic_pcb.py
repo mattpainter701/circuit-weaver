@@ -66,7 +66,13 @@ def _parse_netlist(netlist: Path, library: KiCadFootprintLibrary) -> dict[str, A
         reference = (raw.get("ref") or "").strip()
         if not reference or reference in components:
             raise ValueError("KiCad netlist contains an empty or duplicate component reference")
-        if raw.get("on_board", "yes").lower() == "no":
+        # KiCad's native XML exporter encodes (on_board no) as a named
+        # property, not an on_board attribute. Logical topology symbols may
+        # still appear in the netlist to carry their schematic connectivity.
+        excluded_from_board = any(
+            prop.get("name") == "exclude_from_board" for prop in raw.findall("property")
+        )
+        if excluded_from_board or raw.get("on_board", "yes").lower() == "no":
             continue
         footprint = _xml_text(raw.find("footprint"))
         if not footprint:
@@ -175,9 +181,9 @@ def _pack_components(
         items.append((geometry.width_mm, geometry.height_mm, geometry.center_x_mm, geometry.center_y_mm, component))
     margin, gap = 5.0, 3.0
     x, y, row_height = margin, margin, 0.0
-    for item_width, item_height, center_x, center_y, component in sorted(
-        items, key=lambda item: (-item[1], -item[0], item[4]["reference"])
-    ):
+    ordered = sorted(items, key=lambda item: (-item[1], -item[0], item[4]["reference"]))
+    positions = []
+    for item_width, item_height, center_x, center_y, component in ordered:
         if item_width + margin * 2 > width_mm or item_height + margin * 2 > height_mm:
             raise ValueError(f"{component['reference']}: footprint does not fit inside the requested board")
         if x + item_width + margin > width_mm:
@@ -185,11 +191,51 @@ def _pack_components(
             y += row_height + gap
             row_height = 0.0
         if y + item_height + margin > height_mm:
-            raise ValueError("Components do not fit inside the requested board dimensions")
-        component["x_mm"] = x + item_width / 2 - center_x
-        component["y_mm"] = y + item_height / 2 - center_y
+            # A tall RF module can leave enough space beside it for every
+            # support part while a shelf pack wastes that entire column.
+            positions = _pack_free_rectangles(ordered, width_mm, height_mm, margin, gap)
+            break
+        positions.append((component, x + item_width / 2 - center_x, y + item_height / 2 - center_y))
         row_height = max(row_height, item_height)
         x += item_width + gap
+    for component, px, py in positions:
+        component["x_mm"], component["y_mm"] = px, py
+
+
+def _pack_free_rectangles(items, width, height, margin, gap):
+    """Deterministic nonrotating fallback retaining verified courtyard gaps."""
+    free = [(margin, margin, width - 2 * margin + gap, height - 2 * margin + gap)]
+    positions = []
+    for item_width, item_height, cx, cy, component in items:
+        w, h = item_width + gap, item_height + gap
+        candidates = [r for r in free if w <= r[2] + 1e-9 and h <= r[3] + 1e-9]
+        if not candidates:
+            raise ValueError("Components do not fit inside the requested board dimensions")
+        x, y, _rw, _rh = min(candidates, key=lambda r: (min(r[2] - w, r[3] - h), r[1], r[0]))
+        positions.append((component, x + item_width / 2 - cx, y + item_height / 2 - cy))
+        next_free = []
+        for fx, fy, fw, fh in free:
+            if x >= fx + fw or x + w <= fx or y >= fy + fh or y + h <= fy:
+                next_free.append((fx, fy, fw, fh))
+                continue
+            if x > fx:
+                next_free.append((fx, fy, x - fx, fh))
+            if x + w < fx + fw:
+                next_free.append((x + w, fy, fx + fw - x - w, fh))
+            if y > fy:
+                next_free.append((fx, fy, fw, y - fy))
+            if y + h < fy + fh:
+                next_free.append((fx, y + h, fw, fy + fh - y - h))
+        # Remove contained rectangles; the remaining rectangles may overlap,
+        # but each future occupied area is subtracted from every one of them.
+        unique = sorted(set(next_free))
+        free = [r for r in unique if not any(
+            r != other and r[0] >= other[0] and r[1] >= other[1]
+            and r[0] + r[2] <= other[0] + other[2] + 1e-9
+            and r[1] + r[3] <= other[1] + other[3] + 1e-9
+            for other in unique
+        )]
+    return positions
 
 
 def _copy_schematic_project(source: Path, destination: Path) -> tuple[Path, dict[Path, str]]:
@@ -265,6 +311,7 @@ def schematic_to_pcb(
     width_mm: float = 80,
     height_mm: float = 60,
     clearance_mm: float | None = None,
+    minimum_drill_mm: float | None = None,
     overwrite: bool = False,
     kicad_python_path: str | Path | None = None,
 ) -> dict[str, Any]:
@@ -292,6 +339,11 @@ def schematic_to_pcb(
             raise ValueError("Clearance must be a finite positive millimeter value")
         if target.exists() and not overwrite:
             raise FileExistsError(f"Output already exists; pass overwrite=True to replace it: {target}")
+        if minimum_drill_mm is not None and (
+            isinstance(minimum_drill_mm, bool) or not isinstance(minimum_drill_mm, (int, float))
+            or not math.isfinite(float(minimum_drill_mm)) or minimum_drill_mm <= 0
+        ):
+            raise ValueError("Minimum drill must be a finite positive millimeter value")
         target_snapshot = _target_snapshot(target)
         source_project_settings = {
             suffix: source.with_suffix(suffix)
@@ -304,6 +356,10 @@ def schematic_to_pcb(
                 "Cannot override clearance when source project already defines board rules, "
                 "net classes, or a design-rules file"
             )
+        if minimum_drill_mm is not None and _source_project_has_clearance_rules(
+            source_project_settings[".kicad_pro"], source_project_settings[".kicad_dru"]
+        ):
+            raise ValueError("Cannot override minimum drill when source project already defines board rules")
         for suffix, source_settings in source_project_settings.items():
             destination_settings = target.with_suffix(suffix)
             if destination_settings.exists():
@@ -373,6 +429,7 @@ def schematic_to_pcb(
                 "width_mm": float(width_mm),
                 "height_mm": float(height_mm),
                 "clearance_mm": float(clearance_mm) if clearance_mm is not None else None,
+                "minimum_drill_mm": float(minimum_drill_mm) if minimum_drill_mm is not None else None,
                 "components": model["components"],
                 "nets": model["nets"],
                 "explicit_no_connects": model["explicit_no_connects"],
@@ -447,9 +504,10 @@ def schematic_to_pcb(
                     "board_sha256": digest,
                     "manufacturing_readiness": "not_assessed",
                     "prototype_assumptions": (
-                        {"default_netclass_clearance_mm": float(clearance_mm)}
-                        if clearance_mm is not None
-                        else {}
+                        {**({"default_netclass_clearance_mm": float(clearance_mm)}
+                            if clearance_mm is not None else {}),
+                         **({"minimum_drill_mm": float(minimum_drill_mm)}
+                            if minimum_drill_mm is not None else {})}
                     ),
                 },
                 "message": (

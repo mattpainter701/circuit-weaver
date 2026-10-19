@@ -1,20 +1,32 @@
-# Zigbee/BT Humidistat — Demo Design
+# USB-UART and I2C Expansion Prototype — Demo Design
 
-A compact IoT humidity sensor with USB-C charging, 3.3V LDO, USB-UART bridge, and I2C sensor bus. Demonstrates the full Circuit Weaver pipeline from YAML spec to manufacturing-ready outputs.
+A minimal USB-powered programming and I2C expansion prototype. It contains a USB-C power-only connector, a 3.3 V LDO, a CH340G USB-UART bridge with its 12 MHz crystal, two physical I2C pull-up resistors, a JST-PH I2C expansion connector, and 2.54 mm UART and USB-data headers. J1 carries VBUS only; connect VUSB/GND/USB D+/D− at J4 to a verified USB host breakout with a suitable harness. The design does not include a humidity sensor, Zigbee radio, battery, or charger.
 
 ## Design Blocks
 
 | Ref | Template | IC | Purpose |
 |-|-|-|-|
-| U1 | ldo | AP2112K-3.3TRG1 | 5V USB -> 3.3V regulated supply |
-| U2 | usb_controller | CH340G | USB-UART bridge for programming |
-| U3 | i2c_bus | PULLUPS_ONLY | I2C pull-ups for SHT40 sensor |
+| U1 | ldo | AP2112K-3.3 | 5V USB -> 3.3V regulated supply |
+| U2 | usb_controller | CH340G | USB-UART bridge with external 12 MHz crystal |
+| Y1 | crystal_oscillator | HC-49S | 12 MHz reference for CH340G |
+| RP1 | i2c_bus | PULLUPS_ONLY | Logical bus container for the physical pull-ups |
+| J2 | connector | JST_PH_4P | Off-board VDD_3P3/GND/I2C expansion |
+| J3 | connector | PIN_HEADER_4P | Off-board VDD_3P3/GND/UART breakout |
+| J4 | connector | PIN_HEADER_4P | Off-board VUSB/GND/USB D+/D− breakout |
+
+J2 exposes VDD_3P3, GND, I2C_SDA, and I2C_SCL for an off-board sensor. J3 exposes VDD_3P3, GND, UART_TX, and UART_RX. J4 exposes VUSB, GND, USB_DP, and USB_DM; J1 is the existing power-only USB-C connector, so connect J4 to a verified external USB-C data breakout with a suitable harness. The sample has no sensor or radio connected.
 
 ## Run the Demo
 
 ```bash
-# 1. Generate KiCad schematic + PCB placement
-circuit-weaver generate zigbee_humidistat.yaml --output ./output --no-svg --no-require-valid
+# 1. Require the guarded source validation to pass
+circuit-weaver validate zigbee_humidistat.yaml --strict
+
+# 2. Generate the schematic only after native KiCad ERC passes
+circuit-weaver generate zigbee_humidistat.yaml --output ./output --no-svg --require-kicad
+
+# 3. Build a prototype PCB on an explicit review canvas
+circuit-weaver build-pcb ./output/main.kicad_sch --output ./output/USB_UART_I2C_Prototype.kicad_pcb --width 80 --height 60 --clearance 0.127
 
 # 2. Estimate component costs at volume
 circuit-weaver cost-bom zigbee_humidistat.yaml --qty 1,10,100

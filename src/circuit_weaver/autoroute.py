@@ -222,12 +222,14 @@ def _native_placement_variant(text: str, order: str, *, rotation: int = 0) -> tu
             by_reference = dict(zip(references, place_blocks, strict=True))
             reordered_places = [by_reference[reference] for reference in nested_order]
             block = _replace_blocks_at_spans(block, place_spans, reordered_places)
-        entries.append({
-            "span": (start, end),
-            "block": block,
-            "minimum_reference": min(references),
-            "references": nested_order,
-        })
+        entries.append(
+            {
+                "span": (start, end),
+                "block": block,
+                "minimum_reference": min(references),
+                "references": nested_order,
+            }
+        )
 
     if len(all_references) != len(set(all_references)):
         raise ValueError("Cannot safely reorder native DSN: duplicate footprint references")
@@ -242,7 +244,9 @@ def _native_placement_variant(text: str, order: str, *, rotation: int = 0) -> tu
         ordered_entries = entries
 
     placement = _replace_blocks_at_spans(
-        placement, component_spans, [entry["block"] for entry in ordered_entries],
+        placement,
+        component_spans,
+        [entry["block"] for entry in ordered_entries],
     )
     reordered_text = text[:placement_start] + placement + text[placement_end:]
     reference_order = [reference for entry in ordered_entries for reference in entry["references"]]
@@ -506,9 +510,7 @@ def _validate_specctra_artifact(
             "size_bytes": size,
         }
 
-    details, semantic_error = (
-        _validate_dsn_semantics(roots[0]) if kind == "dsn" else _validate_ses_semantics(roots[0])
-    )
+    details, semantic_error = _validate_dsn_semantics(roots[0]) if kind == "dsn" else _validate_ses_semantics(roots[0])
     if semantic_error or details is None:
         return {"valid": False, "reason": semantic_error, "size_bytes": size}
 
@@ -547,8 +549,7 @@ def _validate_specctra_artifact(
             return {
                 "valid": False,
                 "reason": (
-                    f"SES session {details['design_name']!r} does not match source DSN "
-                    f"design {dsn_design!r}"
+                    f"SES session {details['design_name']!r} does not match source DSN " f"design {dsn_design!r}"
                 ),
                 "size_bytes": size,
             }
@@ -559,8 +560,7 @@ def _validate_specctra_artifact(
             return {
                 "valid": False,
                 "reason": (
-                    f"SES base_design {details['base_design']!r} does not reference source DSN "
-                    f"{dsn_path.name!r}"
+                    f"SES base_design {details['base_design']!r} does not reference source DSN " f"{dsn_path.name!r}"
                 ),
                 "size_bytes": size,
             }
@@ -820,9 +820,7 @@ def _prepare_destination(path: Path, *, overwrite: bool) -> str | None:
 
 
 def _staging_path(destination: Path) -> Path:
-    return destination.with_name(
-        f".{destination.stem}.cw-stage-{uuid.uuid4().hex}{destination.suffix}"
-    )
+    return destination.with_name(f".{destination.stem}.cw-stage-{uuid.uuid4().hex}{destination.suffix}")
 
 
 def _remove_staging_file(path: Path) -> None:
@@ -846,10 +844,7 @@ def _publish_staged_file(staging: Path, destination: Path, *, overwrite: bool) -
             try:
                 os.link(staging, destination)
             except FileExistsError:
-                return (
-                    "Output appeared while routing; refusing to replace it without --overwrite: "
-                    f"{destination}"
-                )
+                return "Output appeared while routing; refusing to replace it without --overwrite: " f"{destination}"
             try:
                 staging.unlink()
             except OSError:
@@ -903,20 +898,26 @@ def export_dsn(
             from .kicad_bridge import run_kicad
 
             result = run_kicad(
-                "export_dsn", board=str(Path(pcb_path).resolve()), output=str(staging.resolve()),
-                python_path=kicad_python_path, timeout=timeout_seconds,
+                "export_dsn",
+                board=str(Path(pcb_path).resolve()),
+                output=str(staging.resolve()),
+                python_path=kicad_python_path,
+                timeout=timeout_seconds,
             )
             if result["status"] != "ok":
                 _remove_staging_file(staging)
                 return _result_error(
-                    "Automatic Specctra export requires KiCad's pcbnew Python API. " + result["message"]
+                    "Automatic Specctra export requires KiCad's pcbnew Python API. "
+                    + result["message"]
                     + ". Alternatively export Specctra DSN in PCB Editor and route that .dsn file."
                 )
             result = subprocess.CompletedProcess([], 0, "", "")
         else:
             result = subprocess.run(
                 [kicad_cli, "pcb", "export", "specctra", "-o", str(staging), str(pcb_path)],
-                capture_output=True, text=True, timeout=timeout_seconds,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
             )
     except subprocess.TimeoutExpired:
         _remove_staging_file(staging)
@@ -932,9 +933,7 @@ def export_dsn(
         clearance_guardband = None
         if routing_clearance_margin_mm > 0:
             try:
-                clearance_guardband = _apply_specctra_clearance_margin(
-                    staging, float(routing_clearance_margin_mm)
-                )
+                clearance_guardband = _apply_specctra_clearance_margin(staging, float(routing_clearance_margin_mm))
             except (OSError, ValueError) as exc:
                 return _result_error(f"Could not apply conservative router-only clearance margin: {exc}")
 
@@ -1002,9 +1001,7 @@ def _parse_routing_stats(output_text: str) -> dict[str, Any]:
         traces = structured.get("traces") if isinstance(structured.get("traces"), dict) else {}
         vias = structured.get("vias") if isinstance(structured.get("vias"), dict) else {}
         clearance = (
-            structured.get("clearance_violations")
-            if isinstance(structured.get("clearance_violations"), dict)
-            else {}
+            structured.get("clearance_violations") if isinstance(structured.get("clearance_violations"), dict) else {}
         )
         return {
             "traces": _nonnegative_int(traces.get("total_count")),
@@ -1048,10 +1045,13 @@ def _parse_routing_stats(output_text: str) -> dict[str, Any]:
     # Freerouting 2.4 reports the final stage score instead of the older JSON
     # statistics object. Ignore pass/progress scores: only final summaries
     # establish completion and violations for publication.
-    final_scores = list(re.finditer(
-        r"stage completed:[^\r\n]*final score:[^\r\n]*?\((\d+) unrouted and (\d+) violations\)",
-        output_text, re.IGNORECASE,
-    ))
+    final_scores = list(
+        re.finditer(
+            r"stage completed:[^\r\n]*final score:[^\r\n]*?\((\d+) unrouted and (\d+) violations\)",
+            output_text,
+            re.IGNORECASE,
+        )
+    )
     if final_scores:
         stats["incomplete"] = int(final_scores[-1].group(1))
         stats["clearance_violations"] = int(final_scores[-1].group(2))
@@ -1062,6 +1062,381 @@ def _parse_routing_stats(output_text: str) -> dict[str, Any]:
 def _parse_freerouting_version(output_text: str) -> str | None:
     matches = list(_FREEROUTING_VERSION_RE.finditer(output_text))
     return matches[-1].group(1) if matches else None
+
+
+def _freerouting_drc_report(
+    command: list[str],
+    dsn_path: Path,
+    *,
+    session_path: Path | None = None,
+    timeout_seconds: float = 30,
+) -> dict[str, Any] | None:
+    """Return FreeRouting's structured DRC report, failing closed on unknown output."""
+    try:
+        with tempfile.TemporaryDirectory(prefix=".cw-router-drc-", dir=dsn_path.parent) as folder:
+            folder_path = Path(folder)
+            report_path = folder_path / "drc.json"
+            input_path = str(dsn_path.resolve())
+            if session_path is not None:
+                input_path += "+" + str(session_path.resolve())
+            args = [
+                *command,
+                "-de",
+                input_path,
+                "-drc",
+                str(report_path),
+                "-da",
+                "--gui.enabled=false",
+                f"--user_data_path={folder_path}",
+            ]
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                cwd=folder_path,
+            )
+            if result.returncode != 0 or not report_path.is_file():
+                return None
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(report, dict) or not isinstance(report.get("violations"), list):
+        return None
+    return report
+
+
+def _native_pad_rows(inspection: dict[str, Any]) -> list[dict[str, Any]]:
+    """Index authoritative KiCad pad identities for matching a DRC endpoint."""
+    rows: list[dict[str, Any]] = []
+    footprints = inspection.get("footprints")
+    if not isinstance(footprints, list):
+        return []
+    for footprint in footprints:
+        if not isinstance(footprint, dict) or not isinstance(footprint.get("ref"), str):
+            continue
+        for pad in footprint.get("pads", []):
+            if not isinstance(pad, dict):
+                continue
+            try:
+                x, y = float(pad["x"]), float(pad["y"])
+                number, net = str(pad["number"]), str(pad.get("net") or "")
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+            if math.isfinite(x) and math.isfinite(y) and number and net:
+                rows.append({"ref": footprint["ref"], "number": number, "net": net, "x": x, "y": y})
+    return rows
+
+
+def _specctra_physical_pad_index(dsn_text: str) -> list[dict[str, Any]] | None:
+    """Resolve DSN endpoint coordinates to placed reference/pad/net identities."""
+    units = list(_iter_sexpr_blocks(dsn_text, "unit"))
+    libraries = list(_iter_sexpr_blocks(dsn_text, "library"))
+    placements = list(_iter_sexpr_blocks(dsn_text, "placement"))
+    networks = list(_iter_sexpr_blocks(dsn_text, "network"))
+    if not (len(units) == len(libraries) == len(placements) == len(networks) == 1):
+        return None
+    unit_name = (_first_payload_token(units[0], "unit") or "").casefold()
+    to_mm = {"um": 0.001, "mm": 1.0, "mil": 0.0254, "inch": 25.4, "cm": 10.0}.get(unit_name)
+    if to_mm is None:
+        return None
+
+    pin_nets: dict[str, set[str]] = {}
+    for net_block in _iter_sexpr_blocks(networks[0], "net"):
+        net_name = _first_payload_token(net_block, "net")
+        pins_block = _first_sexpr_block(net_block, "pins")
+        if not net_name or pins_block is None:
+            return None
+        for pin_token in _payload_tokens(_block_payload(pins_block, "pins")):
+            pin_name = _decode_specctra_token(pin_token)
+            pin_nets.setdefault(pin_name, set()).add(net_name)
+
+    image_pins: dict[str, list[tuple[str, float, float]]] = {}
+    for image_block in _iter_sexpr_blocks(libraries[0], "image"):
+        image_name = _first_payload_token(image_block, "image")
+        if not image_name:
+            return None
+        parsed: list[tuple[str, float, float]] = []
+        for pin_block in _iter_sexpr_blocks(image_block, "pin"):
+            payload = _block_payload(pin_block, "pin")
+            payload = re.sub(r"\(rotate\s+[+-]?(?:\d+(?:\.\d*)?|\.\d+)\)", " ", payload)
+            tokens = _payload_tokens(payload)
+            if len(tokens) < 4:
+                return None
+            try:
+                pin_name = _decode_specctra_token(tokens[1])
+                px, py = float(tokens[2]) * to_mm, float(tokens[3]) * to_mm
+            except (ValueError, TypeError, OverflowError):
+                return None
+            if not math.isfinite(px) or not math.isfinite(py):
+                return None
+            parsed.append((pin_name, px, py))
+        image_pins[image_name] = parsed
+
+    rows: list[dict[str, Any]] = []
+    for component_block in _iter_sexpr_blocks(placements[0], "component"):
+        image_name = _first_payload_token(component_block, "component")
+        if not image_name or image_name not in image_pins:
+            return None
+        for place_block in _iter_sexpr_blocks(component_block, "place"):
+            tokens = _payload_tokens(_block_payload(place_block, "place"))
+            if len(tokens) < 5:
+                return None
+            reference = _decode_specctra_token(tokens[0])
+            side = _decode_specctra_token(tokens[3]).casefold()
+            if side != "front":
+                # Back-side mirroring differs between DSN writers; do not guess.
+                return None
+            try:
+                ox, oy, rotation = float(tokens[1]) * to_mm, float(tokens[2]) * to_mm, float(tokens[4])
+            except (ValueError, TypeError, OverflowError):
+                return None
+            if not all(math.isfinite(v) for v in (ox, oy, rotation)):
+                return None
+            radians = math.radians(rotation)
+            cosine, sine = math.cos(radians), math.sin(radians)
+            for pin_name, local_x, local_y in image_pins[image_name]:
+                net_names = pin_nets.get(f"{reference}-{pin_name}", set())
+                if len(net_names) > 1:
+                    return None
+                if not net_names:
+                    continue
+                global_x = ox + cosine * local_x - sine * local_y
+                global_y = oy + sine * local_x + cosine * local_y
+                rows.append(
+                    {
+                        "ref": reference,
+                        "number": pin_name,
+                        "net": next(iter(net_names)),
+                        "x": global_x,
+                        "y": -global_y,
+                        "dsn_position_mm": {"x": global_x, "y": global_y},
+                    }
+                )
+    return rows
+
+
+def _same_native_pad_clearance_pairs(
+    report: dict[str, Any],
+    native_pads: list[dict[str, Any]],
+    dsn_pads: list[dict[str, Any]],
+    *,
+    tolerance_mm: float = 0.002,
+) -> dict[str, Any] | None:
+    """Qualify only fixed same-net overlap pairs between lands of one KiCad pad.
+
+    FreeRouting 2.4.1 reports intentional same-net geometry overlaps as clearance
+    failures. The exception is deliberately limited to pairs whose two endpoints
+    both resolve to the same native footprint reference, pad number, and net.
+    Coordinates and FreeRouting item UUIDs remain in the returned audit rows.
+    """
+    try:
+        tolerance_mm = float(tolerance_mm)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if (
+        report.get("$schema") != "https://schemas.kicad.org/drc.v1.json"
+        or report.get("coordinateUnits") != "mm"
+        or not math.isfinite(tolerance_mm)
+        or tolerance_mm <= 0
+    ):
+        return None
+    violations = report.get("violations")
+    if not isinstance(violations, list):
+        return None
+    for pad in [*native_pads, *dsn_pads]:
+        if (
+            not isinstance(pad, dict)
+            or not all(isinstance(pad.get(key), str) and pad[key] for key in ("ref", "number", "net"))
+        ):
+            return None
+        try:
+            x, y = float(pad["x"]), float(pad["y"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None
+        if not math.isfinite(x) or not math.isfinite(y):
+            return None
+    rows: list[dict[str, Any]] = []
+    signatures: set[tuple[Any, ...]] = set()
+    for violation in violations:
+        if not isinstance(violation, dict) or violation.get("type") not in {"clearance", "holeClearance"}:
+            return None
+        items = violation.get("items")
+        if not isinstance(items, list) or len(items) != 2:
+            return None
+        endpoints: list[dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict) or not isinstance(item.get("pos"), dict):
+                return None
+            description = item.get("description")
+            net_match = re.fullmatch(r"Pin \[(.*)\]", description) if isinstance(description, str) else None
+            if net_match is None:
+                return None
+            try:
+                dsn_x = float(item["pos"]["x"])
+                dsn_y = float(item["pos"]["y"])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                return None
+            if not math.isfinite(dsn_x) or not math.isfinite(dsn_y):
+                return None
+            # Specctra coordinates mirror KiCad's Y axis.
+            native_x, native_y = dsn_x, -dsn_y
+            native_matches = {
+                (pad["ref"], pad["number"], pad["net"])
+                for pad in native_pads
+                if abs(pad["x"] - native_x) <= tolerance_mm and abs(pad["y"] - native_y) <= tolerance_mm
+            }
+            dsn_matches = [
+                pad
+                for pad in dsn_pads
+                if abs(pad["x"] - native_x) <= tolerance_mm and abs(pad["y"] - native_y) <= tolerance_mm
+            ]
+            if len(native_matches) != 1 or not dsn_matches:
+                return None
+            reference, number, net = next(iter(native_matches))
+            aliases = sorted(
+                {
+                    pad["number"]
+                    for pad in dsn_matches
+                    if pad["ref"] == reference
+                    and pad["net"] == net
+                    and (pad["number"] == number or re.fullmatch(re.escape(number) + r"@\d+", pad["number"]))
+                }
+            )
+            if not aliases or any(
+                pad["ref"] != reference
+                or pad["net"] != net
+                or not (pad["number"] == number or re.fullmatch(re.escape(number) + r"@\d+", pad["number"]))
+                for pad in dsn_matches
+            ):
+                return None
+            if net != net_match.group(1):
+                return None
+            endpoints.append(
+                {
+                    "identity": (reference, number, net),
+                    "ref": reference,
+                    "pad_number": number,
+                    "net": net,
+                    "dsn_position_mm": {"x": dsn_x, "y": dsn_y},
+                    "native_position_mm": {"x": native_x, "y": native_y},
+                    "source_dsn_pin_aliases": aliases,
+                    "item_uuid": str(item.get("uuid") or ""),
+                }
+            )
+        if endpoints[0]["identity"] != endpoints[1]["identity"]:
+            return None
+        endpoints.sort(
+            key=lambda row: (row["native_position_mm"]["x"], row["native_position_mm"]["y"], row["item_uuid"])
+        )
+        description = str(violation.get("description") or "")
+        pair_signature = (
+            str(violation["type"]),
+            description,
+            tuple(
+                (
+                    e["ref"],
+                    e["pad_number"],
+                    e["net"],
+                    tuple(e["source_dsn_pin_aliases"]),
+                    e["native_position_mm"]["x"],
+                    e["native_position_mm"]["y"],
+                )
+                for e in endpoints
+            ),
+        )
+        if pair_signature in signatures:
+            return None
+        signatures.add(pair_signature)
+        rows.append(
+            {
+                "type": violation["type"],
+                "description": description,
+                "endpoints": [
+                    {key: value for key, value in endpoint.items() if key != "identity"} for endpoint in endpoints
+                ],
+                "signature": pair_signature,
+            }
+        )
+    return {"count": len(rows), "pairs": rows, "signatures": signatures}
+
+
+def _compare_clearance_reports(
+    baseline: dict[str, Any],
+    final: dict[str, Any],
+    native_pads: list[dict[str, Any]],
+    dsn_pads: list[dict[str, Any]],
+    router_violation_count: int | None,
+) -> dict[str, Any]:
+    """Verify final FreeRouting violations are exactly the qualified fixed baseline pairs."""
+    baseline_pairs = _same_native_pad_clearance_pairs(baseline, native_pads, dsn_pads)
+    final_pairs = _same_native_pad_clearance_pairs(final, native_pads, dsn_pads)
+    if baseline_pairs is None or final_pairs is None:
+        return {"valid": False, "reason": "DRC report contains a pair that is not a same-native-pad overlap"}
+    if baseline_pairs["count"] == 0:
+        return {"valid": False, "reason": "baseline contains no qualifying fixed-pad overlaps"}
+    if baseline_pairs["signatures"] != final_pairs["signatures"]:
+        return {
+            "valid": False,
+            "reason": "final FreeRouting clearance-pair identities or geometry differ from the fixed baseline",
+            "baseline_pairs": baseline_pairs["pairs"],
+            "final_pairs": final_pairs["pairs"],
+        }
+    if router_violation_count != final_pairs["count"]:
+        return {
+            "valid": False,
+            "reason": "FreeRouting summary count does not match its final DRC pair table",
+            "baseline_pairs": baseline_pairs["pairs"],
+            "final_pairs": final_pairs["pairs"],
+            "router_clearance_violations": router_violation_count,
+        }
+    return {
+        "valid": True,
+        "classification": "unchanged_preexisting_same_pad_overlaps",
+        "baseline_pairs": baseline_pairs["pairs"],
+        "final_pairs": final_pairs["pairs"],
+        "count": final_pairs["count"],
+    }
+
+
+def _preexisting_fixed_pad_clearance_baseline(
+    command: list[str],
+    board_path: Path,
+    dsn_path: Path,
+    *,
+    kicad_python_path: str | Path | None,
+    timeout_seconds: float,
+) -> dict[str, Any] | None:
+    """Authorize a narrow router-only baseline exception for native-board output."""
+    from .kicad_bridge import run_kicad
+
+    inspection = run_kicad(
+        "inspect",
+        board=str(board_path.resolve()),
+        python_path=kicad_python_path,
+        timeout=min(timeout_seconds, 60),
+    )
+    if inspection.get("status") != "ok":
+        return None
+    native_pads = _native_pad_rows(inspection)
+    try:
+        dsn_text = dsn_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    dsn_pads = _specctra_physical_pad_index(dsn_text)
+    if not native_pads or dsn_pads is None:
+        return None
+    report = _freerouting_drc_report(
+        command,
+        dsn_path,
+        timeout_seconds=min(timeout_seconds, 30),
+    )
+    if report is None:
+        return None
+    qualified = _same_native_pad_clearance_pairs(report, native_pads, dsn_pads)
+    if qualified is None or qualified["count"] == 0:
+        return None
+    return {"report": report, "native_pads": native_pads, "dsn_pads": dsn_pads, "pairs": qualified["pairs"]}
 
 
 def _probe_freerouting_capabilities(command: list[str], *, timeout_seconds: float) -> dict[str, Any]:
@@ -1091,7 +1466,11 @@ def _modern_router(capability_probe: dict[str, Any] | None) -> bool:
 
 
 def _effective_optimization_threads(
-    *, source_suffix: str, routed_board: bool, attempts: int, requested: int | None,
+    *,
+    source_suffix: str,
+    routed_board: bool,
+    attempts: int,
+    requested: int | None,
 ) -> int | None:
     """Keep native-board DRC-valid routing as the default while honoring explicit choices."""
     if requested is not None:
@@ -1120,6 +1499,7 @@ def _route_specctra(
     optimizer_improvement_threshold: float | None,
     seed: int | None,
     capability_probe: dict[str, Any] | None,
+    clearance_baseline: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     prepare_error = _prepare_destination(ses_path, overwrite=overwrite)
     if prepare_error:
@@ -1142,9 +1522,13 @@ def _route_specctra(
     if _modern_router(capability_probe):
         # Default fine-pitch fanout/necking can introduce copper below the
         # imported class width. Route with the DSN widths and vias instead.
-        routing_command.extend([
-            "--router.automatic_neckdown=false", "--router.neck_width_um=0", "--router.fanout.enabled=false",
-        ])
+        routing_command.extend(
+            [
+                "--router.automatic_neckdown=false",
+                "--router.neck_width_um=0",
+                "--router.fanout.enabled=false",
+            ]
+        )
     if optimization_threads is not None:
         routing_command.extend(["-mt", str(optimization_threads)])
     if optimizer_strategy is not None:
@@ -1198,8 +1582,7 @@ def _route_specctra(
                 stats["traces"] = len(list(_iter_sexpr_blocks(routes, "wire")))
             stats["geometry_counts_source"] = "validated_session"
         router = {
-            "version": _parse_freerouting_version(output_text)
-            or (capability_probe or {}).get("version"),
+            "version": _parse_freerouting_version(output_text) or (capability_probe or {}).get("version"),
             "headless": headless,
             "max_passes": passes,
             "optimization_threads": optimization_threads,
@@ -1216,10 +1599,38 @@ def _route_specctra(
                 stats=stats,
                 router=router,
             )
-        if (
-            stats["clearance_violations"] is not None
-            and stats["clearance_violations"] > 0
-        ):
+        clearance_audit = None
+        if clearance_baseline is not None:
+            final_drc = _freerouting_drc_report(
+                command,
+                dsn_path,
+                session_path=staging,
+                timeout_seconds=min(timeout_seconds, 30),
+            )
+            if final_drc is None:
+                return _result_error(
+                    "Could not obtain the final FreeRouting DRC pair table for pre-existing pad overlaps",
+                    artifact=validation,
+                    stats=stats,
+                    router=router,
+                )
+            clearance_audit = _compare_clearance_reports(
+                clearance_baseline["report"],
+                final_drc,
+                clearance_baseline["native_pads"],
+                clearance_baseline["dsn_pads"],
+                stats["clearance_violations"],
+            )
+            if not clearance_audit["valid"]:
+                return _result_error(
+                    "FreeRouting clearance violations changed from the qualified fixed-pad baseline: "
+                    + str(clearance_audit.get("reason", "unclassified violation")),
+                    artifact=validation,
+                    stats=stats,
+                    router=router,
+                    clearance_audit=clearance_audit,
+                )
+        elif stats["clearance_violations"] is not None and stats["clearance_violations"] > 0:
             return _result_error(
                 f"Freerouting reported {stats['clearance_violations']} clearance violation(s); SES was not published",
                 artifact=validation,
@@ -1231,15 +1642,21 @@ def _route_specctra(
             return _result_error(publish_error, stats=stats, router=router)
         validation["path"] = str(ses_path)
         clearance_status = (
-            "verified_clear"
+            "unchanged_preexisting_same_pad_overlaps_requires_native_drc"
+            if clearance_audit is not None
+            else "verified_clear"
             if stats["clearance_violations"] == 0
             else "unreported_by_router_cli"
         )
+        if clearance_audit is not None:
+            stats["clearance_violations_raw"] = stats["clearance_violations"]
+            stats["clearance_violations_classified_preexisting"] = clearance_audit["count"]
         return {
             "status": "ok",
             "artifact": validation,
             "stats": stats,
             "router": router,
+            **({"clearance_audit": clearance_audit} if clearance_audit is not None else {}),
             "verification": {
                 "ses_semantics": "verified",
                 "connection_completeness": "verified",
@@ -1258,8 +1675,7 @@ def _measure_session_trace_lengths(text: str) -> dict[str, Any]:
     unit), which can differ from the DSN export's coordinate scale. Unsupported
     wire geometry must not look shorter than a fully measured candidate.
     """
-    unavailable = {"trace_length_mm": None, "trace_lengths_by_net_mm": {},
-                   "trace_length_source": "unavailable"}
+    unavailable = {"trace_length_mm": None, "trace_lengths_by_net_mm": {}, "trace_length_source": "unavailable"}
     routes = _first_sexpr_block(text, "routes") or ""
     resolutions = list(_iter_sexpr_blocks(routes, "resolution"))
     if len(resolutions) != 1:
@@ -1298,8 +1714,9 @@ def _measure_session_trace_lengths(text: str) -> dict[str, Any]:
                 if not all(math.isfinite(value) for value in values) or values[0] < 0:
                     raise ValueError("invalid path coordinate or width")
                 coordinates = list(zip(values[1::2], values[2::2], strict=True))
-                length = math.fsum(math.dist(first, second) * factor
-                                   for first, second in zip(coordinates, coordinates[1:]))
+                length = math.fsum(
+                    math.dist(first, second) * factor for first, second in zip(coordinates, coordinates[1:])
+                )
                 if not math.isfinite(length):
                     raise ValueError("non-finite path length")
             except (ValueError, OverflowError):
@@ -1318,10 +1735,12 @@ def _measure_session_trace_lengths(text: str) -> dict[str, Any]:
         return {**unavailable, "trace_length_reason": "non-finite total length"}
     if not math.isfinite(total):
         return {**unavailable, "trace_length_reason": "non-finite total length"}
-    return {"trace_length_mm": round(total, 6),
-            "trace_lengths_by_net_mm": {net: round(value, 6) for net, value in sorted(net_lengths.items())},
-            "trace_length_source": "validated_session_polyline_centerlines",
-            "trace_length_scope": "summed wire centerlines; excludes via barrels and copper inside pads"}
+    return {
+        "trace_length_mm": round(total, 6),
+        "trace_lengths_by_net_mm": {net: round(value, 6) for net, value in sorted(net_lengths.items())},
+        "trace_length_source": "validated_session_polyline_centerlines",
+        "trace_length_scope": "summed wire centerlines; excludes via barrels and copper inside pads",
+    }
 
 
 def _routing_rank(stats: dict[str, Any]) -> tuple[float, ...]:
@@ -1341,15 +1760,27 @@ def _routing_rank(stats: dict[str, Any]) -> tuple[float, ...]:
 
 
 def _route_candidates(
-    dsn_path: Path, ses_path: Path, command: list[str], *, attempts: int,
-    timeout_seconds: float, overwrite: bool, seed: int | None,
-    native_placement_portfolio: bool = False, **options: Any,
+    dsn_path: Path,
+    ses_path: Path,
+    command: list[str],
+    *,
+    attempts: int,
+    timeout_seconds: float,
+    overwrite: bool,
+    seed: int | None,
+    native_placement_portfolio: bool = False,
+    **options: Any,
 ) -> dict[str, Any]:
     """Run an isolated portfolio and atomically publish its best valid session."""
     if attempts == 1 and not native_placement_portfolio:
         return _route_specctra(
-            dsn_path, ses_path, command, timeout_seconds=timeout_seconds,
-            overwrite=overwrite, seed=seed, **options,
+            dsn_path,
+            ses_path,
+            command,
+            timeout_seconds=timeout_seconds,
+            overwrite=overwrite,
+            seed=seed,
+            **options,
         )
     deadline = time.perf_counter() + timeout_seconds
     attempt_rows: list[dict[str, Any]] = []
@@ -1399,10 +1830,7 @@ def _route_candidates(
                 if (
                     not supports_seed
                     and attempt_options.get("optimizer_strategy") is None
-                    and (
-                        not native_placement_portfolio
-                        or attempt_options.get("optimization_threads") not in {None, 0}
-                    )
+                    and (not native_placement_portfolio or attempt_options.get("optimization_threads") not in {None, 0})
                 ):
                     strategy = ("greedy", "global", "hybrid")[index % 3]
                     attempt_options["optimizer_strategy"] = strategy
@@ -1412,12 +1840,21 @@ def _route_candidates(
                     break
                 allowance = remaining / (attempts - index)
                 result = _route_specctra(
-                    route_dsn, path, command, timeout_seconds=allowance,
-                    overwrite=False, seed=attempt_seed, **attempt_options,
+                    route_dsn,
+                    path,
+                    command,
+                    timeout_seconds=allowance,
+                    overwrite=False,
+                    seed=attempt_seed,
+                    **attempt_options,
                 )
-                row = {"attempt": index + 1, "seed": attempt_seed,
-                       "optimizer_strategy": attempt_options.get("optimizer_strategy"),
-                       "status": result["status"], "timeout_seconds": allowance}
+                row = {
+                    "attempt": index + 1,
+                    "seed": attempt_seed,
+                    "optimizer_strategy": attempt_options.get("optimizer_strategy"),
+                    "status": result["status"],
+                    "timeout_seconds": allowance,
+                }
                 if placement_order is not None:
                     row["placement_order_strategy"] = placement_order_kind
                     row["placement_order"] = placement_order
@@ -1428,8 +1865,9 @@ def _route_candidates(
                     row["message"] = result["message"]
                 attempt_rows.append(row)
                 if hashlib.sha256(dsn_path.read_bytes()).hexdigest() != input_hash:
-                    return _result_error("Routing input changed during candidate search; no session was published",
-                                         attempts=attempt_rows)
+                    return _result_error(
+                        "Routing input changed during candidate search; no session was published", attempts=attempt_rows
+                    )
                 if candidate_hash is not None and hashlib.sha256(route_dsn.read_bytes()).hexdigest() != candidate_hash:
                     return _result_error(
                         "Native routing variant changed during candidate search; no session was published",
@@ -1623,6 +2061,15 @@ def autoroute_pcb(
         if export_result["status"] != "ok":
             return {**export_result, "preflight": preflight, "input": input_validation}
         routing_clearance_guardband = export_result.get("routing_clearance_guardband")
+    clearance_baseline = None
+    if source_suffix == ".kicad_pcb" and routed_board_path is not None:
+        clearance_baseline = _preexisting_fixed_pad_clearance_baseline(
+            freerouting_command,
+            source.resolve(),
+            dsn_path.resolve(),
+            kicad_python_path=kicad_python_path,
+            timeout_seconds=timeout_seconds,
+        )
     route_result = _route_candidates(
         dsn_path,
         ses_path,
@@ -1645,6 +2092,7 @@ def autoroute_pcb(
         seed=seed,
         native_placement_portfolio=source_suffix == ".kicad_pcb",
         capability_probe=capability_probe,
+        clearance_baseline=clearance_baseline,
     )
 
     elapsed = time.perf_counter() - start_time
@@ -1653,13 +2101,20 @@ def autoroute_pcb(
             **route_result,
             "preflight": preflight,
             "input": input_validation,
-            **({"routing_clearance_guardband": routing_clearance_guardband}
-               if routing_clearance_guardband is not None else {}),
+            **(
+                {"routing_clearance_guardband": routing_clearance_guardband}
+                if routing_clearance_guardband is not None
+                else {}
+            ),
         }
 
     stats = {**route_result["stats"], "routing_time_seconds": elapsed}
     incomplete = stats["incomplete"]
-    clearance_verified = stats["clearance_violations"] == 0
+    clearance_verified = (
+        stats["clearance_violations"] == 0
+        or route_result.get("verification", {}).get("clearance")
+        == "unchanged_preexisting_same_pad_overlaps_requires_native_drc"
+    )
     status = "partial" if incomplete else "ok" if clearance_verified else "review_required"
     message = (
         f"Freerouting produced a validated Specctra session at {ses_path}. "
@@ -1687,23 +2142,60 @@ def autoroute_pcb(
         "routing_complete": incomplete == 0,
         "fabrication_ready": False,
         "requires_kicad_drc": True,
-        **({"routing_clearance_guardband": routing_clearance_guardband}
-           if routing_clearance_guardband is not None else {}),
+        **(
+            {"clearance_audit": route_result["clearance_audit"]}
+            if "clearance_audit" in route_result
+            else {}
+        ),
+        **(
+            {"routing_clearance_guardband": routing_clearance_guardband}
+            if routing_clearance_guardband is not None
+            else {}
+        ),
         **({"search": route_result["search"]} if "search" in route_result else {}),
     }
     if routed_board_path is not None and not incomplete:
         from .pcb_layout import import_routing_session
 
         imported = import_routing_session(
-            source, ses_path, routed_board_path, overwrite=overwrite,
-            kicad_python_path=kicad_python_path, expected_hashes=source_hashes,
+            source,
+            ses_path,
+            routed_board_path,
+            overwrite=overwrite,
+            kicad_python_path=kicad_python_path,
+            expected_hashes=source_hashes,
         )
         if imported["status"] != "ok":
             return {**result, "status": "error", "message": imported["message"], "board_import": imported}
-        return {**result, **imported, "session_path": str(ses_path), "requires_kicad_drc": False,
-                "session_artifact": result["artifact"],
-                "artifact": {"valid": True, "kind": "kicad_pcb", "path": imported["output_path"],
-                             "sha256": imported["drc"]["board_sha256"]},
-                "verification": {**result["verification"], "requires_kicad_drc": False, "kicad_drc": "passed"},
-                "message": "Routing imported into a separate PCB and verified with KiCad DRC"}
+        return {
+            **result,
+            **imported,
+            "session_path": str(ses_path),
+            "requires_kicad_drc": False,
+            "session_artifact": result["artifact"],
+            "artifact": {
+                "valid": True,
+                "kind": "kicad_pcb",
+                "path": imported["output_path"],
+                "sha256": imported["drc"]["board_sha256"],
+            },
+            "verification": {
+                **result["verification"],
+                "requires_kicad_drc": False,
+                "kicad_drc": "passed",
+                "clearance": (
+                    "native_drc_passed_with_unchanged_preexisting_same_pad_overlaps"
+                    if result["verification"]["clearance"]
+                    == "unchanged_preexisting_same_pad_overlaps_requires_native_drc"
+                    else result["verification"]["clearance"]
+                ),
+            },
+            "message": (
+                "Routing imported into a separate PCB and verified with KiCad DRC. "
+                f"Freerouting reported {result['stats'].get('clearance_violations_raw', 0)} "
+                "clearance pairs; all matched unchanged pre-existing same-pad geometry."
+                if "clearance_audit" in result
+                else "Routing imported into a separate PCB and verified with KiCad DRC"
+            ),
+        }
     return result
