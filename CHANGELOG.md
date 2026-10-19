@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-10-19
+
 ### Plane-backed ground trace cleanup
 
 - Remove redundant unlocked traces whose complete copper shape is covered by a same-net filled plane, while retaining every via, protected return and decoupling route, other-net copper, placement and labels. Native refill, saved coverage/connectivity verification and full DRC gate the result.

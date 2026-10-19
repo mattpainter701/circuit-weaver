@@ -26,8 +26,8 @@ payload before application commands run:
 
 ```sh
 python -m venv /path/to/validation-env
-/path/to/validation-env/bin/python -m pip install --force-reinstall /path/to/circuit_weaver-0.35.0-py3-none-any.whl
-/path/to/validation-env/bin/python scripts/validate_app_workflow.py --installed --expected-wheel /path/to/circuit_weaver-0.35.0-py3-none-any.whl --output /path/to/new-wheel-demo
+/path/to/validation-env/bin/python -m pip install --force-reinstall /path/to/circuit_weaver-0.36.0-py3-none-any.whl
+/path/to/validation-env/bin/python scripts/validate_app_workflow.py --installed --expected-wheel /path/to/circuit_weaver-0.36.0-py3-none-any.whl --output /path/to/new-wheel-demo
 ```
 
 On Windows, use the environment's `Scripts/python.exe`. If the environment
