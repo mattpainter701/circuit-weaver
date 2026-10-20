@@ -27,7 +27,15 @@
   <img src="assets/workflow.svg" alt="Circuit Weaver full pipeline — from install to KiCad export" width="100%">
 </p>
 
-Every path through Circuit Weaver follows the same contract: **describe the design → validate → generate KiCad artifacts**. The diagram above shows what each module does and which function it calls. Pick your entry point (Claude Code skill, Codex agent, or CLI wizard) and the rest is automatic.
+Circuit Weaver supports **describe the design → validate → generate KiCad artifacts**, with additional native placement, routing and review workflows. Start from an agent skill or the CLI and inspect the resulting evidence and blockers before proceeding.
+
+### Validated scope
+
+Circuit Weaver is an **alpha tool for engineering prototypes**. The 0.37.0 workflow corpus covers all 13 shipped samples and three connected mixed-signal boards with 149, 155 and 145 physical parts. Each passes 16 stages, including native routing, DRC, assembled model previews and a real MCP session. These are finite regression fixtures; passing them does not establish arbitrary-circuit electrical correctness or fabrication readiness.
+
+Claude Code, Codex and OpenCode can use the packaged agent skills and CLI. The optional MCP server exposes five focused tools rather than the entire CLI lifecycle. Installer and MCP tests do not constitute a fresh end-to-end test inside every agent client; see [agent platform support](docs/agent-platforms.md).
+
+RF research and circuit-generation assistance are available, but controlled-impedance routing, matching networks, antenna performance and RF stability require separate engineering verification. Native DRC and a rendered board are not evidence of RF performance. Review the [automation validation guide](docs/automation-validation.md) for prerequisites, evidence and prototype delivery gates.
 
 ---
 

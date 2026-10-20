@@ -10,7 +10,7 @@ import circuit_weaver
 
 
 def test_package_import_exposes_version():
-    assert circuit_weaver.__version__ == "0.36.0"
+    assert circuit_weaver.__version__ == "0.37.0"
     assert circuit_weaver.__version__ == version("circuit-weaver")
 
 

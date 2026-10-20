@@ -881,6 +881,9 @@ async def mcp_smoke(spec: Path, output: Path, env: dict) -> dict:
                     transcript.append({"tool": name, "result": payload})
                     if name in {"validate_design", "generate_artifacts"}:
                         require(payload.get("valid") is True, f"MCP {name} returned invalid design")
+                    if name == "validate_design":
+                        require(len(json.dumps(payload).encode("utf-8")) <= 20000,
+                                "MCP validation response exceeds the workflow's tested agent-output budget")
                     if name == "generate_artifacts":
                         require(payload.get("kicad_verified") is True, "MCP generation skipped native KiCad")
                 bad = await session.call_tool("validate_design", {"spec_json": "{invalid"})

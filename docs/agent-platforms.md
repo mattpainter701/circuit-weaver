@@ -72,6 +72,13 @@ design wizard or provide the full CLI project lifecycle. Use the `circuit-weaver
 agent skill or CLI for end-to-end design, import, analysis, resume, and
 manufacturing workflows. Installing skills does not configure an MCP client.
 
+`validate_design` defaults to `detail_level="summary"`. It preserves validity,
+category counts, every finding and evidence ID, but omits the embedded evidence
+ledger and its per-reference index from metadata. The response identifies those
+omissions. Request `detail_level="full"` for the complete report; that larger
+payload can exceed an agent client's tool-output limit. Neither view changes
+validation or manufacturing approval.
+
 ## Upgrade and Conflict Policy
 
 Each installed skill contains `.circuit-weaver-install.json`, recording the

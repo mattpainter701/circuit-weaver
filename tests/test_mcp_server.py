@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 import sys
@@ -81,6 +82,88 @@ def test_validate_tool_serializes_evidence_fields(monkeypatch: pytest.MonkeyPatc
 
     assert result["evidence_ids"] == ["EV-USER-1"]
     assert result["evidence_manifest"] == "evidence_manifest.json"
+    assert result["detail_level"] == "summary"
+    assert result["omitted_fields"] == [
+        "metadata.evidence_manifest",
+        "metadata.evidence_ids_by_reference",
+    ]
+
+
+def test_validate_summary_is_compact_and_preserves_audit_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    from circuit_weaver import dispatcher
+
+    manifest = {
+        "schema_version": "circuit-weaver-evidence-manifest/v1",
+        "records": [
+            {"id": f"EV-{index}", "claim": "evidence details " * 40}
+            for index in range(500)
+        ],
+    }
+    references = {f"param:U1.{index}": [f"EV-{index}"] for index in range(500)}
+    finding = ValidationMessage(
+        category="electrical",
+        code="voltage-out-of-range",
+        level="warning",
+        subject="U1",
+        message="Observed voltage exceeds the declared range.",
+        suggestion="Check the supply rail.",
+        evidence_ids=["EV-1", "EV-2"],
+        calculation={"observed": 5.2, "allowed_max": 5.0},
+        is_validator_finding=True,
+        rule_id="voltage-range",
+        observed_value="5.2 V",
+        expected_constraint="<= 5.0 V",
+        safest_next_action="Verify the source voltage.",
+        detection_confidence="high",
+        severity="warning",
+    )
+    report = ValidationReport(
+        profile="standard",
+        valid=True,
+        categories={"electrical": [finding]},
+        summary={"electrical": 1},
+        metadata={
+            "project": "AuditFixture",
+            "component_count": 1,
+            "evidence_manifest": manifest,
+            "evidence_ids_by_reference": references,
+        },
+        evidence_ids=["EV-1"],
+        evidence_manifest="evidence_manifest.json",
+    )
+    before = copy.deepcopy(report.to_dict())
+    monkeypatch.setattr(dispatcher, "validate_design", lambda *_args, **_kwargs: report)
+
+    summary = json.loads(_validate_design_tool("{}"))
+    full = json.loads(_validate_design_tool("{}", detail_level="full"))
+
+    assert len(json.dumps(summary, separators=(",", ":")).encode("utf-8")) < 10_000
+    assert summary["profile"] == "standard"
+    assert summary["valid"] is True
+    assert summary["summary"] == {"electrical": 1}
+    assert summary["evidence_ids"] == ["EV-1", "EV-2"]
+    assert summary["evidence_manifest"] == "evidence_manifest.json"
+    assert summary["metadata"] == {"project": "AuditFixture", "component_count": 1}
+    assert summary["omitted_fields"] == [
+        "metadata.evidence_manifest",
+        "metadata.evidence_ids_by_reference",
+    ]
+    assert summary["categories"]["electrical"] == [finding.__dict__]
+    assert full == before
+    assert report.to_dict() == before
+
+
+@pytest.mark.parametrize("detail_level", ["expanded", None, False, []])
+def test_validate_tool_rejects_invalid_detail_level(detail_level) -> None:
+    result = json.loads(_validate_design_tool("{}", detail_level=detail_level))
+
+    assert result == {
+        "status": "error",
+        "error": {
+            "code": "invalid_detail_level",
+            "message": "detail_level must be 'summary' or 'full'",
+        },
+    }
 
 
 def test_generate_reports_skipped_kicad_verification(
@@ -250,6 +333,35 @@ def test_stdio_server_handshake_and_tool_call(tmp_path: Path) -> None:
                 payload = json.loads(text_blocks[0])
                 assert payload["status"] == "ok"
                 assert payload["count"] == 1
+
+                import yaml
+
+                sample = Path(__file__).resolve().parents[1] / "src/circuit_weaver/examples/iot_sensor.yaml"
+                spec = yaml.safe_load(sample.read_text(encoding="utf-8"))
+                validation_response = await session.call_tool(
+                    "validate_design",
+                    {"spec_json": json.dumps(spec)},
+                )
+                validation_text = "\n".join(
+                    block.text for block in validation_response.content if hasattr(block, "text")
+                )
+                assert validation_response.isError is False
+                assert len(validation_text.encode("utf-8")) < 20_000
+                validation_payload = json.loads(validation_text)
+                assert validation_payload["valid"] is True
+                assert validation_payload["detail_level"] == "summary"
+                assert validation_payload["metadata"]["project"] == "IoT_Sensor"
+                assert validation_payload["metadata"]["component_count"] == 6
+                assert validation_payload["summary"] == {
+                    category: len(findings)
+                    for category, findings in validation_payload["categories"].items()
+                }
+
+                invalid_detail_response = await session.call_tool(
+                    "validate_design",
+                    {"spec_json": "{}", "detail_level": "expanded"},
+                )
+                assert invalid_detail_response.isError is True
 
                 invalid_response = await session.call_tool("validate_design", {"spec_json": "{not-json"})
                 invalid_text = "\n".join(
