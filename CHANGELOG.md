@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 - Keep generation staging and rollback paths short enough for native Windows tools when the published project path fits the Windows file-path limit.
+- Shorten schematic-to-board staging paths for deeply nested Windows projects, retaining complete copied hierarchies and native build verification.
+- Derive scaled gateway ADC filter contracts from their owning channels and verify generated filter pad nets before native workflow runs.
+- Retain router timeout output and log portfolio candidate progress while continuing to discard partial or unverified sessions.
 - Scale the bounded native placement-worker timeout with footprint count so larger boards can complete the existing DRC and reference-label checks.
 - Split port-heavy schematic hierarchies before their top-level symbols exceed standard pages. Partition connector annotations without duplicating or dropping notes, and fail closed when a hierarchy cannot fit.
 - Page large MCP validation reports without losing findings, audit fields, or provenance IDs. Bind pages to a report digest, verify complete collection counts and hashes, and reject oversized individual records explicitly.

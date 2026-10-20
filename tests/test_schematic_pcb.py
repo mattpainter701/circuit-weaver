@@ -169,7 +169,7 @@ def test_failed_netlist_export_preserves_overwrite_target_and_settings(tmp_path,
     assert output.read_bytes() == b"previous board"
     assert project.read_bytes() == b"previous project"
     assert rules.read_bytes() == b"previous rules"
-    assert not list(tmp_path.glob(".cw-schematic-pcb-*"))
+    assert not list(tmp_path.glob(".cw-c-*"))
 
 
 def test_unrelated_output_project_settings_are_rejected_before_kicad_probe(tmp_path, monkeypatch):
@@ -344,3 +344,50 @@ def test_real_kicad_schematic_produces_pad_bearing_review_board(tmp_path):
     assert result["validation"]["prototype_assumptions"]["default_netclass_clearance_mm"] == 0.127
     assert output.is_file()
     assert output.with_suffix(".kicad_pro").is_file()
+
+
+def test_deep_schematic_build_stages_hierarchy_under_windows_path_limit(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import circuit_weaver.schematic_pcb as module
+
+    case_name = "multichannel_analog_setpoint_card"
+    root_name = "UnseenScale_Multichannel_Analog_Setpoint_Card.kicad_sch"
+    target_name = "unplaced.kicad_pcb"
+    desired_target_length = 188
+    padding_length = desired_target_length - len(str(tmp_path)) - len(case_name) - len(target_name) - 3
+    assert 0 < padding_length <= 255
+    case_dir = tmp_path / ("p" * padding_length) / case_name
+    generated = case_dir / "generated"
+    generated.mkdir(parents=True)
+    source = generated / root_name
+    source.write_text(
+        '(kicad_sch (property "Sheetfile" "misc_1.kicad_sch"))', encoding="utf-8"
+    )
+    (generated / "misc_1.kicad_sch").write_text("(kicad_sch)", encoding="utf-8")
+    target = case_dir / target_name
+    assert len(str(source)) == 235
+    assert len(str(target)) == desired_target_length
+
+    monkeypatch.setattr(module, "_kicad_cli_path", lambda: Path("kicad-cli"))
+    monkeypatch.setattr(module, "find_kicad_python", lambda _path=None: "kicad-python")
+    observed = {}
+
+    def export(command, **kwargs):
+        staged = Path(command[-1])
+        copied = sorted(staged.parent.iterdir())
+        observed["copied_names"] = {item.name for item in copied}
+        observed["copied_path_lengths"] = [len(str(item)) for item in copied]
+        observed["staged_schematic"] = str(staged)
+        return SimpleNamespace(returncode=1, stderr="intentional export stop", stdout="")
+
+    monkeypatch.setattr(module.subprocess, "run", export)
+
+    result = schematic_to_pcb(source, target)
+
+    assert result["status"] == "error"
+    assert "netlist export failed" in result["message"]
+    assert observed["copied_names"] == {root_name, "misc_1.kicad_sch"}
+    assert max(observed["copied_path_lengths"]) < 260
+    assert len(observed["staged_schematic"]) < 260
+    assert not list(case_dir.glob(".cw-c-*"))

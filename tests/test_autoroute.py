@@ -10,6 +10,7 @@ from unittest import mock
 
 import pytest
 
+import circuit_weaver.autoroute as autoroute_module
 from circuit_weaver.autoroute import (
     _apply_specctra_clearance_margin,
     _compare_clearance_reports,
@@ -1311,6 +1312,50 @@ class TestAutoroute:
         assert "netlist rejected" in failure["message"]
         assert "timed out" in timeout["message"]
         assert not list(tmp_path.glob(".*.cw-stage-*.ses"))
+
+    def test_timeout_preserves_partial_diagnostics_and_cleans_staging_workspace(self, tmp_path):
+        dsn = _write_dsn(tmp_path)
+        destination = tmp_path / "timeout.ses"
+        timeout = subprocess.TimeoutExpired(
+            ["freerouting"], 3, output=b"partial route log \xff", stderr=b"timeout detail\n"
+        )
+        with mock.patch("subprocess.run", side_effect=timeout):
+            result = _route_specctra(
+                dsn, destination, ["freerouting"], passes=10, timeout_seconds=3,
+                overwrite=False, headless=True, optimization_threads=0, optimizer_strategy=None,
+                optimizer_hybrid_ratio=None, optimizer_item_selection=None,
+                optimizer_improvement_threshold=None, seed=None, capability_probe={},
+            )
+
+        assert result["status"] == "error"
+        assert result["diagnostic_stdout"] == "partial route log \ufffd"
+        assert result["diagnostic_stderr"] == "timeout detail\n"
+        assert not destination.exists()
+        assert not list(tmp_path.glob(".cw-router-*"))
+        assert not list(tmp_path.glob(".*.cw-stage-*.ses"))
+
+    def test_portfolio_attempt_retains_timeout_diagnostics_without_accepting_candidate(self, tmp_path):
+        dsn = _write_dsn(tmp_path)
+        destination = tmp_path / "portfolio-timeout.ses"
+        timeout_result = {
+            "status": "error",
+            "message": "Freerouting timed out after 15 seconds",
+            "diagnostic_stdout": "partial progress",
+            "diagnostic_stderr": "worker timeout",
+        }
+        with mock.patch.object(autoroute_module, "_route_specctra", return_value=timeout_result):
+            result = autoroute_module._route_candidates(
+                dsn, destination, ["freerouting"], attempts=2, timeout_seconds=15,
+                overwrite=False, seed=None, passes=10, headless=True, optimization_threads=0,
+                optimizer_strategy=None, optimizer_hybrid_ratio=None, optimizer_item_selection=None,
+                optimizer_improvement_threshold=None, capability_probe={}, clearance_baseline=None,
+            )
+
+        assert result["status"] == "error"
+        assert result["search"]["attempts"][0]["diagnostic_stdout"] == "partial progress"
+        assert result["search"]["attempts"][0]["diagnostic_stderr"] == "worker timeout"
+        assert result["search"]["selected_attempt"] is None
+        assert not destination.exists()
 
     def test_seed_is_capability_gated_and_passed_when_supported(self, tmp_path):
         dsn = _write_dsn(tmp_path)

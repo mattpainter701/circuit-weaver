@@ -386,7 +386,7 @@ def schematic_to_pcb(
             raise RuntimeError("KiCad Python (pcbnew) is unavailable; set CIRCUIT_WEAVER_KICAD_PYTHON")
 
         target.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix=".cw-schematic-pcb-", dir=target.parent) as tmp:
+        with tempfile.TemporaryDirectory(prefix=".cw-c-", dir=target.parent) as tmp:
             staging = Path(tmp)
             staged_project = staging / "project"
             staged_project.mkdir()

@@ -32,7 +32,7 @@ cases:
     adc_channel: 0
     adc_pad: '1'
     adc_net: FILT_CH0_U8
-    adc_filter_ref: R18
+    adc_filter_ref: R30
     adc_filter_input_pad: '1'
     adc_filter_output_pad: '2'
     input_connector_ref: J6
@@ -55,7 +55,7 @@ cases:
     adc_channel: 1
     adc_pad: '2'
     adc_net: FILT_CH1_U8
-    adc_filter_ref: R19
+    adc_filter_ref: R31
     adc_filter_input_pad: '1'
     adc_filter_output_pad: '2'
     input_connector_ref: J7
@@ -78,7 +78,7 @@ cases:
     adc_channel: 2
     adc_pad: '3'
     adc_net: FILT_CH2_U8
-    adc_filter_ref: R20
+    adc_filter_ref: R32
     adc_filter_input_pad: '1'
     adc_filter_output_pad: '2'
     input_connector_ref: J8
@@ -101,7 +101,7 @@ cases:
     adc_channel: 3
     adc_pad: '4'
     adc_net: FILT_CH3_U8
-    adc_filter_ref: R21
+    adc_filter_ref: R33
     adc_filter_input_pad: '1'
     adc_filter_output_pad: '2'
     input_connector_ref: J9
@@ -124,7 +124,7 @@ cases:
     adc_channel: 4
     adc_pad: '5'
     adc_net: FILT_CH4_U8
-    adc_filter_ref: R22
+    adc_filter_ref: R34
     adc_filter_input_pad: '1'
     adc_filter_output_pad: '2'
     input_connector_ref: J10
@@ -147,7 +147,7 @@ cases:
     adc_channel: 5
     adc_pad: '6'
     adc_net: FILT_CH5_U8
-    adc_filter_ref: R23
+    adc_filter_ref: R35
     adc_filter_input_pad: '1'
     adc_filter_output_pad: '2'
     input_connector_ref: J11
@@ -170,7 +170,7 @@ cases:
     adc_channel: 6
     adc_pad: '7'
     adc_net: FILT_CH6_U8
-    adc_filter_ref: R24
+    adc_filter_ref: R36
     adc_filter_input_pad: '1'
     adc_filter_output_pad: '2'
     input_connector_ref: J12
@@ -193,7 +193,7 @@ cases:
     adc_channel: 7
     adc_pad: '8'
     adc_net: FILT_CH7_U8
-    adc_filter_ref: R25
+    adc_filter_ref: R37
     adc_filter_input_pad: '1'
     adc_filter_output_pad: '2'
     input_connector_ref: J13

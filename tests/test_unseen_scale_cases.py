@@ -31,7 +31,7 @@ def _pad_nets(spec):
     nets = {
         (component.source_ref, str(pad)): net
         for component in compiled.components
-        for pad, net in component.pin_nets.items()
+        for pad, net in {**component.power_pins, **component.pin_nets}.items()
     }
     manifest = build_assembly_manifest(compiled.components)
     for item in manifest.items:
@@ -92,25 +92,37 @@ def test_all_required_path_endpoints_are_real_connected_pads():
 def test_gateway_retains_all_eight_analog_frontend_to_adc_channels():
     suite, specs = _load_suite()
     case = next(case for case in suite["cases"] if case["id"] == "distributed_facility_gateway")
-    nets = _pad_nets(specs[case["id"]])
+    spec = specs[case["id"]]
+    nets = _pad_nets(spec)
     channels = case["required_channels"]
     assert len(channels) == 8
+    manifest = build_assembly_manifest(compile_design_ir(spec).components)
+    filters = {
+        item.owner_pin: item
+        for item in manifest.items
+        if item.source_kind == "strap" and item.owner_ref == "U8" and item.owner_pin.startswith("RFILT_CH")
+    }
     for channel in channels:
+        channel_index = channel["adc_channel"]
+        filter_item = filters[f"RFILT_CH{channel_index}"]
+        assert channel["adc_filter_ref"] == filter_item.reference
+        assert filter_item.net1 == channel["frontend_out_net"]
+        assert filter_item.net2 == channel["adc_net"]
         assert nets[(channel["input_connector_ref"], str(channel["input_positive_pad"]))] == channel["sensor_p_net"]
         assert nets[(channel["input_connector_ref"], str(channel["input_negative_pad"]))] == channel["sensor_n_net"]
         assert nets[(channel["frontend_ref"], str(channel["frontend_p_pad"]))] == channel["sensor_p_net"]
         assert nets[(channel["frontend_ref"], str(channel["frontend_n_pad"]))] == channel["sensor_n_net"]
         assert nets[(channel["frontend_ref"], str(channel["frontend_ref_pad"]))] == channel["reference_net"]
+        assert nets[(channel["reference_ref"], str(channel["reference_output_pad"]))] == channel["reference_net"]
         assert nets[(channel["frontend_ref"], str(channel["frontend_out_pad"]))] == channel["frontend_out_net"]
+        assert nets[(channel["adc_filter_ref"], str(channel["adc_filter_input_pad"]))] == channel["frontend_out_net"]
+        assert nets[(channel["adc_filter_ref"], str(channel["adc_filter_output_pad"]))] == channel["adc_net"]
         assert nets[(channel["adc_ref"], str(channel["adc_pad"]))] == channel["adc_net"]
-        providers = [
-            block for block in specs[case["id"]].get("analog", []) if block.get("ref") == channel["reference_ref"]
-        ]
+        providers = [block for block in spec.get("analog", []) if block.get("ref") == channel["reference_ref"]]
         assert len(providers) == 1
         assert any(
             interface.get("name") == channel["reference_net"] for interface in providers[0].get("interfaces", [])
         )
-
 
 def test_expanded_physical_counts_clear_each_case_floor():
     suite, specs = _load_suite()

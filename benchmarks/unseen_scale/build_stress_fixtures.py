@@ -7,6 +7,9 @@ from typing import Any
 
 import yaml
 
+from circuit_weaver.assembly_manifest import build_assembly_manifest
+from circuit_weaver.design_loader import compile_design_ir
+
 ROOT = Path(__file__).resolve().parent
 
 
@@ -405,10 +408,28 @@ def _analog_paths(channels: int = 72) -> list[dict[str, Any]]:
     return paths
 
 
-def build_suite() -> dict[str, Any]:
+def _gateway_channel_contracts() -> list[dict[str, Any]]:
     old_suite = yaml.safe_load((ROOT.parent / "general_scale" / "cases.yaml").read_text(encoding="utf-8"))
     gateway = next(case for case in old_suite["cases"] if case["id"] == "field_io_gateway")
-    channel_contracts = gateway["required_channels"]
+    channels = [dict(channel) for channel in gateway["required_channels"]]
+    spec = yaml.safe_load((ROOT / "cases" / "distributed_facility_gateway.yaml").read_text(encoding="utf-8"))
+    manifest = build_assembly_manifest(compile_design_ir(spec).components)
+    filters = {
+        item.owner_pin: item
+        for item in manifest.items
+        if item.source_kind == "strap" and item.owner_ref == "U8" and item.owner_pin.startswith("RFILT_CH")
+    }
+    for channel in channels:
+        channel_index = channel["adc_channel"]
+        item = filters.get(f"RFILT_CH{channel_index}")
+        if item is None or item.net1 != channel["frontend_out_net"] or item.net2 != channel["adc_net"]:
+            raise ValueError(f"gateway ADC channel {channel_index} has no matching generated input-filter strap")
+        channel["adc_filter_ref"] = item.reference
+    return channels
+
+
+def build_suite() -> dict[str, Any]:
+    channel_contracts = _gateway_channel_contracts()
     return {
         "schema_version": 1,
         "description": (

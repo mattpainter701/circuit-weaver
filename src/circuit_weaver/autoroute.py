@@ -1554,9 +1554,18 @@ def _route_specctra(
                 timeout=timeout_seconds,
                 cwd=user_data,
             )
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         _remove_staging_file(staging)
-        return _result_error(f"Freerouting timed out after {timeout_seconds:.0f} seconds")
+        def diagnostic_text(value: Any) -> str:
+            if isinstance(value, bytes):
+                return value.decode("utf-8", errors="replace")
+            return value if isinstance(value, str) else ""
+
+        return _result_error(
+            f"Freerouting timed out after {timeout_seconds:.0f} seconds",
+            diagnostic_stdout=diagnostic_text(exc.stdout),
+            diagnostic_stderr=diagnostic_text(exc.stderr),
+        )
     except OSError as exc:
         _remove_staging_file(staging)
         return _result_error(f"Could not run Freerouting: {exc}")
@@ -1839,6 +1848,15 @@ def _route_candidates(
                 if remaining <= 0:
                     break
                 allowance = remaining / (attempts - index)
+                log.info(
+                    "Freerouting portfolio candidate %d/%d started "
+                    "(placement order=%s, optimizer=%s, timeout allowance=%.1fs)",
+                    index + 1,
+                    attempts,
+                    placement_order_kind or "unchanged",
+                    attempt_options.get("optimizer_strategy"),
+                    allowance,
+                )
                 result = _route_specctra(
                     route_dsn,
                     path,
@@ -1863,6 +1881,21 @@ def _route_candidates(
                     row["stats"] = result["stats"]
                 if "message" in result:
                     row["message"] = result["message"]
+                for key in ("diagnostic_stdout", "diagnostic_stderr"):
+                    if key in result:
+                        row[key] = result[key]
+                measured_incomplete = (
+                    result.get("stats", {}).get("incomplete") if result.get("status") == "ok" else None
+                )
+                log.info(
+                    "Freerouting portfolio candidate %d/%d finished "
+                    "(status=%s, measured incomplete=%s, timeout allowance=%.1fs)",
+                    index + 1,
+                    attempts,
+                    result["status"],
+                    measured_incomplete,
+                    allowance,
+                )
                 attempt_rows.append(row)
                 if hashlib.sha256(dsn_path.read_bytes()).hexdigest() != input_hash:
                     return _result_error(
