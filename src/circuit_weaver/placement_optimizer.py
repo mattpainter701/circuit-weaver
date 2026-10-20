@@ -18,6 +18,7 @@ import math
 import random
 import re
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from itertools import combinations
 from pathlib import Path
 from typing import Any
@@ -112,6 +113,7 @@ def _zone_center_mm(category: str, config: PlacementConfig) -> tuple[float, floa
         _axis_anchor_mm(anchor[2], anchor[3], config.board_height_mm),
     )
 
+
 _PLACEMENT_CONSTRAINT_KINDS = {"placement", "keepout"}
 _BOARD_TARGETS = {"board", "board_outline", "pcb", "outline"}
 _EDGES = {"left", "right", "top", "bottom"}
@@ -128,8 +130,14 @@ _FOOTPRINT_DIMENSION_RE = re.compile(
 _GROUND_NET_PREFIXES = ("GND", "AGND", "DGND", "PGND", "VSS", "GNDA", "GNDD")
 _POWER_NET_PREFIXES = ("VDD", "VCC", "VBUS", "VIN", "VBAT", "VSYS", "AVDD", "DVDD")
 _CRITICAL_SUPPORT_ROLES = {
-    "decoupling", "bootstrap", "bootstrap_cap", "feedback", "crystal_load",
-    "input_cap", "output_cap", "inductor",
+    "decoupling",
+    "bootstrap",
+    "bootstrap_cap",
+    "feedback",
+    "crystal_load",
+    "input_cap",
+    "output_cap",
+    "inductor",
 }
 _POWER_LOOP_ROLES = {"decoupling", "input_cap", "output_cap"}
 _HIGH_SPEED_NET_TOKENS = (
@@ -235,8 +243,7 @@ def estimate_footprint_size(footprint: str, reference: str = "") -> tuple[float,
         if pattern.upper() in normalized_fp:
             return size
     dimensions = [
-        (float(match.group(1)), float(match.group(2)))
-        for match in _FOOTPRINT_DIMENSION_RE.finditer(normalized_fp)
+        (float(match.group(1)), float(match.group(2))) for match in _FOOTPRINT_DIMENSION_RE.finditer(normalized_fp)
     ]
     if dimensions:
         return max(dimensions, key=lambda size: size[0] * size[1])
@@ -391,11 +398,7 @@ def _board_dimensions(
     for name, value in (("board_width_mm", width), ("board_height_mm", height)):
         if not math.isfinite(value) or value <= 0:
             raise ValueError(f"{name} must be a positive finite number")
-    if (
-        config.edge_clearance_mm < 0
-        or config.min_component_gap_mm < 0
-        or config.support_body_clearance_mm < 0
-    ):
+    if config.edge_clearance_mm < 0 or config.min_component_gap_mm < 0 or config.support_body_clearance_mm < 0:
         raise ValueError("Placement clearances must be non-negative")
     return replace(config, board_width_mm=width, board_height_mm=height)
 
@@ -479,13 +482,9 @@ def _build_constraint_plan(
                 effective_config = replace(
                     effective_config,
                     edge_clearance_mm=(
-                        edge_clearance
-                        if edge_clearance is not None
-                        else effective_config.edge_clearance_mm
+                        edge_clearance if edge_clearance is not None else effective_config.edge_clearance_mm
                     ),
-                    min_component_gap_mm=(
-                        min_gap if min_gap is not None else effective_config.min_component_gap_mm
-                    ),
+                    min_component_gap_mm=(min_gap if min_gap is not None else effective_config.min_component_gap_mm),
                 )
                 plan.applied.append(
                     {
@@ -609,9 +608,7 @@ def _build_constraint_plan(
                 "index": index,
                 "kind": kind,
                 "target": target,
-                "reason": (
-                    "Placement constraint needs fixed x/y, a named edge, or near/max_distance_mm."
-                ),
+                "reason": ("Placement constraint needs fixed x/y, a named edge, or near/max_distance_mm."),
             }
         )
 
@@ -668,9 +665,7 @@ def _init_placements(
             support_role = placement_role.strip().casefold()
             parent_pin = str(getattr(comp, "placement_parent_pin", "") or "").strip()
             if parent_pin or support_role in _POWER_LOOP_ROLES:
-                shared_nets = _shared_support_nets(
-                    parent, getattr(comp, "placement_pad_offsets", None)
-                )
+                shared_nets = _shared_support_nets(parent, getattr(comp, "placement_pad_offsets", None))
                 seed_key = (parent_ref, support_role, parent_pin, tuple(shared_nets))
                 seed_index = support_seed_counters.get(seed_key, 0)
                 support_seed_counters[seed_key] = seed_index + 1
@@ -766,9 +761,7 @@ def _init_placements(
             pin_offsets=getattr(comp, "placement_pin_offsets", None),
             pin_nets=pin_nets,
             reference_size_mm=getattr(comp, "placement_reference_size_mm", None),
-            geometry_status=str(
-                getattr(comp, "placement_geometry_status", "estimated") or "estimated"
-            ),
+            geometry_status=str(getattr(comp, "placement_geometry_status", "estimated") or "estimated"),
         )
         placements.append(placement)
         placement_by_ref[placement.ref] = placement
@@ -791,6 +784,65 @@ def _overlap_area(a: ComponentPlacement, b: ComponentPlacement, gap: float = 0.0
     if dx > 0 and dy > 0:
         return dx * dy
     return 0.0
+
+
+def _overlapping_pairs(
+    placements: list[ComponentPlacement],
+    gap: float = 0.0,
+) -> list[tuple[int, int, float]]:
+    """Return exact positive courtyard overlaps using an x-axis sweep.
+
+    Placement scoring calls this for every annealing candidate. A full pair
+    scan dominates large boards even when most courtyards are far apart. The
+    sweep only skips pairs whose expanded x intervals cannot overlap; all
+    surviving candidates still pass through the canonical overlap geometry.
+    Results retain the original pair order for deterministic cost sums.
+    """
+    if gap < 0:
+        # Configuration rejects negative spacing, but keep this private
+        # geometry helper exactly equivalent for direct callers too.
+        return [
+            (i, j, area)
+            for i in range(len(placements))
+            for j in range(i + 1, len(placements))
+            if (area := _overlap_area(placements[i], placements[j], gap)) > 0
+        ]
+    boxes = []
+    for index, placement in enumerate(placements):
+        width, height = _effective_dimensions(placement)
+        half_width, half_height = (width + gap) / 2, (height + gap) / 2
+        boxes.append(
+            (
+                placement.x - half_width,
+                placement.x + half_width,
+                placement.y - half_height,
+                placement.y + half_height,
+                index,
+                placement,
+            )
+        )
+    boxes.sort(key=lambda box: (box[0], box[4]))
+
+    active: dict[int, tuple[float, float, float, float, int, ComponentPlacement]] = {}
+    expiry: list[tuple[float, int]] = []
+    pairs: list[tuple[int, int, float]] = []
+    for box in boxes:
+        left, right, top, bottom, index, placement = box
+        while expiry and expiry[0][0] <= left:
+            _end, old_index = heapq.heappop(expiry)
+            active.pop(old_index, None)
+        for other_index in sorted(active):
+            other = active[other_index]
+            if bottom <= other[2] or top >= other[3]:
+                continue
+            first, second = (other[5], placement) if other_index < index else (placement, other[5])
+            area = _overlap_area(first, second, gap)
+            if area > 0:
+                pairs.append((min(index, other_index), max(index, other_index), area))
+        active[index] = box
+        heapq.heappush(expiry, (right, index))
+    pairs.sort(key=lambda pair: (pair[0], pair[1]))
+    return pairs
 
 
 def _effective_dimensions(placement: ComponentPlacement) -> tuple[float, float]:
@@ -835,26 +887,16 @@ def _intersects_keepout(placement: ComponentPlacement, keepout: dict[str, Any]) 
     keepout_top = float(keepout["y_mm"])
     keepout_right = keepout_left + float(keepout["width_mm"])
     keepout_bottom = keepout_top + float(keepout["height_mm"])
-    return (
-        right > keepout_left
-        and left < keepout_right
-        and bottom > keepout_top
-        and top < keepout_bottom
-    )
+    return right > keepout_left and left < keepout_right and bottom > keepout_top and top < keepout_bottom
 
 
 def _cost_overlap(placements: list[ComponentPlacement], gap: float) -> float:
     """Penalty for overlapping components."""
-    total = 0.0
-    for i in range(len(placements)):
-        for j in range(i + 1, len(placements)):
-            total += _overlap_area(placements[i], placements[j], gap)
+    total = sum(area for _i, _j, area in _overlapping_pairs(placements, gap))
     return total * 1000.0  # Heavy penalty
 
 
-def _cost_support_body_clearance(
-    placements: list[ComponentPlacement], config: PlacementConfig
-) -> float:
+def _cost_support_body_clearance(placements: list[ComponentPlacement], config: PlacementConfig) -> float:
     by_ref = {placement.ref: placement for placement in placements}
     total = 0.0
     for support in placements:
@@ -869,16 +911,11 @@ def _cost_support_body_clearance(
     return total
 
 
-def _cost_keepouts(
-    placements: list[ComponentPlacement], constraint_plan: _ConstraintPlan | None
-) -> float:
+def _cost_keepouts(placements: list[ComponentPlacement], constraint_plan: _ConstraintPlan | None) -> float:
     if not constraint_plan or not constraint_plan.keepouts:
         return 0.0
     return 100_000.0 * sum(
-        1
-        for placement in placements
-        for keepout in constraint_plan.keepouts
-        if _intersects_keepout(placement, keepout)
+        1 for placement in placements for keepout in constraint_plan.keepouts if _intersects_keepout(placement, keepout)
     )
 
 
@@ -951,9 +988,7 @@ def _build_connectivity_pairs(components: list[ComponentDef]) -> dict[tuple[str,
     """
     pair_weights: dict[tuple[str, str], float] = {}
     owner_by_ref = {
-        str(component.source_ref): str(
-            getattr(component, "placement_parent_ref", "") or component.source_ref
-        )
+        str(component.source_ref): str(getattr(component, "placement_parent_ref", "") or component.source_ref)
         for component in components
         if component.source_ref
     }
@@ -986,9 +1021,7 @@ def _cost_connectivity(
             angle = math.radians(p.rotation)
             c, s = math.cos(angle), math.sin(angle)
             for net, offsets in (p.net_pad_offsets or {}).items():
-                endpoints.setdefault(net, []).extend(
-                    (p.x + x * c + y * s, p.y - x * s + y * c) for x, y in offsets
-                )
+                endpoints.setdefault(net, []).extend((p.x + x * c + y * s, p.y - x * s + y * c) for x, y in offsets)
         total = 0.0
         for net, points in endpoints.items():
             if len(points) < 2:
@@ -1035,10 +1068,7 @@ def _cost_parent_affinity(placements: list[ComponentPlacement]) -> float:
         if loop is not None:
             # A capped quadratic reward makes both local legs matter while
             # keeping distant shared pads from dominating the full board.
-            total += 20.0 * (
-                min(loop["supply_leg_mm"], 12.0) ** 2
-                + min(loop["return_leg_mm"], 12.0) ** 2
-            )
+            total += 20.0 * (min(loop["supply_leg_mm"], 12.0) ** 2 + min(loop["return_leg_mm"], 12.0) ** 2)
         else:
             pin_distance = _parent_pin_distance(parent, placement)
             if pin_distance is not None:
@@ -1058,19 +1088,18 @@ def _cost_parent_affinity(placements: list[ComponentPlacement]) -> float:
 
 
 def _rotated_net_endpoints(
-    placement: ComponentPlacement, net: str,
+    placement: ComponentPlacement,
+    net: str,
 ) -> list[tuple[float, float]]:
     offsets = (placement.net_pad_offsets or {}).get(net, [])
     angle = math.radians(placement.rotation)
     cosine, sine = math.cos(angle), math.sin(angle)
-    return [
-        (placement.x + x * cosine + y * sine, placement.y - x * sine + y * cosine)
-        for x, y in offsets
-    ]
+    return [(placement.x + x * cosine + y * sine, placement.y - x * sine + y * cosine) for x, y in offsets]
 
 
 def _rotated_local_endpoint(
-    placement: ComponentPlacement, offset: tuple[float, float],
+    placement: ComponentPlacement,
+    offset: tuple[float, float],
 ) -> tuple[float, float]:
     angle = math.radians(placement.rotation)
     cosine, sine = math.cos(angle), math.sin(angle)
@@ -1079,7 +1108,8 @@ def _rotated_local_endpoint(
 
 
 def _parent_pin_distance(
-    parent: ComponentPlacement, support: ComponentPlacement,
+    parent: ComponentPlacement,
+    support: ComponentPlacement,
 ) -> float | None:
     """Distance from an explicitly associated owner pin to the support pad."""
     pin = support.parent_pin.strip()
@@ -1091,22 +1121,19 @@ def _parent_pin_distance(
     if offset is None or not net or not support_offsets:
         return None
     parent_point = _rotated_local_endpoint(parent, offset)
-    return min(
-        math.hypot(parent_point[0] - x, parent_point[1] - y)
-        for x, y in _rotated_net_endpoints(support, net)
-    )
+    return min(math.hypot(parent_point[0] - x, parent_point[1] - y) for x, y in _rotated_net_endpoints(support, net))
 
 
 def _support_power_rail_distance(
-    first: ComponentPlacement, second: ComponentPlacement,
+    first: ComponentPlacement,
+    second: ComponentPlacement,
 ) -> float | None:
     if first.net_pad_offsets is None or second.net_pad_offsets is None:
         return None
     shared_rails = sorted(
-        net for net in first.net_pad_offsets.keys() & second.net_pad_offsets.keys()
-        if _is_power_rail(net)
-        and first.net_pad_offsets.get(net)
-        and second.net_pad_offsets.get(net)
+        net
+        for net in first.net_pad_offsets.keys() & second.net_pad_offsets.keys()
+        if _is_power_rail(net) and first.net_pad_offsets.get(net) and second.net_pad_offsets.get(net)
     )
     distances = [
         math.hypot(ax - bx, ay - by)
@@ -1127,17 +1154,15 @@ def _is_power_rail(net_name: str) -> bool:
 
 
 def _local_power_loop_geometry(
-    parent: ComponentPlacement, support: ComponentPlacement,
+    parent: ComponentPlacement,
+    support: ComponentPlacement,
 ) -> dict[str, Any] | None:
     """Return local straight-line supply/return pad distances for a decoupler.
 
     This is a placement proxy based only on actual shared pad coordinates. It
     does not estimate routed copper length or electrical loop performance.
     """
-    if (
-        support.placement_role.strip().casefold() not in _POWER_LOOP_ROLES
-        or support.net_pad_offsets is None
-    ):
+    if support.placement_role.strip().casefold() not in _POWER_LOOP_ROLES or support.net_pad_offsets is None:
         return None
     shared = (parent.net_pad_offsets or {}).keys() & support.net_pad_offsets.keys()
     rails = sorted(net for net in support.net_pad_offsets if _is_power_rail(net))
@@ -1161,21 +1186,13 @@ def _local_power_loop_geometry(
         support_rail = _rotated_net_endpoints(support, rail)
         if not parent_rail or not support_rail:
             continue
-        supply_leg = min(
-            math.hypot(px - sx, py - sy)
-            for px, py in parent_rail
-            for sx, sy in support_rail
-        )
+        supply_leg = min(math.hypot(px - sx, py - sy) for px, py in parent_rail for sx, sy in support_rail)
         for ground in grounds:
             parent_ground = _rotated_net_endpoints(parent, ground)
             support_ground = _rotated_net_endpoints(support, ground)
             if not parent_ground or not support_ground:
                 continue
-            return_leg = min(
-                math.hypot(px - sx, py - sy)
-                for px, py in parent_ground
-                for sx, sy in support_ground
-            )
+            return_leg = min(math.hypot(px - sx, py - sy) for px, py in parent_ground for sx, sy in support_ground)
             loop_mm = supply_leg + return_leg
             candidates.append((loop_mm, supply_leg, return_leg, rail, ground))
     if not candidates:
@@ -1192,7 +1209,8 @@ def _local_power_loop_geometry(
 
 
 def _parent_affinity_distance(
-    parent: ComponentPlacement, support: ComponentPlacement,
+    parent: ComponentPlacement,
+    support: ComponentPlacement,
 ) -> tuple[float, str]:
     """Measure support proximity at shared non-ground pads, falling back to centers.
 
@@ -1225,13 +1243,9 @@ def _shared_support_nets(
     common = sorted(
         net
         for net in parent.net_pad_offsets.keys() & support_pad_offsets.keys()
-        if _net_weight(net) > 0
-        and parent.net_pad_offsets.get(net)
-        and support_pad_offsets.get(net)
+        if _net_weight(net) > 0 and parent.net_pad_offsets.get(net) and support_pad_offsets.get(net)
     )
-    dedicated_signals = [
-        net for net in common if _net_weight(net) > 0.5 and not _is_voltage_rail(net)
-    ]
+    dedicated_signals = [net for net in common if _net_weight(net) > 0.5 and not _is_voltage_rail(net)]
     return dedicated_signals or common
 
 
@@ -1279,9 +1293,7 @@ def _support_seed_position(
     )
     net_anchors = [item for item in directions if item[2] == strongest[2]]
     farthest_radius = max(item[3] for item in net_anchors)
-    anchors = [
-        item for item in net_anchors if math.isclose(item[3], farthest_radius, abs_tol=1e-6)
-    ]
+    anchors = [item for item in net_anchors if math.isclose(item[3], farthest_radius, abs_tol=1e-6)]
     anchors.sort(key=lambda item: (math.atan2(item[1], item[0]), item[0], item[1]))
     anchor_index = endpoint_index % len(anchors)
     ux, uy, _net, _radius = anchors[anchor_index]
@@ -1340,9 +1352,7 @@ def _cost_noise_separation(placements: list[ComponentPlacement]) -> float:
     """Keep RF/clock/analog circuitry away from switching power blocks."""
     noisy = [p for p in placements if p.category in {"power", "regulator", "poe"} and not p.parent_ref]
     sensitive = [
-        p
-        for p in placements
-        if p.category in {"rf", "clock", "analog", "sensor", "sensors"} and not p.parent_ref
+        p for p in placements if p.category in {"rf", "clock", "analog", "sensor", "sensors"} and not p.parent_ref
     ]
     total = 0.0
     for source in noisy:
@@ -1353,15 +1363,12 @@ def _cost_noise_separation(placements: list[ComponentPlacement]) -> float:
     return total
 
 
-def _cost_compactness(
-    placements: list[ComponentPlacement], config: PlacementConfig
-) -> float:
+def _cost_compactness(placements: list[ComponentPlacement], config: PlacementConfig) -> float:
     """Discourage sparse island placement when connectivity data is incomplete."""
     content = [
         placement
         for placement in placements
-        if placement.category not in {"connector", "usb", "debug", "rf"}
-        and not placement.constraint_locked
+        if placement.category not in {"connector", "usb", "debug", "rf"} and not placement.constraint_locked
     ]
     owners = [placement for placement in content if not placement.parent_ref]
     if len(content) < 2:
@@ -1371,10 +1378,7 @@ def _cost_compactness(
     radial_members = owners if len(owners) >= 2 else content
     center_x = sum(placement.x for placement in radial_members) / len(radial_members)
     center_y = sum(placement.y for placement in radial_members) / len(radial_members)
-    radial = sum(
-        math.hypot(placement.x - center_x, placement.y - center_y)
-        for placement in radial_members
-    )
+    radial = sum(math.hypot(placement.x - center_x, placement.y - center_y) for placement in radial_members)
     bounds = [
         (
             placement.x - _effective_dimensions(placement)[0] / 2,
@@ -1392,9 +1396,7 @@ def _cost_compactness(
     content_center_y = (min_y + max_y) / 2
     board_center_x = config.board_width_mm / 2
     board_center_y = config.board_height_mm / 2
-    centering = (content_center_x - board_center_x) ** 2 + (
-        content_center_y - board_center_y
-    ) ** 2
+    centering = (content_center_x - board_center_x) ** 2 + (content_center_y - board_center_y) ** 2
     area = (max_x - min_x) * (max_y - min_y)
     if len(owners) < 2:
         return radial * 2.5 + area + centering * 0.25
@@ -1432,10 +1434,7 @@ def _functional_group_metrics(
     for (kind, key), members in sorted(_functional_groups(placements).items()):
         if len(members) < 2:
             continue
-        distances = [
-            math.hypot(a.x - b.x, a.y - b.y)
-            for a, b in combinations(members, 2)
-        ]
+        distances = [math.hypot(a.x - b.x, a.y - b.y) for a, b in combinations(members, 2)]
         metrics.append(
             {
                 "grouping": kind,
@@ -1459,10 +1458,7 @@ def _cost_functional_grouping(placements: list[ComponentPlacement]) -> float:
     for members in _functional_groups(placements).values():
         if len(members) < 2:
             continue
-        pair_cost = sum(
-            min(math.hypot(a.x - b.x, a.y - b.y), 20.0) ** 2
-            for a, b in combinations(members, 2)
-        )
+        pair_cost = sum(min(math.hypot(a.x - b.x, a.y - b.y), 20.0) ** 2 for a, b in combinations(members, 2))
         total += pair_cost / (len(members) - 1) * 0.2
     return total
 
@@ -1480,21 +1476,15 @@ def _support_peer_groups(
         parent = placements_by_ref.get(placement.parent_ref)
         parent_pin_nets = parent.pin_nets or {} if parent is not None else {}
         owner_net = next(
-            (
-                net
-                for number, net in parent_pin_nets.items()
-                if str(number).strip().casefold() == owner_pin.casefold()
-            ),
+            (net for number, net in parent_pin_nets.items() if str(number).strip().casefold() == owner_pin.casefold()),
             None,
         )
         support_nets = set((placement.net_pad_offsets or {}).keys())
         support_nets.update((placement.pin_nets or {}).values())
         if owner_pin and owner_net and owner_net in support_nets:
-            candidates.setdefault(
-                (placement.parent_ref, f"owner_pin:{owner_pin.casefold()}"), []
-            ).append(placement)
+            candidates.setdefault((placement.parent_ref, f"owner_pin:{owner_pin.casefold()}"), []).append(placement)
         net_families = set()
-        for net in (placement.net_pad_offsets or {}):
+        for net in placement.net_pad_offsets or {}:
             # Ground and shared supply rails do not identify a local functional
             # relationship: unrelated pullups and remote decouplers often share them.
             if _net_weight(net) <= 0.5 or _is_voltage_rail(net):
@@ -1539,8 +1529,7 @@ def _cost_support_peer_alignment(placements: list[ComponentPlacement]) -> float:
         span_x = max(member.x for member in members) - min(member.x for member in members)
         span_y = max(member.y for member in members) - min(member.y for member in members)
         same_owner_pin = _same_owner_pin_supports(members) and all(
-            member.placement_role.strip().casefold() in _POWER_LOOP_ROLES
-            for member in members
+            member.placement_role.strip().casefold() in _POWER_LOOP_ROLES for member in members
         )
         align_y = True if same_owner_pin else span_x >= span_y
         pair_cost = 0.0
@@ -1560,6 +1549,8 @@ _LABEL_PROXY_COURTYARD_MARGIN_MM = 0.2
 _LABEL_PROXY_BOARD_MARGIN_MM = 0.4
 _LABEL_PROXY_TARGET_SLOTS = 2
 _LABEL_PROXY_MISSING_SLOT_COST = 250.0
+_LABEL_SPACE_GRID_MM = 4.0
+_LABEL_SPACE_GRID_MAX_CELLS = 4096
 
 
 def _point_box_distance_sq(point: tuple[float, float], box: tuple[float, float, float, float]) -> float:
@@ -1591,6 +1582,14 @@ def _proxy_label_centers(
     if not all(math.isfinite(value) and value > 0 for value in (text_width, text_height)):
         return []
     courtyard = _placement_courtyard_box(placement)
+    return list(_proxy_label_centers_for_geometry(courtyard, text_width, text_height))
+
+
+@lru_cache(maxsize=4096)
+def _proxy_label_centers_for_geometry(
+    courtyard: tuple[float, float, float, float], text_width: float, text_height: float,
+) -> tuple[tuple[float, float], ...]:
+    """Cache pure label candidates for identical courtyard and text geometry."""
     left = courtyard[0] - text_width / 2
     right = courtyard[2] + text_width / 2
     top = courtyard[1] - text_height / 2
@@ -1605,17 +1604,62 @@ def _proxy_label_centers(
         top_y, bottom_y = top - offset, bottom + offset
         centers.update(
             {
-                (left_x, top_y), (center_x, top_y), (right_x, top_y),
-                (left_x, center_y), (right_x, center_y),
-                (left_x, bottom_y), (center_x, bottom_y), (right_x, bottom_y),
+                (left_x, top_y),
+                (center_x, top_y),
+                (right_x, top_y),
+                (left_x, center_y),
+                (right_x, center_y),
+                (left_x, bottom_y),
+                (center_x, bottom_y),
+                (right_x, bottom_y),
             }
         )
-    return sorted(
+    return tuple(sorted(
         centers,
         key=lambda point: (
-            _point_box_distance_sq(point, courtyard), point[1], point[0],
+            _point_box_distance_sq(point, courtyard),
+            point[1],
+            point[0],
         ),
-    )
+    ))
+
+
+@lru_cache(maxsize=8192)
+def _cached_reference_label_slots(
+    own_box: tuple[float, float, float, float],
+    text_width: float,
+    text_height: float,
+    board_width: float,
+    board_height: float,
+    obstacle_boxes: tuple[tuple[float, float, float, float], ...],
+    peer_boxes: tuple[tuple[float, float, float, float], ...],
+) -> int:
+    """Count slots in an exact, local geometry context shared across score calls."""
+    centers = _proxy_label_centers_for_geometry(own_box, text_width, text_height)
+    feasible: set[tuple[float, float]] = set()
+    for center in centers:
+        label_box = (
+            center[0] - text_width / 2,
+            center[1] - text_height / 2,
+            center[0] + text_width / 2,
+            center[1] + text_height / 2,
+        )
+        if (
+            label_box[0] < _LABEL_PROXY_BOARD_MARGIN_MM
+            or label_box[1] < _LABEL_PROXY_BOARD_MARGIN_MM
+            or label_box[2] > board_width - _LABEL_PROXY_BOARD_MARGIN_MM
+            or label_box[3] > board_height - _LABEL_PROXY_BOARD_MARGIN_MM
+        ):
+            continue
+        if any(_overlap_boxes(label_box, box) for box in obstacle_boxes):
+            continue
+        own_distance = _point_box_distance_sq(center, own_box)
+        if any(_point_box_distance_sq(center, box) < own_distance for box in peer_boxes):
+            continue
+        feasible.add(center)
+        if len(feasible) >= _LABEL_PROXY_TARGET_SLOTS:
+            break
+    return len(feasible)
 
 
 def _reference_label_space_metrics(
@@ -1626,12 +1670,20 @@ def _reference_label_space_metrics(
     if not with_size:
         return []
     courtyards = {placement.ref: _placement_courtyard_box(placement) for placement in placements}
-    obstacles_by_layer: dict[str, list[ComponentPlacement]] = {}
-    same_class: dict[str, list[ComponentPlacement]] = {}
-    for placement in placements:
-        obstacles_by_layer.setdefault(placement.layer.casefold(), []).append(placement)
+    layer_indexes: dict[str, _BoxGridIndex] = {}
+    class_indexes: dict[tuple[str, str], _BoxGridIndex] = {}
+    layer_indices: dict[str, list[int]] = {}
+    class_indices: dict[tuple[str, str], list[int]] = {}
+    placement_indices = {id(placement): index for index, placement in enumerate(placements)}
+    for index, placement in enumerate(placements):
+        layer = placement.layer.casefold()
         prefix = _reference_class_prefix(placement.ref)
-        same_class.setdefault(prefix, []).append(placement)
+        layer_indices.setdefault(layer, []).append(index)
+        class_indices.setdefault((prefix, layer), []).append(index)
+    for layer, indices in layer_indices.items():
+        layer_indexes[layer] = _BoxGridIndex({index: courtyards[placements[index].ref] for index in indices})
+    for key, indices in class_indices.items():
+        class_indexes[key] = _BoxGridIndex({index: courtyards[placements[index].ref] for index in indices})
 
     metrics: list[dict[str, Any]] = []
     for placement in with_size:
@@ -1640,53 +1692,111 @@ def _reference_label_space_metrics(
             continue
         text_width, text_height = float(size[0]), float(size[1])
         own_box = courtyards[placement.ref]
-        peers = [
-            other for other in same_class.get(_reference_class_prefix(placement.ref), [])
-            if other.ref != placement.ref
-            and other.layer.casefold() == placement.layer.casefold()
-        ]
-        obstacles = [
-            other for other in obstacles_by_layer.get(placement.layer.casefold(), [])
-            if other.ref != placement.ref
-        ]
-        feasible: set[tuple[float, float]] = set()
-        for center in _proxy_label_centers(placement):
-            label_box = (
-                center[0] - text_width / 2,
-                center[1] - text_height / 2,
-                center[0] + text_width / 2,
-                center[1] + text_height / 2,
+        layer = placement.layer.casefold()
+        class_key = (_reference_class_prefix(placement.ref), layer)
+        obstacle_index = layer_indexes[layer]
+        peer_index = class_indexes[class_key]
+        placement_index = placement_indices[id(placement)]
+        # Every possible label box lies within this courtyard expansion. This
+        # query deliberately excludes unchanged far obstacles from the cache key.
+        obstacle_query = (
+            own_box[0] - text_width - _LABEL_PROXY_RADIUS_MM,
+            own_box[1] - text_height - _LABEL_PROXY_RADIUS_MM,
+            own_box[2] + text_width + _LABEL_PROXY_RADIUS_MM,
+            own_box[3] + text_height + _LABEL_PROXY_RADIUS_MM,
+        )
+        obstacle_boxes = tuple(
+            sorted(
+                courtyards[placements[index].ref]
+                for index in obstacle_index.query(obstacle_query)
+                if index != placement_index
             )
-            if (
-                label_box[0] < _LABEL_PROXY_BOARD_MARGIN_MM
-                or label_box[1] < _LABEL_PROXY_BOARD_MARGIN_MM
-                or label_box[2] > config.board_width_mm - _LABEL_PROXY_BOARD_MARGIN_MM
-                or label_box[3] > config.board_height_mm - _LABEL_PROXY_BOARD_MARGIN_MM
-            ):
-                continue
-            if any(
-                _overlap_boxes(label_box, courtyards[other.ref])
-                for other in obstacles
-            ):
-                continue
-            own_distance = _point_box_distance_sq(center, own_box)
-            if any(
-                _point_box_distance_sq(center, courtyards[peer.ref]) < own_distance
-                for peer in peers
-            ):
-                continue
-            feasible.add(center)
-            if len(feasible) >= _LABEL_PROXY_TARGET_SLOTS:
-                break
+        )
+        # Candidate centers are at most half a text size plus the proxy radius
+        # from the own box; a closer peer must intersect this expanded square.
+        max_distance = math.hypot(
+            text_width / 2 + _LABEL_PROXY_RADIUS_MM,
+            text_height / 2 + _LABEL_PROXY_RADIUS_MM,
+        )
+        peer_expansion_x = text_width / 2 + _LABEL_PROXY_RADIUS_MM + max_distance
+        peer_expansion_y = text_height / 2 + _LABEL_PROXY_RADIUS_MM + max_distance
+        peer_query = (
+            own_box[0] - peer_expansion_x,
+            own_box[1] - peer_expansion_y,
+            own_box[2] + peer_expansion_x,
+            own_box[3] + peer_expansion_y,
+        )
+        peer_boxes = tuple(
+            sorted(
+                courtyards[placements[index].ref]
+                for index in peer_index.query(peer_query)
+                if index != placement_index
+            )
+        )
+        slot_count = _cached_reference_label_slots(
+            own_box,
+            text_width,
+            text_height,
+            config.board_width_mm,
+            config.board_height_mm,
+            obstacle_boxes,
+            peer_boxes,
+        )
         metrics.append(
             {
                 "ref": placement.ref,
-                "nearby_associated_slots": len(feasible),
+                "nearby_associated_slots": slot_count,
                 "target_slots": _LABEL_PROXY_TARGET_SLOTS,
                 "model": "sampled_face_corner_proxy",
             }
         )
     return metrics
+
+
+class _BoxGridIndex:
+    """Deterministic conservative index for exact axis-aligned box queries."""
+
+    def __init__(self, boxes: dict[int, tuple[float, float, float, float]]) -> None:
+        self._boxes = boxes
+        self._cells: dict[tuple[int, int], set[int]] = {}
+        self._overflow: set[int] = set()
+        for index, box in boxes.items():
+            if self._cell_count(box) > _LABEL_SPACE_GRID_MAX_CELLS:
+                self._overflow.add(index)
+                continue
+            for cell in self._covered_cells(box):
+                self._cells.setdefault(cell, set()).add(index)
+
+    @staticmethod
+    def _cell_bounds(box: tuple[float, float, float, float]) -> tuple[int, int, int, int]:
+        left, top, right, bottom = box
+        return (
+            math.floor(left / _LABEL_SPACE_GRID_MM),
+            math.floor(top / _LABEL_SPACE_GRID_MM),
+            math.floor(right / _LABEL_SPACE_GRID_MM),
+            math.floor(bottom / _LABEL_SPACE_GRID_MM),
+        )
+
+    @classmethod
+    def _cell_count(cls, box: tuple[float, float, float, float]) -> int:
+        first_x, first_y, last_x, last_y = cls._cell_bounds(box)
+        return (last_x - first_x + 1) * (last_y - first_y + 1)
+
+    @staticmethod
+    def _covered_cells(box: tuple[float, float, float, float]):
+        first_x, first_y, last_x, last_y = _BoxGridIndex._cell_bounds(box)
+        for x_cell in range(first_x, last_x + 1):
+            for y_cell in range(first_y, last_y + 1):
+                yield x_cell, y_cell
+
+    def query(self, box: tuple[float, float, float, float]) -> list[int]:
+        if self._cell_count(box) > _LABEL_SPACE_GRID_MAX_CELLS:
+            return sorted(self._boxes)
+        candidates: set[int] = set()
+        candidates.update(self._overflow)
+        for cell in self._covered_cells(box):
+            candidates.update(self._cells.get(cell, ()))
+        return sorted(candidates)
 
 
 def _reference_class_prefix(ref: str) -> str:
@@ -1696,29 +1806,22 @@ def _reference_class_prefix(ref: str) -> str:
     return ref.casefold()
 
 
-def _overlap_boxes(
-    first: tuple[float, float, float, float], second: tuple[float, float, float, float]
-) -> bool:
+def _overlap_boxes(first: tuple[float, float, float, float], second: tuple[float, float, float, float]) -> bool:
     return first[0] < second[2] and first[2] > second[0] and first[1] < second[3] and first[3] > second[1]
 
 
-def _cost_reference_label_space(
-    placements: list[ComponentPlacement], config: PlacementConfig
-) -> float:
+def _cost_reference_label_space(placements: list[ComponentPlacement], config: PlacementConfig) -> float:
     """Bounded preference for preserving a few nearby, associated label slots."""
     return sum(
         min(
-            max(0, _LABEL_PROXY_TARGET_SLOTS - metric["nearby_associated_slots"])
-            * _LABEL_PROXY_MISSING_SLOT_COST,
+            max(0, _LABEL_PROXY_TARGET_SLOTS - metric["nearby_associated_slots"]) * _LABEL_PROXY_MISSING_SLOT_COST,
             _LABEL_PROXY_TARGET_SLOTS * _LABEL_PROXY_MISSING_SLOT_COST,
         )
         for metric in _reference_label_space_metrics(placements, config)
     )
 
 
-def _distance_to_edge(
-    placement: ComponentPlacement, edge: str, config: PlacementConfig
-) -> float:
+def _distance_to_edge(placement: ComponentPlacement, edge: str, config: PlacementConfig) -> float:
     width, height = _effective_dimensions(placement)
     if edge == "left":
         return placement.x - width / 2 - config.edge_clearance_mm
@@ -1786,7 +1889,9 @@ def _total_cost(
 
 
 def _perturb(
-    placements: list[ComponentPlacement], config: PlacementConfig, rng: random.Random,
+    placements: list[ComponentPlacement],
+    config: PlacementConfig,
+    rng: random.Random,
     move_scale: float = 1.0,
 ) -> list[ComponentPlacement]:
     """Create a neighbor solution by moving one component."""
@@ -1810,27 +1915,20 @@ def _perturb(
             else [
                 placement
                 for placement in new
-                if (placement.ref == root_ref or placement.parent_ref == root_ref)
-                and not placement.constraint_locked
+                if (placement.ref == root_ref or placement.parent_ref == root_ref) and not placement.constraint_locked
             ]
         )
         if group:
             dx = rng.gauss(0, 8.0 * move_scale)
             dy = rng.gauss(0, 8.0 * move_scale)
             margin = config.edge_clearance_mm
-            minimum_dx = max(
-                margin + _effective_dimensions(item)[0] / 2 - item.x for item in group
-            )
+            minimum_dx = max(margin + _effective_dimensions(item)[0] / 2 - item.x for item in group)
             maximum_dx = min(
-                config.board_width_mm - margin - _effective_dimensions(item)[0] / 2 - item.x
-                for item in group
+                config.board_width_mm - margin - _effective_dimensions(item)[0] / 2 - item.x for item in group
             )
-            minimum_dy = max(
-                margin + _effective_dimensions(item)[1] / 2 - item.y for item in group
-            )
+            minimum_dy = max(margin + _effective_dimensions(item)[1] / 2 - item.y for item in group)
             maximum_dy = min(
-                config.board_height_mm - margin - _effective_dimensions(item)[1] / 2 - item.y
-                for item in group
+                config.board_height_mm - margin - _effective_dimensions(item)[1] / 2 - item.y for item in group
             )
             dx = max(minimum_dx, min(dx, maximum_dx))
             dy = max(minimum_dy, min(dy, maximum_dy))
@@ -1849,11 +1947,7 @@ def _perturb(
         p.y += rng.gauss(0, 8.0)
     elif move_type < 0.9 and len(movable) > 1:
         # Swap two components
-        compatible = [
-            index
-            for index in movable
-            if bool(new[index].parent_ref) == bool(p.parent_ref)
-        ]
+        compatible = [index for index in movable if bool(new[index].parent_ref) == bool(p.parent_ref)]
         other = rng.choice(compatible)
         if other != idx:
             new[idx].x, new[other].x = new[other].x, new[idx].x
@@ -1886,8 +1980,7 @@ def _inside_board(
         and placement.y + height / 2 <= config.board_height_mm - margin
     )
     return inside and not any(
-        _intersects_keepout(placement, keepout)
-        for keepout in (constraint_plan.keepouts if constraint_plan else [])
+        _intersects_keepout(placement, keepout) for keepout in (constraint_plan.keepouts if constraint_plan else [])
     )
 
 
@@ -1919,6 +2012,41 @@ def _legalize_overlaps(
             ),
         )
     ]
+
+    class _SpatialIndex:
+        """Conservative board-cell index for exact legalization checks."""
+
+        cell_mm = 4.0
+
+        def __init__(self) -> None:
+            self.cells: dict[tuple[int, int], set[int]] = {}
+
+        @classmethod
+        def _covered_cells(cls, placement: ComponentPlacement, margin: float = 0.0):
+            width, height = _effective_dimensions(placement)
+            left = math.floor((placement.x - width / 2 - margin) / cls.cell_mm)
+            right = math.floor((placement.x + width / 2 + margin) / cls.cell_mm)
+            top = math.floor((placement.y - height / 2 - margin) / cls.cell_mm)
+            bottom = math.floor((placement.y + height / 2 + margin) / cls.cell_mm)
+            for x_cell in range(left, right + 1):
+                for y_cell in range(top, bottom + 1):
+                    yield x_cell, y_cell
+
+        def add(self, index: int, placement: ComponentPlacement) -> None:
+            for cell in self._covered_cells(placement):
+                self.cells.setdefault(cell, set()).add(index)
+
+        def query(self, placement: ComponentPlacement, margin: float) -> list[int]:
+            candidates: set[int] = set()
+            for cell in self._covered_cells(placement, margin):
+                candidates.update(self.cells.get(cell, ()))
+            return sorted(candidates)
+
+    spatial = _SpatialIndex()
+    interaction_margin = max(
+        config.min_component_gap_mm,
+        config.support_body_clearance_mm,
+    )
     for original in ordered:
         placement = ComponentPlacement(**original.__dict__)
         # Follow an owner displaced by legalization instead of leaving its
@@ -1936,17 +2064,19 @@ def _legalize_overlaps(
             edge = (constraint_plan.edges if constraint_plan else {}).get(placement.ref)
             if edge and _distance_to_edge(placement, edge["edge"], config) > edge["max_distance_mm"] + 0.001:
                 return False
-            if edge and "rotation" in edge and abs(
-                (placement.rotation - edge["rotation"] + 180.0) % 360.0 - 180.0
-            ) > 0.001:
+            if (
+                edge
+                and "rotation" in edge
+                and abs((placement.rotation - edge["rotation"] + 180.0) % 360.0 - 180.0) > 0.001
+            ):
                 return False
-            for other in legalized:
+            for other_index in spatial.query(placement, interaction_margin):
+                other = legalized[other_index]
                 if _overlap_area(placement, other, config.min_component_gap_mm) > 0:
                     return False
                 if (
                     _is_parent_support_pair(placement, other)
-                    and _rectangle_clearance(placement, other)
-                    < config.support_body_clearance_mm
+                    and _rectangle_clearance(placement, other) < config.support_body_clearance_mm
                 ):
                     return False
             return True
@@ -1954,6 +2084,7 @@ def _legalize_overlaps(
         # Machine-fixed positions are preserved exactly. Any impossible or
         # colliding fixed constraint is surfaced in the result violations.
         if placement.constraint_locked:
+            spatial.add(len(legalized), placement)
             legalized.append(placement)
             continue
         if not is_free():
@@ -1962,9 +2093,7 @@ def _legalize_overlaps(
             for ring in range(1, max_ring + 1):
                 offsets: list[tuple[int, int]] = []
                 for delta in range(-ring, ring + 1):
-                    offsets.extend(
-                        ((delta, -ring), (delta, ring), (-ring, delta), (ring, delta))
-                    )
+                    offsets.extend(((delta, -ring), (delta, ring), (-ring, delta), (ring, delta)))
                 offsets = sorted(
                     set(offsets),
                     key=lambda value: (value[0] ** 2 + value[1] ** 2, value[1], value[0]),
@@ -1984,6 +2113,7 @@ def _legalize_overlaps(
                 moved += 1
             else:
                 placement.x, placement.y = desired_x, desired_y
+        spatial.add(len(legalized), placement)
         legalized.append(placement)
 
     return legalized, moved
@@ -2008,10 +2138,7 @@ def _constraint_evaluation(
             violations.append(
                 {"kind": "fixed_position", "target": ref, "reason": "Fixed footprint intersects a keepout."}
             )
-        if (
-            abs(placement.x - float(fixed["x_mm"])) > 0.001
-            or abs(placement.y - float(fixed["y_mm"])) > 0.001
-        ):
+        if abs(placement.x - float(fixed["x_mm"])) > 0.001 or abs(placement.y - float(fixed["y_mm"])) > 0.001:
             violations.append(
                 {"kind": "fixed_position", "target": ref, "reason": "Fixed coordinate was not preserved."}
             )
@@ -2055,10 +2182,7 @@ def _constraint_evaluation(
                 {
                     "kind": "affinity",
                     "target": affinity["target"],
-                    "reason": (
-                        f"Center is {distance:.2f} mm from {affinity['near']} "
-                        f"(maximum {maximum:.2f} mm)."
-                    ),
+                    "reason": (f"Center is {distance:.2f} mm from {affinity['near']} " f"(maximum {maximum:.2f} mm)."),
                 }
             )
 
@@ -2132,19 +2256,28 @@ def _quantize_state(state: list[ComponentPlacement]) -> list[ComponentPlacement]
 
 
 def _placement_rank(
-    state: list[ComponentPlacement], config: PlacementConfig,
-    pairs: dict[tuple[str, str], float], plan: _ConstraintPlan,
+    state: list[ComponentPlacement],
+    config: PlacementConfig,
+    pairs: dict[tuple[str, str], float],
+    plan: _ConstraintPlan,
 ) -> tuple[int, float]:
     """Hard defects outrank every weighted placement preference."""
+    return _placement_hard_defects(state, config, plan), _total_cost(state, config, pairs, plan)
+
+
+def _placement_hard_defects(
+    state: list[ComponentPlacement], config: PlacementConfig, plan: _ConstraintPlan,
+) -> int:
+    """Compute only rank's primary key before paying for soft preference costs."""
     by_ref = {p.ref: p for p in state}
     defects = sum(not _inside_board(p, config) for p in state)
-    defects += sum(_overlap_area(a, b, config.min_component_gap_mm) > 0 for a, b in combinations(state, 2))
+    defects += len(_overlapping_pairs(state, config.min_component_gap_mm))
     for p in state:
         if p.parent_ref:
             parent = by_ref.get(p.parent_ref)
             defects += parent is None or _rectangle_clearance(p, parent) + 0.001 < config.support_body_clearance_mm
     defects += len(_constraint_evaluation(state, config, plan)["violations"])
-    return int(defects), _total_cost(state, config, pairs, plan)
+    return int(defects)
 
 
 def _courtyard_envelope_center(
@@ -2154,8 +2287,7 @@ def _courtyard_envelope_center(
     for placement in placements:
         width, height = _effective_dimensions(placement)
         bounds.append(
-            (placement.x - width / 2, placement.y - height / 2,
-             placement.x + width / 2, placement.y + height / 2)
+            (placement.x - width / 2, placement.y - height / 2, placement.x + width / 2, placement.y + height / 2)
         )
     return (
         (min(item[0] for item in bounds) + max(item[2] for item in bounds)) / 2,
@@ -2164,18 +2296,13 @@ def _courtyard_envelope_center(
 
 
 def _family_alignment_candidates(
-    state: list[ComponentPlacement], config: PlacementConfig,
+    state: list[ComponentPlacement],
+    config: PlacementConfig,
 ) -> list[list[ComponentPlacement]]:
     """Align distinct owner families, optionally recentering the whole layout."""
     excluded = {"connector", "usb", "debug", "rf", "passive"}
-    roots = [
-        placement
-        for placement in state
-        if not placement.parent_ref and placement.category not in excluded
-    ]
-    families: list[
-        tuple[str, list[int], tuple[float, float], tuple[float, float, float, float]]
-    ] = []
+    roots = [placement for placement in state if not placement.parent_ref and placement.category not in excluded]
+    families: list[tuple[str, list[int], tuple[float, float], tuple[float, float, float, float]]] = []
     roots.sort(key=lambda placement: placement.ref)
     for root in roots:
         members = [
@@ -2184,8 +2311,7 @@ def _family_alignment_candidates(
             if placement.ref == root.ref or placement.parent_ref == root.ref
         ]
         if len(members) < 2 or any(
-            state[index].constraint_locked or state[index].edge_constrained
-            for index in members
+            state[index].constraint_locked or state[index].edge_constrained for index in members
         ):
             continue
         member_placements = [state[index] for index in members]
@@ -2195,14 +2321,10 @@ def _family_alignment_candidates(
             max(member.x + _effective_dimensions(member)[0] / 2 for member in member_placements),
             max(member.y + _effective_dimensions(member)[1] / 2 for member in member_placements),
         )
-        families.append(
-            (root.ref, members, _courtyard_envelope_center(member_placements), bounds)
-        )
+        families.append((root.ref, members, _courtyard_envelope_center(member_placements), bounds))
 
     candidates = []
-    can_recenter = not any(
-        placement.constraint_locked or placement.edge_constrained for placement in state
-    )
+    can_recenter = not any(placement.constraint_locked or placement.edge_constrained for placement in state)
     nearest_pairs = heapq.nsmallest(
         8,
         (
@@ -2214,35 +2336,21 @@ def _family_alignment_candidates(
                 second,
             )
             for first_index, first in enumerate(families)
-            for second in families[first_index + 1:]
+            for second in families[first_index + 1 :]
         ),
         key=lambda pair: pair[:3],
     )
     for _distance, _first_ref, _second_ref, first, second in nearest_pairs:
         _first_ref, first_members_indices, first_center, first_bounds = first
         _second_ref, second_members_indices, second_center, second_bounds = second
-        align_y = abs(first_center[0] - second_center[0]) >= abs(
-            first_center[1] - second_center[1]
-        )
+        align_y = abs(first_center[0] - second_center[0]) >= abs(first_center[1] - second_center[1])
         coordinate = 1 if align_y else 0
         delta = second_center[coordinate] - first_center[coordinate]
-        separation_delta = (
-            second_center[0] - first_center[0]
-            if align_y
-            else second_center[1] - first_center[1]
-        )
+        separation_delta = second_center[0] - first_center[0] if align_y else second_center[1] - first_center[1]
         if align_y:
-            gap = (
-                second_bounds[0] - first_bounds[2]
-                if separation_delta >= 0
-                else first_bounds[0] - second_bounds[2]
-            )
+            gap = second_bounds[0] - first_bounds[2] if separation_delta >= 0 else first_bounds[0] - second_bounds[2]
         else:
-            gap = (
-                second_bounds[1] - first_bounds[3]
-                if separation_delta >= 0
-                else first_bounds[1] - second_bounds[3]
-            )
+            gap = second_bounds[1] - first_bounds[3] if separation_delta >= 0 else first_bounds[1] - second_bounds[3]
         channel = max(
             2 * config.support_body_clearance_mm,
             4 * config.min_component_gap_mm,
@@ -2291,14 +2399,25 @@ def _family_alignment_candidates(
 
 
 def _refine_placement(
-    state: list[ComponentPlacement], config: PlacementConfig,
-    pairs: dict[tuple[str, str], float], plan: _ConstraintPlan,
+    state: list[ComponentPlacement],
+    config: PlacementConfig,
+    pairs: dict[tuple[str, str], float],
+    plan: _ConstraintPlan,
+    *,
+    skip_worse_hard_defects: bool = True,
 ) -> tuple[list[ComponentPlacement], int]:
     """Polish legal candidates with deterministic component and block moves."""
     rank = _placement_rank(state, config, pairs, plan)
     evaluations = 0
+
+    def score_candidate(candidate: list[ComponentPlacement]) -> tuple[int, float] | None:
+        defects = _placement_hard_defects(candidate, config, plan)
+        if skip_worse_hard_defects and defects > rank[0]:
+            return None
+        return defects, _total_cost(candidate, config, pairs, plan)
+
     for pass_index in range(config.refinement_passes):
-        step = 1.0 / (2 ** pass_index)
+        step = 1.0 / (2**pass_index)
         changed = False
         for index, placement in enumerate(state):
             if placement.constraint_locked:
@@ -2313,8 +2432,7 @@ def _refine_placement(
                 span_x = max(peer.x for peer in peers) - min(peer.x for peer in peers)
                 span_y = max(peer.y for peer in peers) - min(peer.y for peer in peers)
                 power_pin_peers = _same_owner_pin_supports(peers) and all(
-                    peer.placement_role.strip().casefold() in _POWER_LOOP_ROLES
-                    for peer in peers
+                    peer.placement_role.strip().casefold() in _POWER_LOOP_ROLES for peer in peers
                 )
                 align_y = True if power_pin_peers else span_x >= span_y
                 own_width, own_height = _effective_dimensions(placement)
@@ -2374,8 +2492,7 @@ def _refine_placement(
                     content = [
                         member
                         for member in state
-                        if member.category not in {"connector", "usb", "debug", "rf"}
-                        and not member.constraint_locked
+                        if member.category not in {"connector", "usb", "debug", "rf"} and not member.constraint_locked
                     ]
                     content_bounds = [
                         (
@@ -2412,8 +2529,10 @@ def _refine_placement(
                         candidate[i].x += dx
                         candidate[i].y += dy
                     candidate = _quantize_state(candidate)
-                    candidate_rank = _placement_rank(candidate, config, pairs, plan)
                     evaluations += 1
+                    candidate_rank = score_candidate(candidate)
+                    if candidate_rank is None:
+                        continue
                     if candidate_rank < rank:
                         state, rank = candidate, candidate_rank
                         changed = True
@@ -2421,14 +2540,18 @@ def _refine_placement(
                 for rotation in (90, 180, 270):
                     candidate = [replace(p) for p in state]
                     candidate[index].rotation = (state[index].rotation + rotation) % 360
-                    candidate_rank = _placement_rank(candidate, config, pairs, plan)
                     evaluations += 1
+                    candidate_rank = score_candidate(candidate)
+                    if candidate_rank is None:
+                        continue
                     if candidate_rank < rank:
                         state, rank = candidate, candidate_rank
                         changed = True
         for candidate in _family_alignment_candidates(state, config):
-            candidate_rank = _placement_rank(candidate, config, pairs, plan)
             evaluations += 1
+            candidate_rank = score_candidate(candidate)
+            if candidate_rank is None:
+                continue
             if candidate_rank < rank:
                 state, rank = candidate, candidate_rank
                 changed = True
@@ -2529,9 +2652,7 @@ def optimize_placement(
                     "objective_cost": 0.0,
                 },
                 "legalization_moves": 0,
-                "review_required": bool(
-                    constraint_evaluation["unsupported"] or constraint_evaluation["violations"]
-                ),
+                "review_required": bool(constraint_evaluation["unsupported"] or constraint_evaluation["violations"]),
             },
         }
 
@@ -2557,8 +2678,15 @@ def optimize_placement(
     winner = baseline
     winner_rank = _placement_rank(winner, config, connectivity_pairs, constraint_plan)
     winner_index, winner_moves = 0, baseline_moves
-    trials = [{"candidate": 0, "kind": "legalized_baseline", "defects": winner_rank[0],
-               "cost": round(winner_rank[1], 2), "iterations": 0}]
+    trials = [
+        {
+            "candidate": 0,
+            "kind": "legalized_baseline",
+            "defects": winner_rank[0],
+            "cost": round(winner_rank[1], 2),
+            "iterations": 0,
+        }
+    ]
     refinement_evaluations = 0
     restarts = min(config.restarts, config.iterations)
     seed_rng = random.Random(config.seed)
@@ -2579,15 +2707,26 @@ def optimize_placement(
                 state, current_cost = candidate, candidate_cost
                 if current_cost < best_cost:
                     best_state, best_cost = state, current_cost
-            temp *= config.cooling_rate ** restarts
+            temp *= config.cooling_rate**restarts
         candidate, moved = _legalize_overlaps(_quantize_state(best_state), config, constraint_plan)
         candidate, evaluations = _refine_placement(
-            _quantize_state(candidate), config, connectivity_pairs, constraint_plan,
+            _quantize_state(candidate),
+            config,
+            connectivity_pairs,
+            constraint_plan,
         )
         refinement_evaluations += evaluations
         rank = _placement_rank(candidate, config, connectivity_pairs, constraint_plan)
-        trials.append({"candidate": restart + 1, "kind": "annealed", "seed": trial_seed,
-                       "iterations": budget, "defects": rank[0], "cost": round(rank[1], 2)})
+        trials.append(
+            {
+                "candidate": restart + 1,
+                "kind": "annealed",
+                "seed": trial_seed,
+                "iterations": budget,
+                "defects": rank[0],
+                "cost": round(rank[1], 2),
+            }
+        )
         if rank < winner_rank:
             winner, winner_rank = candidate, rank
             winner_index, winner_moves = restart + 1, moved
@@ -2722,13 +2861,13 @@ def _build_result(
             "outside_board": sorted(outside_board),
             "missing_parents": sorted(missing_parents),
             "support_body_violations": support_body_violations,
-            "max_support_distance_mm": round(
-                max((item["distance_mm"] for item in support_distances), default=0.0), 2
-            ),
+            "max_support_distance_mm": round(max((item["distance_mm"] for item in support_distances), default=0.0), 2),
             "support_distance_model": (
                 next(iter({item["model"] for item in support_distances}))
                 if len({item["model"] for item in support_distances}) == 1
-                else "mixed" if support_distances else "none"
+                else "mixed"
+                if support_distances
+                else "none"
             ),
             "support_distances": support_distances,
             "local_power_loop_distances": local_power_loop_distances,

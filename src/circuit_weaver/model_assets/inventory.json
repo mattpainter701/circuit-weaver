@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "models": {
+    "Package_DFN_QFN.3dshapes/TDFN-8-1EP_2x2mm_P0.5mm_EP0.8x1.2mm.step": {
+      "file": "TDFN-8-1EP_2x2mm_P0.5mm_EP0.8x1.2mm.step",
+      "sha256": "d9bf47a39aa341694035fca2482cfc775c67ffde20c06034bfae2d552369cc28",
+      "representation": "Dimensioned parametric package envelope; nominal XY and maximum height, not a manufacturer CAD solid",
+      "body_mm": [
+        2.0,
+        2.0,
+        0.75
+      ],
+      "pins": 8,
+      "pitch_mm": 0.5,
+      "exposed_pad_mm": [
+        0.8,
+        1.2
+      ],
+      "generator_repository": "https://gitlab.com/kicad/libraries/kicad-footprint-generator",
+      "generator_commit": "a903a695bf4e69905e9e56548f44dd46cdc1130e",
+      "generator_part": "TDFN-8-1EP_2x2mm_P0.5mm_EP0.8x1.30mm",
+      "generator_source_sha256": {
+        "data/package/no_lead/dfn_vson_wson_uson-8.yaml": "5fa1b822e3f26fc5bf6f3765f037513338fd8f3fc0034e52e585bbec2e317b12",
+        "src/generators/package/no_lead/spec.py": "a454a1fa868a248acee3e6192ace21f1c47dfdb0b70a1fecfd87c7bf42e2d7ae",
+        "src/generators/package/no_lead/model.py": "4777f16d944e061eb41c16f6bbaec0648e4e9cea25b74bf993144165971e884e",
+        "src/generators/package/no_lead/qfn_packages.py": "4ddb70e0e69e302a3b8991550db0753f92d68325311b82fa4311df4eae9ecf97",
+        "src/generators/tools/model/export_tools.py": "42bc19e202dffdab374ce4e475198fcd48978464738ff962a53e9f208d99c108"
+      },
+      "runtime": {
+        "python": "3.11.16",
+        "cadquery": "2.6.1",
+        "cadquery-ocp": "7.8.1.1.post1"
+      },
+      "package_outline": "https://pdfserv.maximintegrated.com/package_dwgs/21-0168.PDF",
+      "manufacturer_datasheet": "https://www.analog.com/media/en/technical-documentation/data-sheets/max17048-max17049.pdf",
+      "copyright": "Copyright (C) 2026 KiCAD",
+      "license": "CC-BY-SA-4.0 with KiCad electronic-design exception (embedded in STEP header)",
+      "license_url": "https://gitlab.com/kicad/libraries/kicad-packages3D/-/blob/master/LICENSE.md"
+    }
+  }
+}

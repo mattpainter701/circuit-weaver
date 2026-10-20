@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Physical sample inventory and workflow scale
+
+- Give logical I²C pull-up containers an explicit nonphysical identity while retaining their two real resistors in schematics, assembly inventories, and native boards. Keep missing physical footprints as errors, and preserve distinct references for multi-component templates.
+- Correct MAX17048 TDFN and nRF52840 aQFN footprint bindings and physical pin maps, include the Nordic crystal/DEC support, and bind the OLED sample to a real Adafruit module and model. Verify all sample physical inventories with native KiCad.
+- Retain foreign-net protection on dense schematic support routes and use visible net labels when no wire corridor exists. Fit support parts beside large module courtyards without expanding the outline, and permit an explicit new-project minimum drill assumption while preserving existing project rules and full DRC.
+- Correct DAC8552 package pins, passive header electrical types and reference-voltage operating limits; keep moved schematic labels clear of unrelated wires and recognize real series-filter interfaces.
+- Retain raw router findings and compare exact pre-existing same-pad thermal-land overlaps against native identities, followed by full imported-board DRC. Supply the missing dimensioned TDFN STEP with pinned KiCad generator provenance and license.
+- Reduce repeated placement and label searches with conservative spatial candidates followed by the existing exact geometry checks. Add reproducible full-workflow corpus and diverse 100-part benchmark evidence, including package identity, native routing and assembled model coverage.
+- Use native label failures to increase placement spacing from real reference dimensions on later attempts. Retain authored minimum gaps, font sizes, board constraints and the three-attempt limit; incomplete native reports fail closed.
+
 ## [0.36.0] - 2026-10-19
 
 ### Plane-backed ground trace cleanup

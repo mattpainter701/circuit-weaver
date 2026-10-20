@@ -404,7 +404,8 @@ local library footprints, exact symbol pin/pad numbering, and native KiCad.
 
 ```bash
 circuit-weaver build-pcb <root.kicad_sch> --output <prototype.kicad_pcb> \
-  [--width 80] [--height 60] [--clearance 0.127] [--overwrite] [--kicad-python-path <python>]
+  [--width 80] [--height 60] [--clearance 0.127] [--minimum-drill 0.2] \
+  [--overwrite] [--kicad-python-path <python>]
 ```
 
 Dimensions and optional default clearance are in millimeters. Explicit clearance
@@ -412,6 +413,11 @@ is allowed only for a new prototype project without existing board rules or
 netclass settings. Missing footprints, pin/pad mismatches, annotation errors,
 unsupported hierarchy paths, or physical DRC blockers prevent publication.
 Source files remain unchanged; existing output requires `--overwrite`.
+`--minimum-drill` is an explicit minimum plated drill assumption in millimeters
+for a new prototype project; omitting it keeps KiCad's default. Existing source
+board rules cannot be overridden. This accommodates, for example, the native
+ESP32 module footprint's 0.2 mm thermal drills while retaining full native DRC
+and recording the assumption; it does not select an approved fabrication process.
 Repeated physical pads with the same pin number receive the same net.
 The result always reports `fabrication_ready: false`; identity evidence and
 manufacturing approval remain separate. See the [real workflow demo](automation-validation.md).

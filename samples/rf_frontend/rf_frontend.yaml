@@ -22,12 +22,15 @@ power:
 digital:
   - ic: nRF52840-QIAA
     ref: U2
-    power_pins_extra:
-      "13": VDD_3P3
-    # pin 32 is the ANT output on nRF52840; wire it to the SMA center.
+    # aQFN73 pad H23 is the ANT pin; wire it to the SMA center.
     pin_nets_extra:
-      "32": RF_IN
-    no_connects: ["18", "19", "20"]
+      "H23": RF_IN
+    no_connects: ["AA24", "AC24", "AC13", "B3", "AB2"]
+  - ic: 32MHz-XTAL-CL8
+    ref: Y1
+
+# Nordic's 8 pF prototype crystal assumption and 2 pF board stray imply
+# 12 pF load caps per side. Select a production crystal with <=40 ppm tolerance.
 
 connectors:
   - ic: USB-C-PWR

@@ -112,6 +112,29 @@ def test_flattened_strap_does_not_invent_owner_connection_to_rail() -> None:
     assert net_map["GND"] == ["R1"]
 
 
+def test_virtual_topology_support_parts_are_functional_group_roots():
+    topology = ComponentDef(
+        mpn="PULLUPS_ONLY",
+        source_ref="RP1",
+        ref_prefix="RP",
+        footprint="",
+        is_virtual_container=True,
+        functional_section="buses",
+        block_id="buses:RP1",
+        straps=[
+            StrapConfig("R_SDA", "I2C_SDA", "VDD_3P3", "4.7k", "Resistor_SMD:R_0402", role="i2c_pullup"),
+            StrapConfig("R_SCL", "I2C_SCL", "VDD_3P3", "4.7k", "Resistor_SMD:R_0402", role="i2c_pullup"),
+        ],
+    )
+
+    inventory = build_placement_inventory([topology], include_auto_bypass=False)
+
+    assert inventory.references == ["R1", "R2"]
+    assert all(component.placement_parent_ref == "" for component in inventory.components)
+    assert all(component.assembly_owner_ref == "RP1" for component in inventory.components)
+    assert all(component.block_id == "buses:RP1" for component in inventory.components)
+
+
 def test_generate_review_writes_exact_review_only_artifact_set(tmp_path) -> None:
     result = generate_placement_review(
         [_controller(source_ref="U3")],

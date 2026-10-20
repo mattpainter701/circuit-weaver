@@ -199,8 +199,9 @@
   },
   "INA128PA": {
     "topology": "sensor_frontend",
-    "description": "Precision Instrumentation Amplifier SOIC-8",
-    "footprint": "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
+    "description": "Precision Instrumentation Amplifier PDIP-8",
+    "footprint": "Package_DIP:DIP-8_W7.62mm",
+    "datasheet_url": "https://www.ti.com/lit/ds/symlink/ina128.pdf",
     "supply_range": [
       4.5,
       36.0

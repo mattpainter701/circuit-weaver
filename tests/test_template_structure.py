@@ -791,6 +791,7 @@ def test_i2c_bus_data_driven_preserves_shared_pullup_nets():
         {"ic": "PULLUPS_ONLY", "ref": "RP1", "vdd_net": "VDD_IO", "sda_net": "SENSOR_SDA", "scl_net": "SENSOR_SCL"}
     )
     comp = result.components[0]
+    assert comp.is_virtual_container is True
     assert comp.pin_nets == {"3": "SENSOR_SDA", "4": "SENSOR_SCL"}
     assert {strap.pin: (strap.net, strap.rail) for strap in comp.straps} == {
         "R_SDA": ("SENSOR_SDA", "VDD_IO"),
@@ -824,21 +825,21 @@ def test_battery_charger_data_driven_preserves_programming_network():
     assert {cap.pin for cap in comp.bypass_caps} == {"CIN", "CBAT"}
 
 
-def test_battery_monitor_data_driven_preserves_cell_and_qstrt_networks():
-    """MAX17048 data-driven output must keep CELL filter and QSTRT pull-down."""
+def test_battery_monitor_data_driven_matches_max17048_datasheet_connections():
+    """MAX17048 CELL and VDD sense VBAT; ALERT is optional."""
     template = get_default_registry().get("battery_monitor")
     result = template.generate({"ic": "MAX17048G+T", "ref": "U2", "bat_net": "VBAT"})
     comp = result.components[0]
-    assert comp.power_pins == {"3": "VBAT", "4": "GND", "5": "GND", "1": "GND"}
-    assert comp.pin_nets["2"] == "CELL_U2"
+    assert comp.power_pins == {"3": "VBAT", "4": "GND", "9": "GND", "1": "GND"}
+    assert comp.pin_nets["2"] == "VBAT"
+    assert comp.explicit_no_connects == {"5"}
     assert comp.pin_nets["6"] == "QSTRT_U2"
-    assert comp.pin_nets["7"] == "I2C_SDA"
-    assert comp.pin_nets["8"] == "I2C_SCL"
+    assert comp.pin_nets["7"] == "I2C_SCL"
+    assert comp.pin_nets["8"] == "I2C_SDA"
     assert {strap.pin: (strap.net, strap.rail) for strap in comp.straps} == {
-        "RCELL": ("VBAT", "CELL_U2"),
         "RQSTRT": ("QSTRT_U2", "GND"),
     }
-    assert any(cap.pin == "CCELL" and cap.net == "CELL_U2" for cap in comp.bypass_caps)
+    assert [(cap.net, cap.value) for cap in comp.bypass_caps] == [("VBAT", "100nF")]
 
 
 def test_wireless_esp32_generates():

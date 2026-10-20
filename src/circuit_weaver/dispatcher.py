@@ -554,6 +554,18 @@ def _hydrate_ir_from_components(ir: DesignIR, components: list[ComponentDef]) ->
     )
 
 
+def _is_explicit_inferred_passive(block: DesignBlock) -> bool:
+    """Recognize only inferable standalone passives from the passives section."""
+    if block.section.strip().casefold() != "passives" or not block.ref or not block.value.strip():
+        return False
+    footprint = str((block.part_bindings or {}).get("footprint") or "").strip()
+    if not footprint:
+        return False
+    from .component_db import infer_passive_component
+
+    return infer_passive_component(block.ref, block.value.strip(), footprint) is not None
+
+
 def _validate_block_definitions(ir: DesignIR) -> tuple[list[ValidationMessage], list[ValidationMessage]]:
     structural: list[ValidationMessage] = []
     electrical: list[ValidationMessage] = []
@@ -642,7 +654,7 @@ def _validate_block_definitions(ir: DesignIR) -> tuple[list[ValidationMessage], 
                         )
                     )
         else:
-            if not block.ic:
+            if not block.ic and not _is_explicit_inferred_passive(block):
                 structural.append(
                     ValidationMessage(
                         category="structural",
@@ -706,12 +718,9 @@ def _validate_component_resolution(
                     message="Resolved block has neither pins nor an embedded symbol definition",
                 )
             )
-        # Some template types (e.g. PULLUPS_ONLY) are virtual — they expand into
-        # discrete passives and carry no physical footprint by design. The block
-        # ref inherits a 'U' prefix from the YAML field, not from the template,
-        # so ref_prefix alone cannot distinguish these; use the MPN instead.
-        _VIRTUAL_MPNS: frozenset[str] = frozenset({"PULLUPS_ONLY"})
-        if not primary.footprint and primary.mpn not in _VIRTUAL_MPNS:
+        # Explicit virtual containers represent logical topology only; their
+        # physical passives are validated through the assembly manifest.
+        if not primary.footprint and not getattr(primary, "is_virtual_container", False):
             implementation.append(
                 ValidationMessage(
                     category="implementation",
@@ -3990,6 +3999,7 @@ def main() -> None:
     build_p.add_argument("--width", type=float, default=80.0, help="Rectangular board width in mm")
     build_p.add_argument("--height", type=float, default=60.0, help="Rectangular board height in mm")
     build_p.add_argument("--clearance", type=float, help="Explicit default clearance in mm for a new prototype project")
+    build_p.add_argument("--minimum-drill", type=float, help="Explicit minimum drill in mm for a new prototype project")
     build_p.add_argument("--overwrite", action="store_true")
     build_p.add_argument("--kicad-python-path", help="Python interpreter with KiCad pcbnew installed")
 
@@ -5381,7 +5391,8 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
 
         result = _run_with_stderr_capture(lambda: schematic_to_pcb(
             args.schematic, args.output, width_mm=args.width, height_mm=args.height,
-            clearance_mm=args.clearance, overwrite=args.overwrite, kicad_python_path=args.kicad_python_path,
+            clearance_mm=args.clearance, minimum_drill_mm=args.minimum_drill,
+            overwrite=args.overwrite, kicad_python_path=args.kicad_python_path,
         ))
         _print_json(result)
         raise SystemExit(0 if result["status"] == "ok" else 1)

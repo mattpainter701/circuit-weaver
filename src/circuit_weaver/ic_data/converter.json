@@ -297,31 +297,31 @@
     "pins": [
       {
         "number": "1",
-        "name": "VOUTA",
-        "type": "output",
-        "side": "R"
+        "name": "VDD",
+        "type": "power_in",
+        "side": "T"
       },
       {
         "number": "2",
-        "name": "VOUTB",
-        "type": "output",
-        "side": "R"
-      },
-      {
-        "number": "3",
-        "name": "GND",
-        "type": "power_in",
-        "side": "B"
-      },
-      {
-        "number": "4",
         "name": "VREF",
         "type": "power_in",
         "side": "T"
       },
       {
+        "number": "3",
+        "name": "VOUTB",
+        "type": "output",
+        "side": "R"
+      },
+      {
+        "number": "4",
+        "name": "VOUTA",
+        "type": "output",
+        "side": "R"
+      },
+      {
         "number": "5",
-        "name": "DIN",
+        "name": "SYNC",
         "type": "input",
         "side": "L"
       },
@@ -333,25 +333,25 @@
       },
       {
         "number": "7",
-        "name": "SYNC_N",
+        "name": "DIN",
         "type": "input",
         "side": "L"
       },
       {
         "number": "8",
-        "name": "VDD",
+        "name": "GND",
         "type": "power_in",
-        "side": "T"
+        "side": "B"
       }
     ],
-    "pin_vdd": "8",
-    "pin_gnd": "3",
-    "pin_vref": "4",
-    "pin_vouta": "1",
-    "pin_voutb": "2",
-    "pin_din": "5",
+    "pin_vdd": "1",
+    "pin_gnd": "8",
+    "pin_vref": "2",
+    "pin_vouta": "4",
+    "pin_voutb": "3",
+    "pin_din": "7",
     "pin_sclk": "6",
-    "pin_sync": "7"
+    "pin_sync": "5"
   },
   "INA219": {
     "topology": "current_sense",

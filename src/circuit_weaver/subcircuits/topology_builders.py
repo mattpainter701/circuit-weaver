@@ -1270,6 +1270,7 @@ def _build_i2c_pullups(ic_data: dict, params: dict[str, Any]) -> SubcircuitResul
                 presentation="topology_local",
             ),
         ],
+        is_virtual_container=(str(ic_name).upper() == "PULLUPS_ONLY"),
         annotations=annotations,
     )
     comp.source_ref = ref
@@ -1459,6 +1460,7 @@ def build_battery_monitor(ic_data: dict, params: dict[str, Any]) -> SubcircuitRe
     i2c_bus = params.get("i2c_bus", "I2C")
     sda_net = params.get("sda_net", f"{i2c_bus}_SDA")
     scl_net = params.get("scl_net", f"{i2c_bus}_SCL")
+    irq_net = str(params.get("irq_net", "")).strip()
 
     power_pins = {
         str(ic_data.get("pin_vdd")): bat_net,
@@ -1470,13 +1472,18 @@ def build_battery_monitor(ic_data: dict, params: dict[str, Any]) -> SubcircuitRe
         str(ic_data.get("pin_sda")): sda_net,
         str(ic_data.get("pin_scl")): scl_net,
     }
+    if ic_data.get("pin_cell"):
+        # MAX17048 CELL is an input to battery positive and must be wired.
+        pin_nets[str(ic_data["pin_cell"])] = bat_net
+    if irq_net and ic_data.get("pin_alrt"):
+        pin_nets[str(ic_data["pin_alrt"])] = irq_net
     bypass_caps = [
         BypassCap(
             "CVDD",
             bat_net,
             gnd_net,
-            format_capacitance(snap_cap(1e-6)),
-            cap_footprint(snap_cap(1e-6)),
+            format_capacitance(snap_cap(100e-9)),
+            cap_footprint(snap_cap(100e-9)),
             role="decoupling",
             presentation="topology_local",
         )
@@ -1488,6 +1495,8 @@ def build_battery_monitor(ic_data: dict, params: dict[str, Any]) -> SubcircuitRe
         BoundaryPort(sda_net, "bidirectional"),
         BoundaryPort(scl_net, "input"),
     ]
+    if irq_net and ic_data.get("pin_alrt"):
+        ports.append(BoundaryPort(irq_net, "output"))
     annotations = [
         f"Fuel gauge {ic_name}: {ic_data.get('method')}",
         f"Cell capacity: {cell_capacity_mah}mAh, I2C addr: {ic_data.get('i2c_addr')}",
@@ -1495,23 +1504,10 @@ def build_battery_monitor(ic_data: dict, params: dict[str, Any]) -> SubcircuitRe
 
     if not ic_data.get("has_rsense"):
         power_pins[str(ic_data.get("pin_ctg"))] = gnd_net
-        cell_net = f"CELL_{ref}"
         qstrt_net = f"QSTRT_{ref}"
-        rcell_val = snap_to_e96(100.0)
-        ccell_val = snap_cap(1e-6)
-        pin_nets[str(ic_data.get("pin_cell"))] = cell_net
         pin_nets[str(ic_data.get("pin_qstrt"))] = qstrt_net
         straps.extend(
             [
-                StrapConfig(
-                    "RCELL",
-                    bat_net,
-                    cell_net,
-                    format_resistance(rcell_val),
-                    FP_0402R,
-                    role="cell_filter_series",
-                    presentation="topology_local",
-                ),
                 StrapConfig(
                     "RQSTRT",
                     qstrt_net,
@@ -1523,20 +1519,9 @@ def build_battery_monitor(ic_data: dict, params: dict[str, Any]) -> SubcircuitRe
                 ),
             ]
         )
-        bypass_caps.append(
-            BypassCap(
-                "CCELL",
-                cell_net,
-                gnd_net,
-                format_capacitance(ccell_val),
-                cap_footprint(ccell_val),
-                role="cell_filter_cap",
-                presentation="topology_local",
-            )
-        )
         annotations.extend(
             [
-                f"CELL filter: {format_resistance(rcell_val)} + {format_capacitance(ccell_val)}",
+                "CELL and VDD connect to the positive battery terminal",
                 "QSTRT pulled low (quick start disabled)",
             ]
         )
@@ -1580,6 +1565,9 @@ def build_battery_monitor(ic_data: dict, params: dict[str, Any]) -> SubcircuitRe
         bypass_caps=bypass_caps,
         straps=straps,
         annotations=annotations,
+        explicit_no_connects={
+            str(pin) for pin in ic_data.get("no_connect_pins", [])
+        } | ({str(ic_data["pin_alrt"])} if ic_data.get("pin_alrt") and not irq_net else set()),
     )
     comp.source_ref = ref
     return SubcircuitResult(

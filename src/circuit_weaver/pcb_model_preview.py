@@ -9,6 +9,7 @@ meaning when the board is staged elsewhere.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import re
@@ -26,6 +27,31 @@ _VARIABLE_RE = re.compile(r"\$\{([^}]+)\}")
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _PNG_CHUNK_HEADER_SIZE = 8
 _PNG_CRC_SIZE = 4
+
+
+def _bundled_model(relative_path: str) -> Path | None:
+    """Resolve only an exact, hash-verified package model absent upstream.
+
+    This is an inventory of dimensioned native STEP assets, never a generic
+    body substitute. User-defined model aliases do not consult this inventory.
+    """
+    root = Path(__file__).with_name("model_assets")
+    registry_path = root / "inventory.json"
+    if not registry_path.is_file():
+        return None
+    try:
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(registry, dict) or not isinstance(registry.get("models"), dict):
+        return None
+    record = registry["models"].get(relative_path)
+    if not isinstance(record, dict) or not isinstance(record.get("file"), str):
+        return None
+    candidate = (root / record["file"]).resolve()
+    if not candidate.is_relative_to(root.resolve()) or not candidate.is_file():
+        return None
+    return candidate if _sha256(candidate) == record.get("sha256") else None
 
 
 def _sha256(path: Path) -> str:
@@ -117,7 +143,16 @@ def _resolve_model_path(raw_path: str, board_dir: Path, roots: dict[str, list[Pa
                 candidate_root = board_dir / candidate_root
             candidate = candidate_root / suffix
             if not candidate.is_file():
-                return None
+                # KiCad may explicitly export its own standard library root.
+                # Treat that exactly like built-in discovery, while keeping
+                # incomplete user libraries authoritative.
+                is_standard_root = (
+                    re.fullmatch(r"KICAD(?:8|9|10)_3DMODEL_DIR|KISYS3DMOD", name) is not None
+                    and any(candidate_root.resolve() == root.resolve() for root in roots.get(name, []))
+                )
+                candidate = _bundled_model(suffix) if is_standard_root else None
+                if candidate is None:
+                    return None
             value = str(candidate)
             continue
 
@@ -129,6 +164,8 @@ def _resolve_model_path(raw_path: str, board_dir: Path, roots: dict[str, list[Pa
             return None
         candidates = [root / suffix for root in roots.get(name, [])]
         candidate = next((path for path in candidates if path.is_file()), None)
+        if candidate is None:
+            candidate = _bundled_model(suffix)
         if candidate is None:
             return None
         value = str(candidate)
@@ -153,6 +190,12 @@ def _model_inventory(
         record: dict[str, Any] = {"source_path": raw_path, "resolved_path": str(resolved) if resolved else None}
         if resolved:
             record["sha256"] = _sha256(resolved)
+            asset_root = Path(__file__).with_name("model_assets").resolve()
+            if resolved.is_relative_to(asset_root):
+                record["origin"] = "bundled_dimensioned_parametric_model"
+                provenance = asset_root / "inventory.json"
+                record["provenance_path"] = str(provenance)
+                record["provenance_sha256"] = _sha256(provenance)
         else:
             record["reason"] = "model path could not be resolved to an existing file"
         inventory.append(record)
@@ -393,7 +436,10 @@ def render_board_model(
             cli=str(cli), cli_version=version_text, model_coverage=model_coverage,
         )
 
-    source_paths = list(dict.fromkeys(source_paths + [Path(record["resolved_path"]) for record in inventory]))
+    source_paths = list(dict.fromkeys(
+        source_paths + [Path(record["resolved_path"]) for record in inventory]
+        + [Path(record["provenance_path"]) for record in inventory if record.get("provenance_path")]
+    ))
     if output in source_paths:
         return _result(
             "failed", "output_conflicts_with_source", source_sha256=source_sha256,
@@ -404,6 +450,9 @@ def render_board_model(
     model_hash_mismatch = any(
         source_hashes.get(str(record["resolved_path"])) != record.get("sha256")
         for record in resolved_models
+    ) or any(
+        source_hashes.get(record["provenance_path"]) != record["provenance_sha256"]
+        for record in resolved_models if record.get("provenance_path")
     )
     if source_sha256 != staged_board_sha256 or model_hash_mismatch:
         return _result(

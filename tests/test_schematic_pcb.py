@@ -54,6 +54,37 @@ def test_netlist_maps_only_declared_pin_numbers_and_preserves_explicit_no_connec
     assert model["explicit_no_connects"] == [{"reference": "U1", "pin": "2"}]
 
 
+@pytest.mark.parametrize("exclusion", [
+    '<property name="exclude_from_board"/>',
+    '<property name="exclude_from_bom"/><property name="exclude_from_board"/>',
+])
+def test_native_xml_board_exclusion_preserves_real_components_and_nets(tmp_path, exclusion):
+    library = _fixture_library(tmp_path)
+    path = _write_netlist(tmp_path / "board.xml")
+    path.write_text(path.read_text(encoding="utf-8").replace(
+        "</components>",
+        f'<comp ref="RP1"><value>PULLUPS_ONLY</value>{exclusion}</comp></components>',
+    ).replace(
+        '<node ref="U1" pin="1" pintype="passive"/>',
+        '<node ref="U1" pin="1" pintype="passive"/><node ref="RP1" pin="3" pintype="passive"/>',
+    ), encoding="utf-8")
+    model = _parse_netlist(path, library)
+    assert [component["reference"] for component in model["components"]] == ["U1"]
+    assert model["components"][0]["nets"] == {"1": "SIG"}
+    assert model["nets"] == ["SIG"]
+
+
+@pytest.mark.parametrize("properties", ["", '<property name="exclude_from_bom"/>'])
+def test_missing_footprint_is_not_a_board_exclusion(tmp_path, properties):
+    library = _fixture_library(tmp_path)
+    path = _write_netlist(tmp_path / "board.xml")
+    path.write_text(path.read_text(encoding="utf-8").replace(
+        "</components>", f'<comp ref="U2"><value>Physical</value>{properties}</comp></components>',
+    ), encoding="utf-8")
+    with pytest.raises(ValueError, match="U2: schematic component has no footprint"):
+        _parse_netlist(path, library)
+
+
 def test_netlist_rejects_symbol_pin_missing_from_footprint(tmp_path):
     library = _fixture_library(tmp_path, pads=("1",))
     with pytest.raises(ValueError, match=r"missing pads: \['2'\]"):
@@ -163,6 +194,64 @@ def test_clearance_must_be_finite_positive_mm(tmp_path, clearance):
     result = schematic_to_pcb(schematic, tmp_path / "output.kicad_pcb", clearance_mm=clearance)
     assert result["status"] == "error"
     assert "finite positive" in result["message"]
+
+
+@pytest.mark.parametrize("minimum", [0, -0.1, float("nan"), float("inf"), True])
+def test_minimum_drill_must_be_finite_positive_mm(tmp_path, minimum):
+    schematic = tmp_path / "input.kicad_sch"
+    schematic.write_text("schematic", encoding="utf-8")
+    result = schematic_to_pcb(schematic, tmp_path / "output.kicad_pcb", minimum_drill_mm=minimum)
+    assert result["status"] == "error"
+    assert "finite positive" in result["message"]
+
+
+@pytest.mark.parametrize("settings", [".kicad_pro", ".kicad_dru"])
+def test_minimum_drill_cannot_override_existing_project_rules(tmp_path, settings):
+    schematic = tmp_path / "input.kicad_sch"
+    schematic.write_text("schematic", encoding="utf-8")
+    prior = ('{"board":{"design_settings":{"rules":{"min_hole_to_hole":0.3}}}}'
+             if settings == ".kicad_pro" else "(version 1)")
+    rules = schematic.with_suffix(settings)
+    rules.write_text(prior, encoding="utf-8")
+    result = schematic_to_pcb(schematic, tmp_path / "output.kicad_pcb", minimum_drill_mm=0.2)
+    assert result["status"] == "error"
+    assert "Cannot override minimum drill" in result["message"]
+    assert rules.read_text(encoding="utf-8") == prior
+
+
+def test_packing_uses_space_beside_large_module_without_losing_courtyard_clearance():
+    from types import SimpleNamespace
+
+    from circuit_weaver.schematic_pcb import _pack_components
+
+    class Library:
+        def geometry(self, name):
+            width, height = (48.5, 41.54) if name == "module" else (1.86, 0.94)
+            return SimpleNamespace(width_mm=width, height_mm=height, source="courtyard", confidence="verified",
+                                   center_x_mm=2.1, center_y_mm=-3.7)
+
+    items = [{"reference": "U1", "footprint": "module"}] + [
+        {"reference": f"R{i}", "footprint": "resistor"} for i in range(1, 31)
+    ]
+    _pack_components(items, 80, 60, Library())
+    boxes = []
+    for item in items:
+        geometry = Library().geometry(item["footprint"])
+        x, y = item["x_mm"] + 2.1, item["y_mm"] - 3.7
+        w, h = geometry.width_mm, geometry.height_mm
+        assert 5 <= x - w / 2 and x + w / 2 <= 75
+        assert 5 <= y - h / 2 and y + h / 2 <= 55
+        boxes.append((x - w / 2, y - h / 2, x + w / 2, y + h / 2))
+    for index, a in enumerate(boxes):
+        for b in boxes[index + 1:]:
+            assert a[2] + 3 <= b[0] + 1e-9 or b[2] + 3 <= a[0] + 1e-9 or (
+                a[3] + 3 <= b[1] + 1e-9 or b[3] + 3 <= a[1] + 1e-9
+            )
+    first = [(item["x_mm"], item["y_mm"]) for item in items]
+    _pack_components(items, 80, 60, Library())
+    assert [(item["x_mm"], item["y_mm"]) for item in items] == first
+    with pytest.raises(ValueError, match="do not fit"):
+        _pack_components(items, 60, 52, Library())
 
 
 def test_explicit_clearance_rejects_existing_source_board_rules_before_kicad_probe(tmp_path, monkeypatch):

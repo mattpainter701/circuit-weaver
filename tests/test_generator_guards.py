@@ -23,6 +23,29 @@ def test_validate_sexpr_balance_warns_on_early_extra_close(caplog):
     assert "min_depth=-1" in caplog.text
 
 
+def test_virtual_container_is_excluded_from_symbol_bom_and_board():
+    from circuit_weaver.generator import _render_symbol_name_and_sexpr
+
+    virtual = ComponentDef(
+        mpn="PULLUPS_ONLY",
+        ref_prefix="RP",
+        source_ref="RP1",
+        pins=[PinDef("1", "SDA", "bidirectional", "L")],
+        is_virtual_container=True,
+    )
+    ordinary = ComponentDef(
+        mpn="TEST",
+        ref_prefix="U",
+        pins=[PinDef("1", "SIG", "bidirectional", "L")],
+    )
+
+    _name, virtual_symbol = _render_symbol_name_and_sexpr(virtual)
+    _name, ordinary_symbol = _render_symbol_name_and_sexpr(ordinary)
+
+    assert "(in_bom no) (on_board no)" in virtual_symbol
+    assert "(in_bom yes) (on_board yes)" in ordinary_symbol
+
+
 def test_generate_artifacts_writes_log_on_validation_failure(tmp_path: Path, monkeypatch):
     report = ValidationReport(
         profile="standard",

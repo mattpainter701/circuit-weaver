@@ -175,6 +175,9 @@ def render_board_assembly(
                 )
             model_records = (model.get("model_coverage") or {}).get("models", [])
             protected.extend(Path(record["resolved_path"]) for record in model_records if record.get("resolved_path"))
+            protected.extend(
+                Path(record["provenance_path"]) for record in model_records if record.get("provenance_path")
+            )
             if _output_conflicts(output, protected):
                 return _error(
                     "output_conflicts_with_source",

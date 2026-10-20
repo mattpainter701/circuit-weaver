@@ -430,7 +430,7 @@ def _apply_net_prefix(item: dict, comp: ComponentDef) -> None:
         return
     updated = {}
     for pin_num, net in comp.pin_nets.items():
-        if net in _GLOBAL_SIGNAL_NAMES:
+        if net in _GLOBAL_SIGNAL_NAMES or _is_power_net_name(net):
             updated[pin_num] = net
         elif net.upper() in _GENERIC_PIN_NAMES or len(net) <= 3:
             updated[pin_num] = f"{ref}_{net}"
@@ -538,6 +538,8 @@ def _apply_partial_pin_overrides(item: dict, comp: ComponentDef) -> None:
     # Extra power pins (merged, not replacing). Pulls the pin off
     # ``pin_nets`` so a single pin is never double-assigned.
     raw_power_extra = item.get("power_pins_extra") or {}
+    original_power_pins = dict(comp.power_pins)
+    explicit_power_overrides: dict[str, str] = {}
     if isinstance(raw_power_extra, dict):
         for pin_num, net_name in raw_power_extra.items():
             p = str(pin_num).strip()
@@ -551,8 +553,39 @@ def _apply_partial_pin_overrides(item: dict, comp: ComponentDef) -> None:
             if old_power and old_power != n:
                 dropped_nets.add(old_power)
             comp.power_pins[p] = n
+            explicit_power_overrides[p] = n
             added_nets.add(n)
             comp.explicit_no_connects.discard(p)
+
+    # Pin-addressed bypass recommendations follow their supply pin when a
+    # design explicitly remaps that pin (for example Nordic VDDH routed to
+    # the regulated 1.8 V rail).  Internal DEC pins remain untouched because
+    # they are not keys in this pin override map.
+    for cap in comp.bypass_caps:
+        replacement = explicit_power_overrides.get(str(cap.pin).strip())
+        if replacement:
+            cap.net = replacement
+
+    # A component-level rail requirement follows the user's remap only when
+    # every pin assigned to that rail is moved together to the same net.
+    # Partial or split-rail overrides keep the original requirement intact.
+    for requirement in comp.power_reqs:
+        supply_pins = {
+            pin_num for pin_num, net_name in original_power_pins.items()
+            if net_name == requirement.net
+        }
+        remapped_nets = {
+            explicit_power_overrides[pin_num]
+            for pin_num in supply_pins
+            if pin_num in explicit_power_overrides
+        }
+        if supply_pins and supply_pins.issubset(explicit_power_overrides) and len(remapped_nets) == 1:
+            requirement.net = next(iter(remapped_nets))
+            rail_voltage_match = re.search(r"(?:^|_)(\d+)P(\d+)(?:$|_)", requirement.net.upper())
+            if rail_voltage_match:
+                nominal_voltage = float(f"{rail_voltage_match.group(1)}.{rail_voltage_match.group(2)}")
+                requirement.voltage = nominal_voltage
+                requirement.v_nominal = nominal_voltage
 
     # Retire stale template boundary ports so placement_readiness's
     # orphan-interface check doesn't flag a net that the user
@@ -782,8 +815,11 @@ def _resolve_component(
             # scoped default net names ("USB_DP_U2") that need to be
             # rewired to the project-global bus.
             _apply_partial_pin_overrides(item, primary)
-        for comp in result.components:
-            if ref:
+        for result_index, comp in enumerate(result.components):
+            # A template block ref identifies its first schematic component.
+            # Multi-part topologies must let the assembly manifest allocate
+            # distinct refs for the remaining physical components.
+            if ref and result_index == 0:
                 comp.source_ref = ref
             comp.category = section_category
             _apply_power_envelopes(item, comp)
@@ -803,6 +839,7 @@ def _resolve_component(
             if passive:
                 passive.source_ref = ref
                 passive.category = section_category
+                _apply_partial_pin_overrides(item, passive)
                 return [passive]
         print(f"  WARNING: Item in '{section_category}' has no 'type' or 'ic', creating stub")
         return [_make_stub_component("", section_category, ref, reason="No 'type' or 'ic' specified")]

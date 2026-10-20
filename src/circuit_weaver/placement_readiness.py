@@ -136,6 +136,22 @@ def _orphan_interface_issues(compiled_ir: "DesignIR", components) -> list[tuple[
     """
     net_to_refs, _ = _build_net_to_refs(components)
 
+    # A template's explicit series output filter is part of its functional
+    # signal path. Count its far endpoint as that block's published output so
+    # a downstream connector or op-amp satisfies the interface contract. Other
+    # support passives (pull straps, bypass capacitors, and sensing networks)
+    # remain excluded as they do not publish a functional signal interface.
+    for comp in components:
+        ref = str(getattr(comp, "source_ref", "") or "").strip()
+        if not ref:
+            continue
+        for strap in getattr(comp, "straps", []) or []:
+            if getattr(strap, "role", "") != "output_filter":
+                continue
+            output_net = str(getattr(strap, "rail", "") or "").strip()
+            if output_net:
+                net_to_refs.setdefault(output_net, set()).add(ref)
+
     from .subcircuits.base import _is_power_net
 
     orphans: list[tuple[str, str, str]] = []

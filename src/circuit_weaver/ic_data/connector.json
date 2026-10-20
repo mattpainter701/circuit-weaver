@@ -59,13 +59,13 @@
       {
         "number": "1",
         "name": "P1",
-        "type": "power_in",
+        "type": "passive",
         "side": "R"
       },
       {
         "number": "2",
         "name": "P2",
-        "type": "power_in",
+        "type": "passive",
         "side": "R"
       }
     ]

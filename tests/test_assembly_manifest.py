@@ -119,6 +119,43 @@ def test_manifest_includes_declared_bypass_and_strap_values() -> None:
     ]
 
 
+def test_virtual_topology_container_is_rendered_but_only_its_real_straps_are_physical() -> None:
+    topology = ComponentDef(
+        mpn="PULLUPS_ONLY",
+        source_ref="RP1",
+        ref_prefix="RP",
+        value="I2C_PULLUPS",
+        footprint="",
+        pins=_pins(4),
+        pin_nets={"3": "SENSOR_SDA", "4": "SENSOR_SCL"},
+        power_pins={"1": "VDD_IO", "2": "GND"},
+        straps=[
+            StrapConfig("R_SDA", "SENSOR_SDA", "VDD_IO", "4.7k", "Resistor_SMD:R_0402_1005Metric"),
+            StrapConfig("R_SCL", "SENSOR_SCL", "VDD_IO", "4.7k", "Resistor_SMD:R_0402_1005Metric"),
+        ],
+    )
+    topology.is_virtual_container = True
+
+    manifest = build_assembly_manifest([topology], include_auto_bypass=False)
+
+    assert [item.reference for item in manifest.items] == ["R1", "R2"]
+    assert all(item.source_kind == "strap" for item in manifest.items)
+    assert all(item.owner_ref == "RP1" for item in manifest.items)
+    assert [(item.net1, item.net2, item.footprint) for item in manifest.items] == [
+        ("SENSOR_SDA", "VDD_IO", "Resistor_SMD:R_0402_1005Metric"),
+        ("SENSOR_SCL", "VDD_IO", "Resistor_SMD:R_0402_1005Metric"),
+    ]
+    assert manifest.prepared_components == []
+    assert len(manifest.render_components) == 1
+    assert [strap.source_ref for strap in manifest.render_components[0].straps] == ["R1", "R2"]
+
+
+def test_virtual_container_exception_does_not_hide_missing_physical_footprints() -> None:
+    physical = ComponentDef(mpn="SENSOR", source_ref="U1", ref_prefix="U", footprint="")
+    manifest = build_assembly_manifest([physical], include_auto_bypass=False)
+    assert manifest.missing_footprint_refs() == ["U1"]
+
+
 def test_prepared_components_carry_manifest_support_references() -> None:
     component = ComponentDef(
         mpn="SENSOR",

@@ -55,6 +55,8 @@ entities.json
 .codex-tmp/
 .pytest-tmp/
 .test-tmp/
+.ci-kicad/
+.release-kicad/
 .kilo/
 .opencode/
 AGENTS.md

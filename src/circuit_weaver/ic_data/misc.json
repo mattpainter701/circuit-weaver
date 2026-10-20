@@ -1876,8 +1876,9 @@
   },
   "MAX17048G+T": {
     "topology": "battery_monitor",
-    "description": "ModelGauge Li-Ion Fuel Gauge DFN-8",
-    "footprint": "DFN-8-EP",
+    "description": "ModelGauge Li-Ion Fuel Gauge 8-TDFN-EP (2 x 2 mm)",
+    "footprint": "Package_DFN_QFN:TDFN-8-1EP_2x2mm_P0.5mm_EP0.8x1.2mm",
+    "datasheet_url": "https://www.analog.com/media/en/technical-documentation/data-sheets/max17048-max17049.pdf",
     "vdd_range": [
       2.5,
       4.5
@@ -1912,9 +1913,9 @@
       },
       {
         "number": "5",
-        "name": "GND",
-        "type": "power_in",
-        "side": "B"
+        "name": "ALRT",
+        "type": "output",
+        "side": "R"
       },
       {
         "number": "6",
@@ -1924,15 +1925,21 @@
       },
       {
         "number": "7",
+        "name": "SCL",
+        "type": "input",
+        "side": "R"
+      },
+      {
+        "number": "8",
         "name": "SDA",
         "type": "bidirectional",
         "side": "R"
       },
       {
-        "number": "8",
-        "name": "SCL",
-        "type": "input",
-        "side": "R"
+        "number": "9",
+        "name": "EP",
+        "type": "power_in",
+        "side": "B"
       }
     ],
     "pin_vdd": "3",
@@ -1940,10 +1947,12 @@
     "pin_cell": "2",
     "pin_ctg": "1",
     "pin_qstrt": "6",
-    "pin_sda": "7",
-    "pin_scl": "8",
+    "pin_sda": "8",
+    "pin_scl": "7",
+    "pin_alrt": "5",
+    "no_connect_pins": [],
     "extra_gnd_pins": [
-      "5"
+      "9"
     ]
   },
   "BQ27441-G1A": {

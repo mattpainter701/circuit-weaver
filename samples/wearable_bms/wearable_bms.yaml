@@ -32,11 +32,28 @@ power:
 digital:
   - ic: nRF52840-QIAA
     ref: U4
-    # DCC is the DC/DC mode input; tie directly to VDD for the
-    # placement-preview. Programming pins stay no-connect.
+    # Leave the unused DC/DC output unconnected; programming pins are
+    # intentionally unavailable on this minimal wearable board.
     power_pins_extra:
-      "13": VBAT
-    no_connects: ["18", "19", "20"]
+      "A22": VDD_1P8
+      "B1": VDD_1P8
+      "W1": VDD_1P8
+      "AD14": VDD_1P8
+      "AD23": VDD_1P8
+      "Y2": VDD_1P8
+    pin_nets_extra:
+      "G1": I2C_SCL
+      # TWIM PSEL maps SDA to P0.04 (outer aQFN pad J1). The former
+      # inner-row H2/P0.27 choice could not escape with the prototype's
+      # two copper layers and default through-via geometry. Firmware must
+      # select SCL=P0.26 and SDA=P0.04 for this board.
+      "J1": I2C_SDA
+    no_connects: ["AA24", "AC24", "AC13", "B3", "AB2"]
+  - ic: 32MHz-XTAL-CL8
+    ref: Y1
+
+# Nordic's 8 pF prototype crystal assumption and 2 pF board stray imply
+# 12 pF load caps per side. Select a production crystal with <=40 ppm tolerance.
 
 connectors:
   - ic: USB-C-PWR

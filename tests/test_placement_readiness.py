@@ -178,6 +178,32 @@ def test_orphan_interface_not_satisfied_by_other_block_strap():
     assert "BOOT" in out[0].message
 
 
+def test_output_filter_series_resistor_publishes_template_output_interface():
+    out = placement_readiness_issues(
+        [],
+        _ir(("U1", "DAC_OUT", "output"), ("J1", "DAC_OUT", "input")),
+        [
+            _comp(
+                "U1",
+                pin_nets={"4": "DAC_RAW"},
+                straps=[
+                    StrapConfig(
+                        "RFILT_A",
+                        "DAC_RAW",
+                        "DAC_OUT",
+                        "1k",
+                        "Resistor_SMD:R_0402",
+                        role="output_filter",
+                    )
+                ],
+            ),
+            _comp("J1", category="connector", pin_nets={"1": "DAC_OUT"}),
+        ],
+    )
+
+    assert out == []
+
+
 def test_orphan_interface_excludes_power_and_ground_nets():
     out = placement_readiness_issues(
         [],

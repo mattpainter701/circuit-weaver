@@ -900,6 +900,8 @@ def place_component(
     root_uuid="",
     sheet_uuid="",
     property_center_x=None,
+    in_bom=True,
+    on_board=True,
 ):
     """Generate S-expression for a placed component instance."""
     x, y = snap(x), snap(y)
@@ -965,8 +967,10 @@ def place_component(
     )
 
     dnp_str = "yes" if dnp else "no"
+    bom_str = "yes" if in_bom else "no"
+    board_str = "yes" if on_board else "no"
     return f"""  (symbol (lib_id "{lib_id}") (at {x:.2f} {y:.2f} {angle}) (unit {unit})
-    (in_bom yes) (on_board yes) (dnp {dnp_str})
+    (in_bom {bom_str}) (on_board {board_str}) (dnp {dnp_str})
     (uuid "{inst_uuid}")
 {chr(10).join(props)}
     (instances
@@ -1149,6 +1153,101 @@ def _resolve_label_collisions(
         key = (round(parsed["x2"], 2), round(parsed["y2"], 2))
         endpoint_wires.setdefault(key, []).append(i)
 
+    # Label collision resolution extends a wire together with its label. Keep
+    # that extension from reaching a different electrical wire component: a
+    # visually tidy label must never turn into a schematic short. Components
+    # are classified from the existing geometry and label anchors before any
+    # moves; safe extensions keep their original component intact.
+    wire_parent = {index: index for index in wire_by_idx}
+
+    def wire_find(index: int) -> int:
+        while wire_parent[index] != index:
+            wire_parent[index] = wire_parent[wire_parent[index]]
+            index = wire_parent[index]
+        return index
+
+    def wire_union(first: int, second: int) -> None:
+        first_root = wire_find(first)
+        second_root = wire_find(second)
+        if first_root != second_root:
+            wire_parent[second_root] = first_root
+
+    def point_on_wire_segment(
+        point: tuple[float, float], segment: dict[str, float]
+    ) -> bool:
+        x, y = point
+        epsilon = 0.01
+        if abs(segment["x1"] - segment["x2"]) < epsilon:
+            return (
+                abs(x - segment["x1"]) < epsilon
+                and min(segment["y1"], segment["y2"]) - epsilon
+                <= y
+                <= max(segment["y1"], segment["y2"]) + epsilon
+            )
+        if abs(segment["y1"] - segment["y2"]) < epsilon:
+            return (
+                abs(y - segment["y1"]) < epsilon
+                and min(segment["x1"], segment["x2"]) - epsilon
+                <= x
+                <= max(segment["x1"], segment["x2"]) + epsilon
+            )
+        return False
+
+    def wires_are_electrically_joined(first: dict[str, float], second: dict[str, float]) -> bool:
+        return any(
+            point_on_wire_segment(point, second)
+            for point in ((first["x1"], first["y1"]), (first["x2"], first["y2"]))
+        ) or any(
+            point_on_wire_segment(point, first)
+            for point in ((second["x1"], second["y1"]), (second["x2"], second["y2"]))
+        )
+
+    wire_indices = list(wire_by_idx)
+    for position, first_index in enumerate(wire_indices):
+        first = wire_by_idx[first_index]
+        for second_index in wire_indices[position + 1 :]:
+            if wires_are_electrically_joined(first, wire_by_idx[second_index]):
+                wire_union(first_index, second_index)
+
+    label_wire_components: list[tuple[int, str]] = []
+    for label in parsed_labels:
+        label_x, label_y = label["x"], label["y"]
+        touching = [
+            index
+            for index, segment in wire_by_idx.items()
+            if point_on_wire_segment((label_x, label_y), segment)
+        ]
+        for index in touching[1:]:
+            wire_union(touching[0], index)
+        if touching:
+            label_wire_components.append((touching[0], label["text"]))
+
+    wire_component_names: dict[int, set[str]] = {}
+    for index, name in label_wire_components:
+        wire_component_names.setdefault(wire_find(index), set()).add(name)
+
+    def shifted_wire_is_clear(label: dict, new_x: float, new_y: float) -> bool:
+        wire_idx = label["wire_idx"]
+        if wire_idx is None:
+            return False
+        current = wire_by_idx[wire_idx]
+        candidate = {
+            "x1": current["x1"],
+            "y1": current["y1"],
+            "x2": new_x,
+            "y2": new_y,
+        }
+        own_component = wire_find(wire_idx)
+        for other_idx, other in wire_by_idx.items():
+            if other_idx == wire_idx or wire_find(other_idx) == own_component:
+                continue
+            if wires_are_electrically_joined(candidate, other):
+                other_names = wire_component_names.get(wire_find(other_idx), set())
+                # Unlabeled wires are also foreign until proven otherwise.
+                if other_names != {label["text"]}:
+                    return False
+        return True
+
     # Claim endpoint-matched wires once.  Multiple labels at one endpoint are
     # paired deterministically with multiple wires in their emission order.
     for label in parsed_labels:
@@ -1190,6 +1289,8 @@ def _resolve_label_collisions(
                         )
                         for box in obstacle_boxes
                     ):
+                        continue
+                    if not shifted_wire_is_clear(label, new_x, new_y):
                         continue
                     movable.append(label)
                 if not movable:

@@ -636,6 +636,10 @@ class ComponentDef:
     # support parts traceable to the originating design block.
     functional_section: str = ""
     block_id: str = ""
+    # True for logical template containers that expand to physical support
+    # parts (for example, an I2C pull-up network). They remain renderable but
+    # are excluded from PCB assembly and placement inventories.
+    is_virtual_container: bool = False
     presentation_wiring_policy: PresentationWiringPolicy | None = None  # optional component-level rendering override
 
     pins: list[PinDef] = field(default_factory=list)
@@ -2354,29 +2358,147 @@ def _builtin_components():
         )
     )
 
-    # --- nRF52840 (QFN-73 simplified) ---
+    # --- nRF52840-QIAA (Nordic aQFN-73) ---
     reg.register(
         ComponentDef(
             mpn="nRF52840-QIAA",
             ref_prefix="U",
             value="nRF52840",
-            footprint="Package_DFN_QFN:QFN-73-1EP_7x7mm_P0.5mm",
+            footprint="Package_DFN_QFN:Nordic_AQFN-73-1EP_7x7mm_P0.5mm",
             description="BLE/2.4GHz SoC",
             category="digital",
+            # Pin IDs follow the aQFN73 table in Nordic's product spec and
+            # match the native KiCad MCU_Nordic:nRF52840 symbol and footprint.
             pins=[
-                PinDef("12", "DEC4", "power_out", "T"),
-                PinDef("13", "DCC", "power_in", "T"),
-                PinDef("18", "SWDCLK", "input", "R"),
-                PinDef("19", "SWDIO", "bidirectional", "R"),
-                PinDef("20", "nRESET", "input", "R"),
-                PinDef("32", "ANT", "output", "R"),
-                PinDef("34", "VDD", "power_in", "T"),
-                PinDef("35", "GND", "power_in", "B"),
+                PinDef('A8', 'AIN7/P0.31', 'bidirectional', 'R'),
+                PinDef('A10', 'AIN5/P0.29', 'bidirectional', 'R'),
+                PinDef('A12', 'AIN0/P0.02', 'bidirectional', 'R'),
+                PinDef('A14', 'P1.15', 'bidirectional', 'R'),
+                PinDef('A16', 'P1.13', 'bidirectional', 'R'),
+                PinDef('A18', 'DEC2', 'passive', 'T'),
+                PinDef('A20', 'P1.10', 'bidirectional', 'R'),
+                PinDef('A22', 'VDD', 'power_in', 'T'),
+                PinDef('A23', 'XC2', 'input', 'L'),
+                PinDef('AA24', 'SWDCLK', 'input', 'L'),
+                PinDef('AB2', 'DCCH', 'power_out', 'T'),
+                PinDef('AC5', 'DECUSB', 'passive', 'T'),
+                PinDef('AC9', 'P0.14', 'bidirectional', 'R'),
+                PinDef('AC11', 'P0.16', 'bidirectional', 'R'),
+                PinDef('AC13', 'P0.18/nRESET', 'bidirectional', 'L'),
+                PinDef('AC15', 'P0.19', 'bidirectional', 'R'),
+                PinDef('AC17', 'P0.21', 'bidirectional', 'R'),
+                PinDef('AC19', 'P0.23', 'bidirectional', 'R'),
+                PinDef('AC21', 'P0.25', 'bidirectional', 'R'),
+                PinDef('AC24', 'SWDIO', 'bidirectional', 'L'),
+                PinDef('AD2', 'VBUS', 'power_in', 'T'),
+                PinDef('AD4', 'D-', 'bidirectional', 'R'),
+                PinDef('AD6', 'D+', 'bidirectional', 'R'),
+                PinDef('AD8', 'P0.13', 'bidirectional', 'R'),
+                PinDef('AD10', 'P0.15', 'bidirectional', 'R'),
+                PinDef('AD12', 'P0.17', 'bidirectional', 'R'),
+                PinDef('AD14', 'VDD', 'power_in', 'T'),
+                PinDef('AD16', 'P0.20', 'bidirectional', 'R'),
+                PinDef('AD18', 'P0.22', 'bidirectional', 'R'),
+                PinDef('AD20', 'P0.24', 'bidirectional', 'R'),
+                PinDef('AD22', 'TRACEDATA0/P1.00', 'bidirectional', 'R'),
+                PinDef('AD23', 'VDD', 'power_in', 'T'),
+                PinDef('B1', 'VDD', 'power_in', 'T'),
+                PinDef('B3', 'DCC', 'power_out', 'T'),
+                PinDef('B5', 'DEC4', 'passive', 'T'),
+                PinDef('B7', 'VSS', 'power_in', 'B'),
+                PinDef('B9', 'AIN6/P0.30', 'bidirectional', 'R'),
+                PinDef('B11', 'AIN4/P0.28', 'bidirectional', 'R'),
+                PinDef('B13', 'AIN1/P0.03', 'bidirectional', 'R'),
+                PinDef('B15', 'P1.14', 'bidirectional', 'R'),
+                PinDef('B17', 'P1.12', 'bidirectional', 'R'),
+                PinDef('B19', 'P1.11', 'bidirectional', 'R'),
+                PinDef('B24', 'XC1', 'input', 'L'),
+                PinDef('C1', 'DEC1', 'passive', 'T'),
+                PinDef('D2', 'XL1/P0.00', 'bidirectional', 'R'),
+                PinDef('D23', 'DEC3', 'passive', 'T'),
+                PinDef('E24', 'DEC6', 'passive', 'T'),
+                PinDef('F2', 'XL2/P0.01', 'bidirectional', 'R'),
+                PinDef('F23', 'VSS_PA', 'power_in', 'B'),
+                PinDef('G1', 'P0.26', 'bidirectional', 'R'),
+                PinDef('H2', 'P0.27', 'bidirectional', 'R'),
+                PinDef('H23', 'ANT', 'passive', 'L'),
+                PinDef('J1', 'AIN2/P0.04', 'bidirectional', 'R'),
+                PinDef('J24', 'NFC2/P0.10', 'bidirectional', 'R'),
+                PinDef('K2', 'AIN3/P0.05', 'bidirectional', 'R'),
+                PinDef('L1', 'P0.06', 'bidirectional', 'R'),
+                PinDef('L24', 'NFC1/P0.09', 'bidirectional', 'R'),
+                PinDef('M2', 'TRACECLK/P0.07', 'bidirectional', 'R'),
+                PinDef('N1', 'P0.08', 'bidirectional', 'R'),
+                PinDef('N24', 'DEC5', 'passive', 'T'),
+                PinDef('P2', 'P1.08', 'bidirectional', 'R'),
+                PinDef('P23', 'P1.07', 'bidirectional', 'R'),
+                PinDef('R1', 'TRACEDATA3/P1.09', 'bidirectional', 'R'),
+                PinDef('R24', 'P1.06', 'bidirectional', 'R'),
+                PinDef('T2', 'TRACEDATA2/P0.11', 'bidirectional', 'R'),
+                PinDef('T23', 'P1.05', 'bidirectional', 'R'),
+                PinDef('U1', 'TRACEDATA1/P0.12', 'bidirectional', 'R'),
+                PinDef('U24', 'P1.04', 'bidirectional', 'R'),
+                PinDef('V23', 'P1.03', 'bidirectional', 'R'),
+                PinDef('W1', 'VDD', 'power_in', 'T'),
+                PinDef('W24', 'P1.02', 'bidirectional', 'R'),
+                PinDef('Y2', 'VDDH', 'power_in', 'T'),
+                PinDef('Y23', 'P1.01', 'bidirectional', 'R'),
+                PinDef('EP', 'VSS', 'power_in', 'B'),
             ],
-            pin_nets={"18": "SWCLK", "19": "SWDIO", "20": "RESET_N"},
-            power_pins={"34": "VDD_3P3", "35": "GND"},
+            pin_nets={
+                "AA24": "SWCLK", "AC24": "SWDIO", "AC13": "RESET_N",
+                "A18": "DEC2_1P3", "C1": "DEC1_1P1", "D23": "DEC3_1P3",
+                "B5": "DEC4_1P3", "E24": "DEC4_1P3",
+                "B24": "HFXO_XC1", "A23": "HFXO_XC2",
+            },
+            power_pins={
+                "A22": "VDD_3P3", "B1": "VDD_3P3", "W1": "VDD_3P3",
+                "AD14": "VDD_3P3", "AD23": "VDD_3P3", "Y2": "VDD_3P3",
+                "B7": "GND", "F23": "GND", "EP": "GND",
+            },
             power_reqs=[PowerReq("VDD_3P3", 3.3, 80)],
-            bypass_caps=[BypassCap("34", "VDD_3P3", "GND", "100nF", "Capacitor_SMD:C_0402_1005Metric")],
+            bypass_caps=[
+                BypassCap("A22", "VDD_3P3", "GND", "4.7uF", "Capacitor_SMD:C_0603_1608Metric"),
+                BypassCap("A22", "VDD_3P3", "GND", "100nF", "Capacitor_SMD:C_0402_1005Metric"),
+                BypassCap("A18", "DEC2_1P3", "GND", "100nF", "Capacitor_SMD:C_0402_1005Metric"),
+                BypassCap("C1", "DEC1_1P1", "GND", "100nF", "Capacitor_SMD:C_0402_1005Metric"),
+                BypassCap("D23", "DEC3_1P3", "GND", "100nF", "Capacitor_SMD:C_0402_1005Metric"),
+                BypassCap("B5", "DEC4_1P3", "GND", "1uF", "Capacitor_SMD:C_0603_1608Metric"),
+            ],
+            explicit_no_connects={
+                "B3", "AB2", "N24", "AC5", "AD2", "AD4", "AD6",
+                "A8", "A10", "A12", "A14", "A16", "A20", "B9", "B11",
+                "B13", "B15", "B17", "B19", "D2", "F2", "G1", "H2",
+                "J1", "J24", "K2", "L1", "L24", "M2", "N1", "P2",
+                "P23", "R1", "R24", "T2", "T23", "U1", "U24", "V23",
+                "W24", "Y23", "AC9", "AC11", "AC15", "AC17", "AC19",
+                "AC21", "AD8", "AD10", "AD12", "AD16", "AD18", "AD20", "AD22",
+            },
+        )
+    )
+
+    # Generic 32 MHz HFXO crystal, used only where a design explicitly
+    # selects the package and load capacitance in its project specification.
+    reg.register(
+        ComponentDef(
+            mpn="32MHz-XTAL-CL8",
+            ref_prefix="Y",
+            value="32 MHz crystal, CL=8 pF",
+            footprint="Crystal:Crystal_SMD_3215-2Pin_3.2x1.5mm",
+            description="32 MHz HFXO crystal; prototype MPN must meet Nordic tolerance and drive requirements",
+            category="clock",
+            pins=[PinDef("1", "X1", "passive", "L"), PinDef("2", "X2", "passive", "R")],
+            pin_nets={"1": "HFXO_XC1", "2": "HFXO_XC2"},
+            bypass_caps=[
+                BypassCap(
+                    "HFXO_XC1", "HFXO_XC1", "GND", "12pF",
+                    "Capacitor_SMD:C_0402_1005Metric", role="crystal_load",
+                ),
+                BypassCap(
+                    "HFXO_XC2", "HFXO_XC2", "GND", "12pF",
+                    "Capacitor_SMD:C_0402_1005Metric", role="crystal_load",
+                ),
+            ],
         )
     )
 
@@ -2578,9 +2700,9 @@ def _builtin_components():
         ComponentDef(
             mpn="SMA-EDGE",
             ref_prefix="J",
-            value="SMA",
-            footprint="Connector_Coaxial:SMA_Amphenol_132134_EdgeMount",
-            description="RF SMA edge connector",
+            value="RP-SMA",
+            footprint="Connector_Coaxial:SMA_Amphenol_132289_EdgeMount",
+            description="Amphenol 132289RP reverse-polarity SMA end-launch connector",
             category="connector",
             pins=[
                 PinDef("1", "SIG", "passive", "R"),
@@ -2636,27 +2758,95 @@ def _builtin_components():
         )
     )
 
-    # --- MAX17048 Fuel Gauge (TDFN-8 simplified) ---
+    # --- Adafruit PID 938 SSD1306 OLED breakout module ---
+    # This is the complete 1.3-inch display breakout, not the bare SSD1306
+    # controller. Its pad IDs match Display:Adafruit_SSD1306 in the native
+    # KiCad footprint library (including the actual 8-pin header row).
+    reg.register(
+        ComponentDef(
+            mpn="ADAFRUIT-938",
+            ref_prefix="U",
+            value="Adafruit SSD1306 OLED 1.3in",
+            footprint="Display:Adafruit_SSD1306",
+            description="Adafruit PID 938 128x64 OLED breakout with 3.3V regulator and level shifting",
+            category="display",
+            source_manufacturer="Adafruit",
+            source_mpn="PID 938",
+            official_references=[
+                {
+                    "title": "Monochrome OLED Breakouts",
+                    "url": "https://learn.adafruit.com/monochrome-oled-breakouts",
+                    "note": "1.3-inch 128x64 module; 8-pad header; I2C requires its mode jumpers closed.",
+                },
+                {
+                    "title": "OLED power requirements",
+                    "url": "https://learn.adafruit.com/monochrome-oled-breakouts/power-requirements",
+                    "note": "1.3-inch modules accept 3-5V and include a regulator; modules are 5V-ready.",
+                },
+            ],
+            pins=[
+                PinDef("1", "DATA/SDA", "bidirectional", "R"),
+                PinDef("2", "CLK/SCL", "input", "R"),
+                PinDef("3", "DC/SA0", "input", "R"),
+                PinDef("4", "RST", "input", "R"),
+                PinDef("5", "CS", "input", "R"),
+                PinDef("6", "VIN", "power_in", "T"),
+                PinDef("7", "3Vo", "power_out", "T"),
+                PinDef("8", "GND", "power_in", "B"),
+            ],
+            pin_nets={
+                "1": "I2C_SDA",
+                "2": "I2C_SCL",
+                "3": "VDD_3P3",
+                "4": "OLED_RESET_N",
+            },
+            power_pins={"5": "GND", "6": "VDD_3P3", "8": "GND"},
+            power_reqs=[PowerReq("VDD_3P3", 3.3, 20)],
+            bypass_caps=[
+                BypassCap("6", "VDD_3P3", "GND", "100nF", "Capacitor_SMD:C_0402_1005Metric"),
+                BypassCap("OLED_RESET_N", "OLED_RESET_N", "GND", "100nF", "Capacitor_SMD:C_0402_1005Metric"),
+            ],
+            straps=[
+                StrapConfig(
+                    "4", "OLED_RESET_N", "VDD_3P3", "10k",
+                    "Resistor_SMD:R_0402_1005Metric", role="reset_pullup",
+                ),
+            ],
+            explicit_no_connects={"7"},
+        )
+    )
+
+    # --- MAX17048 Fuel Gauge (TDFN-8) ---
     reg.register(
         ComponentDef(
             mpn="MAX17048G+T10",
             ref_prefix="U",
             value="MAX17048",
-            footprint="Package_DFN_QFN:TDFN-8-1EP_2x3mm_P0.5mm_EP1.4x1.6mm",
+            footprint="Package_DFN_QFN:TDFN-8-1EP_2x2mm_P0.5mm_EP0.8x1.2mm",
             description="Li-ion fuel gauge",
             category="sensor",
+            datasheet_url="https://www.analog.com/media/en/technical-documentation/data-sheets/max17048-max17049.pdf",
             pins=[
-                PinDef("1", "CELL", "input", "L"),
-                PinDef("2", "GND", "power_in", "B"),
-                PinDef("3", "SCL", "input", "L"),
-                PinDef("4", "SDA", "bidirectional", "R"),
+                PinDef("1", "CTG", "input", "B"),
+                PinDef("2", "CELL", "input", "L"),
+                PinDef("3", "VDD", "power_in", "T"),
+                PinDef("4", "GND", "power_in", "B"),
                 PinDef("5", "ALRT", "output", "R"),
-                PinDef("8", "VDD", "power_in", "T"),
+                PinDef("6", "QSTRT", "input", "L"),
+                PinDef("7", "SCL", "input", "R"),
+                PinDef("8", "SDA", "bidirectional", "R"),
+                PinDef("9", "EP", "power_in", "B"),
             ],
-            pin_nets={"3": "I2C_SCL", "4": "I2C_SDA", "5": "FUEL_ALRT"},
-            power_pins={"2": "GND", "8": "VDD_3P3"},
-            power_reqs=[PowerReq("VDD_3P3", 3.3, 1)],
-            bypass_caps=[BypassCap("8", "VDD_3P3", "GND", "100nF", "Capacitor_SMD:C_0402_1005Metric")],
+            pin_nets={"2": "VBAT", "6": "QSTRT_U2", "7": "I2C_SCL", "8": "I2C_SDA"},
+            power_pins={"1": "GND", "3": "VBAT", "4": "GND", "9": "GND"},
+            explicit_no_connects={"5"},
+            power_reqs=[PowerReq("VBAT", 3.7, 1)],
+            bypass_caps=[
+                BypassCap("3", "VBAT", "GND", "100nF", "Capacitor_SMD:C_0402_1005Metric"),
+            ],
+            straps=[
+                StrapConfig("RQSTRT", "QSTRT_U2", "GND", "10k", "Resistor_SMD:R_0402_1005Metric"),
+            ],
         )
     )
 
