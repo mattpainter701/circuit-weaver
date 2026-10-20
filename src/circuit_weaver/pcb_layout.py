@@ -341,6 +341,24 @@ def _place_pcb_once(
             component.placement_layer = item["layer"]
             component.placement_geometry_status = "board_geometry"
             component.placement_reference_size_mm = item.get("reference_size_mm")
+            component.placement_native_footprint_id = item.get("footprint_id")
+            inspected_pad_geometry = item.get("pad_geometry") or []
+            inspected_pads = item.get("pads") or []
+            # Retain each native pad's net even if one geometry accessor fails;
+            # the optimizer must count that endpoint as ambiguous, not omit it.
+            component.placement_native_pad_geometry = [
+                {**(inspected_pad_geometry[index] if index < len(inspected_pad_geometry) else {}),
+                 "number": pad.get("number", f"__missing_pad_{index}"),
+                 "net": pad.get("net", ""),
+                 "known_shape": bool(index < len(inspected_pad_geometry)
+                                      and inspected_pad_geometry[index].get("known_shape") is True)}
+                for index, pad in enumerate(inspected_pads)
+            ]
+            if len(inspected_pad_geometry) != len(inspected_pads):
+                component.placement_native_pad_geometry.append({
+                    "number": "__inventory_mismatch__", "net": "", "known_shape": False,
+                })
+            component.placement_native_reference_locked = item.get("reference_locked")
             if design_component:
                 component.functional_section = design_component.functional_section
                 component.block_id = design_component.block_id

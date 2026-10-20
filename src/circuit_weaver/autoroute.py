@@ -1460,6 +1460,11 @@ def _probe_freerouting_capabilities(command: list[str], *, timeout_seconds: floa
     }
 
 
+def _freerouting_v25_or_newer(capability_probe: dict[str, Any] | None) -> bool:
+    match = re.match(r"(\d+)\.(\d+)", str((capability_probe or {}).get("version") or ""))
+    return bool(match and tuple(map(int, match.groups())) >= (2, 5))
+
+
 def _modern_router(capability_probe: dict[str, Any] | None) -> bool:
     match = re.match(r"(\d+)\.(\d+)", str((capability_probe or {}).get("version") or ""))
     return bool(match and tuple(map(int, match.groups())) >= (2, 4))
@@ -1529,14 +1534,24 @@ def _route_specctra(
                 "--router.fanout.enabled=false",
             ]
         )
+    v25_or_newer = _freerouting_v25_or_newer(capability_probe)
     if optimization_threads is not None:
-        routing_command.extend(["-mt", str(optimization_threads)])
+        if _modern_router(capability_probe) and optimization_threads == 0:
+            routing_command.append("--router.optimizer.enabled=false")
+        elif _modern_router(capability_probe):
+            routing_command.append(
+                f"--router.optimizer.max_threads={optimization_threads}"
+            )
+        else:
+            routing_command.extend(["-mt", str(optimization_threads)])
     if optimizer_strategy is not None:
-        routing_command.extend(["-us", optimizer_strategy])
-    if optimizer_hybrid_ratio is not None:
+        strategy = "GLOBAL_OPTIMAL" if v25_or_newer and optimizer_strategy == "global" else optimizer_strategy
+        routing_command.extend(["-us", strategy.upper() if v25_or_newer else strategy])
+    if optimizer_hybrid_ratio is not None and not v25_or_newer:
         routing_command.extend(["-hr", optimizer_hybrid_ratio])
     if optimizer_item_selection is not None:
-        routing_command.extend(["-is", optimizer_item_selection])
+        selection = optimizer_item_selection.upper() if v25_or_newer else optimizer_item_selection
+        routing_command.extend(["-is", selection])
     if optimizer_improvement_threshold is not None:
         if _modern_router(capability_probe):
             routing_command.append(f"--router.optimizer.improvement_threshold={optimizer_improvement_threshold}")
@@ -1841,9 +1856,18 @@ def _route_candidates(
                     and attempt_options.get("optimizer_strategy") is None
                     and (not native_placement_portfolio or attempt_options.get("optimization_threads") not in {None, 0})
                 ):
-                    strategy = ("greedy", "global", "hybrid")[index % 3]
-                    attempt_options["optimizer_strategy"] = strategy
-                    attempt_options["optimizer_hybrid_ratio"] = "1:1" if strategy == "hybrid" else None
+                    if _freerouting_v25_or_newer(options.get("capability_probe")):
+                        # v2.5 removed the legacy GREEDY/HYBRID/RANDOM modes. Vary
+                        # only supported item ordering while keeping GLOBAL_OPTIMAL.
+                        attempt_options["optimizer_strategy"] = "global"
+                        if attempt_options.get("optimizer_item_selection") is None:
+                            attempt_options["optimizer_item_selection"] = (
+                                "sequential" if index % 2 == 0 else "prioritized"
+                            )
+                    else:
+                        strategy = ("greedy", "global", "hybrid")[index % 3]
+                        attempt_options["optimizer_strategy"] = strategy
+                        attempt_options["optimizer_hybrid_ratio"] = "1:1" if strategy == "hybrid" else None
                 remaining = deadline - time.perf_counter()
                 if remaining <= 0:
                     break
@@ -2072,6 +2096,21 @@ def autoroute_pcb(
         freerouting_command,
         timeout_seconds=min(timeout_seconds, 10),
     )
+    if _freerouting_v25_or_newer(capability_probe):
+        if optimizer_strategy in {"greedy", "hybrid"}:
+            return _result_error(
+                f"Freerouting {capability_probe['version']} removed optimizer_strategy={optimizer_strategy!r}; "
+                "use 'global' or omit the strategy."
+            )
+        if optimizer_hybrid_ratio is not None:
+            return _result_error(
+                f"Freerouting {capability_probe['version']} removed -hr; omit optimizer_hybrid_ratio."
+            )
+        if optimizer_item_selection == "random":
+            return _result_error(
+                f"Freerouting {capability_probe['version']} removed random optimizer item selection; "
+                "use 'sequential' or 'prioritized'."
+            )
     if seed is not None and (not capability_probe["probe_ok"] or not capability_probe["seed"]):
         return _result_error(
             "The installed Freerouting build does not advertise -random_seed; "

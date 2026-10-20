@@ -1013,7 +1013,15 @@ class TestAutoroute:
             ["J1", "R1"], ["R1", "J1"], ["R1", "J1"],
         ]
         assert [row["optimizer_strategy"] for row in result["search"]["attempts"]] == optimizer_strategies
-        assert all(command[command.index("-mt") + 1] == str(optimization_threads) for command in route_commands)
+        if optimization_threads == 0:
+            assert all("--router.optimizer.enabled=false" in command for command in route_commands)
+            assert all("-mt" not in command for command in route_commands)
+        else:
+            assert all(
+                f"--router.optimizer.max_threads={optimization_threads}" in command
+                for command in route_commands
+            )
+            assert all("-mt" not in command for command in route_commands)
         assert [
             command[command.index("-us") + 1] if "-us" in command else None
             for command in route_commands
@@ -1501,3 +1509,121 @@ def test_current_router_final_scores_and_geometry_counts(tmp_path):
     assert result["stats"]["vias"] == 0
     assert result["stats"]["traces"] == 2
     assert not list(tmp_path.glob(".cw-router-*"))
+
+
+class TestFreerouting25CompatibilityProposal:
+    @pytest.mark.parametrize("version", ["2.4.1", "2.5.0"])
+    def test_modern_zero_threads_explicitly_disables_optimizer_stage(self, tmp_path, version):
+        dsn = _write_dsn(tmp_path)
+        with mock.patch(
+            "subprocess.run", side_effect=_fake_freerouting_success(_routing_output())
+        ) as run:
+            result = _route_specctra(
+                dsn, tmp_path / f"modern-{version}.ses", ["freerouting"], passes=10,
+                timeout_seconds=30, overwrite=False, headless=True, optimization_threads=0,
+                optimizer_strategy=None, optimizer_hybrid_ratio=None,
+                optimizer_item_selection=None, optimizer_improvement_threshold=None, seed=None,
+                capability_probe={"version": version, "probe_ok": True, "seed": False},
+            )
+        assert result["status"] == "ok"
+        command = run.call_args.args[0]
+        assert "--router.optimizer.enabled=false" in command
+        assert "-mt" not in command
+        assert "-us" not in command and "-is" not in command and "-hr" not in command
+        assert "--router.fanout.enabled=false" in command
+        assert "--router.automatic_neckdown=false" in command
+
+    @pytest.mark.parametrize("threads", [0, 2])
+    def test_legacy_thread_count_keeps_legacy_flag(self, tmp_path, threads):
+        dsn = _write_dsn(tmp_path)
+        with mock.patch(
+            "subprocess.run", side_effect=_fake_freerouting_success(_routing_output())
+        ) as run:
+            result = _route_specctra(
+                dsn, tmp_path / "legacy.ses", ["freerouting"], passes=10,
+                timeout_seconds=30, overwrite=False, headless=True, optimization_threads=threads,
+                optimizer_strategy=None, optimizer_hybrid_ratio=None,
+                optimizer_item_selection=None, optimizer_improvement_threshold=None, seed=None,
+                capability_probe={"version": "2.3.0", "probe_ok": True, "seed": False},
+            )
+        assert result["status"] == "ok"
+        command = run.call_args.args[0]
+        assert command[command.index("-mt") + 1] == str(threads)
+        assert "--router.optimizer.enabled=false" not in command
+        assert not any(arg.startswith("--router.optimizer.max_threads=") for arg in command)
+
+    @pytest.mark.parametrize("version", ["2.4.1", "2.5.0"])
+    @pytest.mark.parametrize("threads", [1, 2])
+    def test_modern_positive_thread_count_sets_nested_optimizer_cap(
+        self, tmp_path, version, threads
+    ):
+        dsn = _write_dsn(tmp_path)
+        with mock.patch(
+            "subprocess.run", side_effect=_fake_freerouting_success(_routing_output())
+        ) as run:
+            result = _route_specctra(
+                dsn, tmp_path / f"modern-{version}-{threads}.ses", ["freerouting"], passes=10,
+                timeout_seconds=30, overwrite=False, headless=True, optimization_threads=threads,
+                optimizer_strategy=None, optimizer_hybrid_ratio=None,
+                optimizer_item_selection=None, optimizer_improvement_threshold=None, seed=None,
+                capability_probe={"version": version, "probe_ok": True, "seed": False},
+            )
+        assert result["status"] == "ok"
+        command = run.call_args.args[0]
+        assert f"--router.optimizer.max_threads={threads}" in command
+        assert "-mt" not in command
+        assert "--router.optimizer.enabled=false" not in command
+
+    def test_v25_canonical_optimizer_modes_and_removed_modes_rejected_before_route(self, tmp_path):
+        dsn = _write_dsn(tmp_path)
+        help_result = mock.Mock(returncode=0, stdout="Freerouting v2.5.0", stderr="")
+        for kwargs, expected in [
+            ({"optimizer_strategy": "greedy"}, "removed"),
+            ({"optimizer_strategy": "hybrid", "optimizer_hybrid_ratio": "1:1"}, "removed"),
+            ({"optimizer_item_selection": "random"}, "removed"),
+        ]:
+            with mock.patch("circuit_weaver.autoroute._find_freerouting_command", return_value=["freerouting"]):
+                with mock.patch("subprocess.run", return_value=help_result) as run:
+                    result = autoroute_pcb(dsn, **kwargs)
+            assert result["status"] == "error"
+            assert expected in result["message"]
+            assert run.call_count == 1  # capability probe only; no route launch
+
+        with mock.patch(
+            "subprocess.run", side_effect=_fake_freerouting_success(_routing_output())
+        ) as run:
+            result = _route_specctra(
+                dsn, tmp_path / "canonical.ses", ["freerouting"], passes=10,
+                timeout_seconds=30, overwrite=False, headless=True, optimization_threads=2,
+                optimizer_strategy="global", optimizer_hybrid_ratio=None,
+                optimizer_item_selection="prioritized", optimizer_improvement_threshold=None,
+                seed=None, capability_probe={"version": "2.5.0", "probe_ok": True, "seed": False},
+            )
+        assert result["status"] == "ok"
+        command = run.call_args.args[0]
+        assert command[command.index("-us") + 1] == "GLOBAL_OPTIMAL"
+        assert command[command.index("-is") + 1] == "PRIORITIZED"
+
+    def test_seedless_v25_portfolio_uses_supported_modes_only(self, tmp_path):
+        dsn = _write_dsn(tmp_path)
+        calls = []
+
+        def fake_route(_dsn, output, _command, **options):
+            calls.append(options)
+            Path(output).write_text(VALID_SES, encoding="utf-8")
+            return {"status": "error", "message": "diagnostic; no accepted candidate"}
+
+        with mock.patch.object(autoroute_module, "_route_specctra", side_effect=fake_route):
+            autoroute_module._route_candidates(
+                dsn, tmp_path / "portfolio.ses", ["freerouting"], attempts=3,
+                timeout_seconds=30, overwrite=False, seed=None, passes=10, headless=True,
+                optimization_threads=1, optimizer_strategy=None, optimizer_hybrid_ratio=None,
+                optimizer_item_selection=None, optimizer_improvement_threshold=None,
+                capability_probe={"version": "2.5.0", "probe_ok": True, "seed": False},
+                clearance_baseline=None,
+            )
+        assert [call["optimizer_strategy"] for call in calls] == ["global"] * 3
+        assert [call["optimizer_item_selection"] for call in calls] == [
+            "sequential", "prioritized", "sequential"
+        ]
+        assert all(call["optimizer_hybrid_ratio"] is None for call in calls)

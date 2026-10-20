@@ -212,6 +212,9 @@ class ComponentPlacement:
     pin_offsets: dict[str, tuple[float, float]] | None = None
     pin_nets: dict[str, str] | None = None
     reference_size_mm: tuple[float, float] | None = None
+    native_footprint_id: str = ""
+    native_pad_geometry: list[dict[str, Any]] | None = None
+    native_reference_locked: bool | None = None
 
 
 @dataclass
@@ -761,6 +764,9 @@ def _init_placements(
             pin_offsets=getattr(comp, "placement_pin_offsets", None),
             pin_nets=pin_nets,
             reference_size_mm=getattr(comp, "placement_reference_size_mm", None),
+            native_footprint_id=str(getattr(comp, "placement_native_footprint_id", "") or ""),
+            native_pad_geometry=getattr(comp, "placement_native_pad_geometry", None),
+            native_reference_locked=getattr(comp, "placement_native_reference_locked", None),
             geometry_status=str(getattr(comp, "placement_geometry_status", "estimated") or "estimated"),
         )
         placements.append(placement)
@@ -2724,6 +2730,373 @@ def _routing_estimate(state: list[ComponentPlacement], components: list[Componen
     }
 
 
+_CONNECTOR_SLOT_REFINEMENT_MAX_GROUP_SIZE = 256
+
+
+def _native_slot_geometry_signature(placement: ComponentPlacement) -> tuple[Any, ...] | None:
+    """Fail closed unless exact native footprint and pad geometry are available."""
+    if placement.geometry_status != "board_geometry" or not placement.native_footprint_id:
+        return None
+    pads = placement.native_pad_geometry
+    offsets = placement.pin_offsets
+    nets = placement.pin_nets
+    if not isinstance(pads, list) or not pads or not isinstance(offsets, dict) or not isinstance(nets, dict):
+        return None
+    numbers = [str(row.get("number", "")) for row in pads if isinstance(row, dict)]
+    if len(numbers) != len(pads) or not all(numbers) or len(numbers) != len(set(numbers)):
+        return None
+    if set(numbers) != set(offsets) or set(numbers) != set(nets):
+        return None
+    normalized = []
+    for row in sorted(pads, key=lambda item: str(item["number"])):
+        if row.get("known_shape") is not True:
+            return None
+        try:
+            size = tuple(int(value) for value in row["size_iu"])
+            drill = tuple(int(value) for value in row["drill_iu"])
+            layers = tuple(sorted(int(value) for value in row["layers"]))
+            local = tuple(int(value) for value in row["local_position_iu"])
+            offset = tuple(int(value) for value in row["offset_iu"])
+            orientation = round(float(row["local_orientation_deg"]) % 360.0, 6)
+            shape = int(row["shape"])
+            attribute = int(row["attribute"])
+            drill_shape = int(row["drill_shape"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None
+        if len(size) != 2 or len(drill) != 2 or len(local) != 2 or len(offset) != 2 or not layers:
+            return None
+        # Circle, rectangle and oval are fully described by dimensions and
+        # local angle here. Reject shape families needing extra parameters.
+        if shape not in {0, 1, 2} or offset != (0, 0):
+            return None
+        normalized.append((str(row["number"]), shape, attribute, size, drill,
+                           drill_shape, layers, orientation, local, offset))
+    try:
+        courtyard = (round(float(placement.width), 6), round(float(placement.height), 6))
+        rotation = round(float(placement.rotation) % 360.0, 6)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return (placement.native_footprint_id, courtyard, placement.layer, rotation, tuple(normalized))
+
+
+def _slot_hungarian(costs: list[list[float]]) -> list[int]:
+    """Return deterministic minimum-cost column per row (square finite matrix)."""
+    n = len(costs)
+    if any(len(row) != n for row in costs):
+        raise ValueError("slot assignment cost matrix must be square")
+    if any(not math.isfinite(float(cost)) for row in costs for cost in row):
+        raise ValueError("slot assignment costs must all be finite")
+    if n == 0:
+        return []
+    u, v = [0.0] * (n + 1), [0.0] * (n + 1)
+    p, way = [0] * (n + 1), [0] * (n + 1)
+    for i in range(1, n + 1):
+        p[0] = i
+        j0 = 0
+        minimum = [math.inf] * (n + 1)
+        used = [False] * (n + 1)
+        while True:
+            used[j0] = True
+            i0 = p[j0]
+            delta, j1 = math.inf, 0
+            for j in range(1, n + 1):
+                if used[j]:
+                    continue
+                current = costs[i0 - 1][j - 1] - u[i0] - v[j]
+                if current < minimum[j] - 1e-12:
+                    minimum[j], way[j] = current, j0
+                if minimum[j] < delta - 1e-12 or (abs(minimum[j] - delta) <= 1e-12 and j < j1):
+                    delta, j1 = minimum[j], j
+            for j in range(n + 1):
+                if used[j]:
+                    u[p[j]] += delta
+                    v[j] -= delta
+                else:
+                    minimum[j] -= delta
+            j0 = j1
+            if p[j0] == 0:
+                break
+        while True:
+            j1 = way[j0]
+            p[j0] = p[j1]
+            j0 = j1
+            if j0 == 0:
+                break
+    assignment = [0] * n
+    for j in range(1, n + 1):
+        assignment[p[j] - 1] = j - 1
+    return assignment
+
+
+def _native_support_family_root(
+    ref: str,
+    by_ref: dict[str, ComponentPlacement],
+    parent_refs: dict[str, set[str]],
+) -> str | None:
+    """Resolve an external net endpoint to a known nonconnector ownership root."""
+    seen: set[str] = set()
+    current = by_ref.get(ref)
+    if current is None or current.category == "connector":
+        return None
+    while True:
+        parents = parent_refs.get(current.ref, set())
+        if len(parents) > 1:
+            return None
+        parent_ref = next(iter(parents), "")
+        if not parent_ref:
+            break
+        if current.ref in seen:
+            return None
+        seen.add(current.ref)
+        parent = by_ref.get(parent_ref)
+        if parent is None or parent.category == "connector":
+            return None
+        current = parent
+    return current.ref if current.ref not in seen and current.category != "connector" else None
+
+
+def _refine_interchangeable_connector_slots(
+    components: list[ComponentDef],
+    state: list[ComponentPlacement],
+    config: PlacementConfig,
+    pairs: dict[tuple[str, str], float],
+    plan: _ConstraintPlan,
+    *,
+    max_group_size: int = _CONNECTOR_SLOT_REFINEMENT_MAX_GROUP_SIZE,
+) -> tuple[list[ComponentPlacement], dict[str, Any]]:
+    """Assign eligible native connector references to existing equivalent slots.
+
+    No geometry is invented: a complete interchangeable component placement is
+    permuted among its group's already occupied slots. The caller's ordinary
+    whole-placement rank is the sole acceptance test.
+    """
+    metadata: dict[str, Any] = {
+        "algorithm": "native_private_net_support_family_euclidean_hungarian",
+        "max_group_size": max_group_size,
+        "assignment_complexity_bound": "O(n^3) Hungarian per group",
+        "execution_order": "final candidate after all annealing and refinement restarts",
+        "groups": [],
+        "eligible_component_count": 0,
+        "moved_refs": [],
+        "geometry_multiset_preserved": True,
+        "accepted": False,
+    }
+    if max_group_size < 1:
+        raise ValueError("max_group_size must be positive")
+    by_ref = {placement.ref: placement for placement in state}
+    comp_by_ref = {comp.source_ref: comp for comp in components if comp.source_ref}
+    parent_refs: dict[str, set[str]] = {}
+    for comp in components:
+        ref = str(getattr(comp, "source_ref", "") or "")
+        parent_ref = str(getattr(comp, "placement_parent_ref", "") or "")
+        if ref and parent_ref:
+            parent_refs.setdefault(ref, set()).add(parent_ref)
+    for placement in state:
+        if placement.parent_ref:
+            parent_refs.setdefault(placement.ref, set()).add(str(placement.parent_ref))
+    parented = {parent for parents in parent_refs.values() for parent in parents}
+    parented.discard("")
+    # Count endpoints only from complete native pad inventories. If one board
+    # footprint has duplicate/missing pad identity, missing offsets, or a net
+    # map disagreement, all nets it touches become ambiguous and cannot be
+    # treated as private/shared from a partial count.
+    net_endpoints: dict[str, list[tuple[str, str, tuple[float, float]]]] = {}
+    ambiguous_nets: set[str] = set()
+    complete_refs: set[str] = set()
+    for placement in state:
+        rows = placement.native_pad_geometry
+        native_nets: dict[str, str] = {}
+        implicated = {str(net) for net in (placement.pin_nets or {}).values() if net}
+        duplicate = False
+        if isinstance(rows, list) and rows:
+            numbers = []
+            for row in rows:
+                if not isinstance(row, dict) or "number" not in row or "net" not in row:
+                    duplicate = True
+                    continue
+                number, net = str(row["number"]), str(row["net"] or "")
+                implicated.update({net} if net else set())
+                numbers.append(number)
+                if number in native_nets:
+                    duplicate = True
+                native_nets[number] = net
+            connected_native = {number: net for number, net in native_nets.items() if net}
+            valid = (
+                not duplicate and len(numbers) == len(set(numbers))
+                and placement.pin_offsets is not None
+                and set(numbers) == set(placement.pin_offsets)
+                and connected_native == (placement.pin_nets or {})
+            )
+        else:
+            valid = False
+        if valid:
+            complete_refs.add(placement.ref)
+        else:
+            ambiguous_nets.update(implicated)
+    for placement in state:
+        if placement.ref not in complete_refs:
+            continue
+        for row in placement.native_pad_geometry or []:
+            pad_number, net = str(row["number"]), str(row["net"] or "")
+            offset = (placement.pin_offsets or {}).get(pad_number)
+            if not net:
+                continue
+            if offset is None:
+                ambiguous_nets.add(net)
+                continue
+            try:
+                local = (float(offset[0]), float(offset[1]))
+            except (TypeError, ValueError, IndexError):
+                ambiguous_nets.add(net)
+                continue
+            net_endpoints.setdefault(net, []).append((placement.ref, pad_number, local))
+
+    buckets: dict[tuple[Any, ...], list[ComponentPlacement]] = {}
+    private_endpoints: dict[str, list[tuple[str, str, tuple[float, float]]]] = {}
+    private_pad_numbers: dict[str, str] = {}
+    ineligible_reasons: dict[str, int] = {}
+    for placement in sorted(state, key=lambda row: row.ref):
+        comp = comp_by_ref.get(placement.ref)
+        reason = None
+        if comp is None or placement.category != "connector":
+            reason = "not_native_connector_inventory"
+        elif _native_slot_geometry_signature(placement) is None:
+            reason = "incomplete_or_unknown_native_geometry"
+        elif placement.native_reference_locked is not False:
+            reason = "native_reference_lock_unknown_or_locked"
+        elif (placement.locked or placement.constraint_locked or placement.edge_constrained
+              or placement.rotation_locked or placement.ref in plan.fixed or placement.ref in plan.edges):
+            reason = "authored_mechanical_constraint"
+        elif placement.parent_ref or placement.ref in parented:
+            reason = "owned_support_family"
+        elif any(affinity["target"] == placement.ref or affinity["near"] == placement.ref
+                 for affinity in plan.affinities):
+            reason = "authored_affinity_constraint"
+        else:
+            pads = placement.native_pad_geometry or []
+            private = []
+            for pad in pads:
+                number = str(pad.get("number", ""))
+                net = str((placement.pin_nets or {}).get(number, "") or "")
+                ends = net_endpoints.get(net, []) if net and net not in ambiguous_nets else []
+                source_count = sum(ref == placement.ref for ref, _, _ in ends)
+                external = [endpoint for endpoint in ends if endpoint[0] != placement.ref]
+                support_roots = {
+                    _native_support_family_root(ref, by_ref, parent_refs)
+                    for ref, _, _ in external
+                }
+                if (net and source_count == 1 and external and None not in support_roots
+                        and len(support_roots) == 1):
+                    private.append((number, net, ends))
+            if len(private) != 1:
+                reason = "requires_exactly_one_private_pad_net"
+        if reason:
+            ineligible_reasons[reason] = ineligible_reasons.get(reason, 0) + 1
+            continue
+        private_number, _private_net, ends = private[0]
+        external = [endpoint for endpoint in ends if endpoint[0] != placement.ref]
+        if (not external or any(ref not in by_ref or by_ref[ref].geometry_status != "board_geometry"
+                                for ref, _pad, _offset in external)):
+            ineligible_reasons["private_net_external_pad_missing"] = ineligible_reasons.get(
+                "private_net_external_pad_missing", 0) + 1
+            continue
+        support_family_root = _native_support_family_root(
+            external[0][0], by_ref, parent_refs
+        )
+        if (support_family_root is None or any(
+                _native_support_family_root(ref, by_ref, parent_refs) != support_family_root
+                for ref, _pad, _offset in external)):
+            ineligible_reasons["private_net_support_family_mismatch"] = ineligible_reasons.get(
+                "private_net_support_family_mismatch", 0) + 1
+            continue
+        shared_map = tuple(sorted(
+            (str(row["number"]), str((placement.pin_nets or {}).get(str(row["number"]), "")))
+            for row in (placement.native_pad_geometry or []) if str(row["number"]) != private_number
+        ))
+        if any(not net or net in ambiguous_nets or len(net_endpoints.get(net, [])) < 2
+               for _, net in shared_map):
+            ineligible_reasons["shared_pad_net_missing"] = ineligible_reasons.get(
+                "shared_pad_net_missing", 0) + 1
+            continue
+        signature = _native_slot_geometry_signature(placement)
+        group_key = (signature, private_number, shared_map)
+        buckets.setdefault(group_key, []).append(placement)
+        private_endpoints[placement.ref] = external
+        private_pad_numbers[placement.ref] = private_number
+    metadata["ineligible_reasons"] = ineligible_reasons
+    metadata["eligible_component_count"] = sum(len(group) for group in buckets.values())
+    candidate = [replace(placement) for placement in state]
+    candidate_by_ref = {placement.ref: placement for placement in candidate}
+    slot_rows = {placement.ref: (placement.x, placement.y, placement.rotation, placement.layer)
+                 for placement in state}
+    assignment_rows = []
+    for group_key, group in sorted(buckets.items(), key=lambda item: repr(item[0])):
+        refs = sorted(row.ref for row in group)
+        if len(refs) < 2:
+            continue
+        if len(refs) > max_group_size:
+            metadata["groups"].append({"size": len(refs), "skipped": "group_size_limit"})
+            continue
+        slots = [slot_rows[ref] for ref in refs]
+        cost_matrix = []
+        for ref in refs:
+            owner_points = [
+                _rotated_local_endpoint(by_ref[owner_ref], owner_offset)
+                for owner_ref, _owner_pad, owner_offset in private_endpoints[ref]
+            ]
+            row_costs = []
+            for slot_x, slot_y, slot_rotation, _slot_layer in slots:
+                angle = math.radians(slot_rotation)
+                local_offset = candidate_by_ref[ref].pin_offsets[private_pad_numbers[ref]]
+                slot_pad_x = slot_x + local_offset[0] * math.cos(angle) + local_offset[1] * math.sin(angle)
+                slot_pad_y = slot_y - local_offset[0] * math.sin(angle) + local_offset[1] * math.cos(angle)
+                row_costs.append(sum(math.hypot(owner_x - slot_pad_x, owner_y - slot_pad_y)
+                                     for owner_x, owner_y in owner_points))
+            cost_matrix.append(row_costs)
+        columns = _slot_hungarian(cost_matrix)
+        mapping = {ref: refs[columns[index]] for index, ref in enumerate(refs)}
+        baseline_euclidean = sum(cost_matrix[index][index] for index in range(len(refs)))
+        assigned_euclidean = sum(cost_matrix[index][columns[index]] for index in range(len(refs)))
+        group_slots_before = sorted(slot_rows[ref] for ref in refs)
+        for ref, slot_ref in mapping.items():
+            slot = slot_rows[slot_ref]
+            moved = candidate_by_ref[ref]
+            moved.x, moved.y, moved.rotation, moved.layer = slot
+            if ref != slot_ref:
+                assignment_rows.append({"ref": ref, "from_slot_ref": ref, "to_slot_ref": slot_ref})
+        group_slots_after = sorted((candidate_by_ref[ref].x, candidate_by_ref[ref].y,
+                                    candidate_by_ref[ref].rotation, candidate_by_ref[ref].layer)
+                                   for ref in refs)
+        metadata["geometry_multiset_preserved"] &= group_slots_before == group_slots_after
+        metadata["groups"].append({"size": len(refs), "mapping": mapping,
+                                   "matching_cost_evaluations": len(refs) * sum(
+                                       len(private_endpoints[ref]) for ref in refs),
+                                   "cost_matrix_entries": len(refs) ** 2,
+                                   "assignment_cubic_size_bound": len(refs) ** 3,
+                                   "euclidean_cost_before_mm": baseline_euclidean,
+                                   "euclidean_cost_after_mm": assigned_euclidean})
+    if not assignment_rows:
+        metadata["candidate_rank"] = None
+        metadata["baseline_rank"] = None
+        return state, metadata
+    if not metadata["geometry_multiset_preserved"]:
+        metadata["candidate_rank"] = None
+        metadata["baseline_rank"] = None
+        metadata["accepted"] = False
+        metadata["rejected_reason"] = "slot_geometry_multiset_changed"
+        return state, metadata
+    baseline_rank = _placement_rank(state, config, pairs, plan)
+    candidate_rank = _placement_rank(candidate, config, pairs, plan)
+    metadata["baseline_rank"] = {"hard_defects": baseline_rank[0], "cost": baseline_rank[1]}
+    metadata["candidate_rank"] = {"hard_defects": candidate_rank[0], "cost": candidate_rank[1]}
+    metadata["moved_refs"] = sorted(row["ref"] for row in assignment_rows)
+    metadata["assignment"] = assignment_rows
+    metadata["accepted"] = candidate_rank < baseline_rank
+    if not metadata["accepted"]:
+        metadata["rejected_reason"] = "ordinary_placement_rank_not_improved"
+    return (candidate if metadata["accepted"] else state), metadata
+
+
 def optimize_placement(
     components: list[ComponentDef],
     *,
@@ -2893,6 +3266,15 @@ def optimize_placement(
         if rank < winner_rank:
             winner, winner_rank = candidate, rank
             winner_index, winner_moves = restart + 1, moved
+    slot_refined, slot_metadata = _refine_interchangeable_connector_slots(
+        components, winner, config, connectivity_pairs, constraint_plan,
+    )
+    if slot_metadata["accepted"]:
+        winner = slot_refined
+        winner_rank = _placement_rank(winner, config, connectivity_pairs, constraint_plan)
+        winner_index = len(trials)
+        trials.append({"candidate": winner_index, "kind": "native_connector_slot_refinement",
+                       "defects": winner_rank[0], "cost": round(winner_rank[1], 2), "iterations": 0})
     result = _build_result(
         winner,
         config,
@@ -2924,6 +3306,7 @@ def optimize_placement(
             "legalization_moves": relaxed_moves,
         },
         "candidates": trials,
+        "native_connector_slot_refinement": slot_metadata,
     }
     result["routing_estimate"] = {
         "initial": _routing_estimate(baseline, components),

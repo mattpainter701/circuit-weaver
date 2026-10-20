@@ -146,6 +146,37 @@ def _inspect(board, pcbnew):
         pads = [{"number": p.GetNumber(), "net": p.GetNetname(),
                  "x": pcbnew.ToMM(p.GetPosition().x), "y": pcbnew.ToMM(p.GetPosition().y)}
                 for p in footprint.Pads()]
+        pad_geometry = []
+        for pad in footprint.Pads():
+            try:
+                layers = sorted(int(layer) for layer in pad.GetLayerSet().Seq())
+                local_orientation = (float(pad.GetOrientationDegrees()) - float(rotation)) % 360.0
+                pad_geometry.append({
+                    "number": pad.GetNumber(),
+                    "net": pad.GetNetname(),
+                    "shape": int(pad.GetShape()),
+                    "attribute": int(pad.GetAttribute()),
+                    "size_iu": [int(pad.GetSize().x), int(pad.GetSize().y)],
+                    "drill_iu": [int(pad.GetDrillSize().x), int(pad.GetDrillSize().y)],
+                    "drill_shape": int(pad.GetDrillShape()),
+                    "layers": layers,
+                    "local_orientation_deg": round(local_orientation, 6),
+                    "offset_iu": [int(pad.GetOffset().x), int(pad.GetOffset().y)],
+                    "local_position_iu": [
+                        round((pad.GetPosition().x - position.x) * math.cos(math.radians(rotation))
+                                  - (pad.GetPosition().y - position.y) * math.sin(math.radians(rotation))),
+                        round((pad.GetPosition().x - position.x) * math.sin(math.radians(rotation))
+                                  + (pad.GetPosition().y - position.y) * math.cos(math.radians(rotation))),
+                    ],
+                    "known_shape": int(pad.GetShape()) in {
+                        int(getattr(pcbnew, name)) for name in (
+                            "PAD_SHAPE_CIRCLE", "PAD_SHAPE_RECT", "PAD_SHAPE_OVAL")
+                        if hasattr(pcbnew, name)
+                    },
+                })
+            except (AttributeError, TypeError, ValueError):
+                pad_geometry.append({"number": pad.GetNumber(), "net": pad.GetNetname(),
+                                     "known_shape": False})
         fields = [footprint.Reference(), footprint.Value(), *list(footprint.GetFields())]
         field_state = []
         seen_fields = set()
@@ -193,9 +224,11 @@ def _inspect(board, pcbnew):
             field.SetTextAngleDegrees(text_angle)
         footprints.append({
             "ref": footprint.GetReference(), "footprint": str(footprint.GetFPID().GetLibItemName()),
+            "footprint_id": footprint.GetFPIDAsString(), "pad_geometry": pad_geometry,
             "x": pcbnew.ToMM(position.x), "y": pcbnew.ToMM(position.y), "rotation": rotation,
             "layer": "back" if footprint.GetLayer() == pcbnew.B_Cu else "front",
-            "locked": footprint.IsLocked(), "width": pcbnew.ToMM(width), "height": pcbnew.ToMM(height),
+            "locked": footprint.IsLocked(), "reference_locked": reference_field.IsLocked(),
+            "width": pcbnew.ToMM(width), "height": pcbnew.ToMM(height),
             "courtyard_width": pcbnew.ToMM(courtyard_width),
             "courtyard_height": pcbnew.ToMM(courtyard_height),
             "courtyard_center_x": pcbnew.ToMM(courtyard_center_x),

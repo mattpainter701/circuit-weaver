@@ -66,6 +66,17 @@ The candidate is legalized and selected only if the same hard-defect-first rank
 improves on the original baseline; the report retains both ranks. This starting
 layout does not resize the board or alter nets, footprints, fonts or constraints.
 
+After the ordinary search, a bounded assignment candidate can exchange existing
+slots among native connectors with matching footprint, pad geometry, rotation,
+side and shared-pad nets. Each connector must have one private signal pad whose
+other endpoints belong to one known support family. The candidate minimizes
+summed native pad distances and must improve the ordinary placement rank.
+Locked fields, authored constraints, owned support children and incomplete or
+ambiguous native geometry exclude a connector. Groups above 256 parts are skipped.
+References and pad nets stay attached to their original components; native label
+cleanup and DRC still gate publication. The distance objective estimates routing
+effort and does not prove routed length or electrical performance.
+
 Fixed components reserve space first, including fixed support parts. Movable
 support parts follow owners displaced during legalization. The edge-to-edge gap
 is split between courtyard envelopes, and non-orthogonal rotations use a
@@ -173,7 +184,7 @@ increases runtime. Use fewer restarts/refinement passes when latency matters.
 circuit-weaver autoroute board.dsn --attempts 3 --timeout 600 -o selected.ses
 ```
 
-The default remains one attempt. For native KiCad boards, the first attempt uses
+The default remains one attempt. With multiple attempts on native KiCad boards, the first uses
 stable footprint-reference order in an isolated DSN copy; later attempts also try
 descending reference order and the original export order. Shared-image placement
 records follow the same order. Only declaration order changes: pad geometry,
@@ -181,8 +192,11 @@ coordinates, net assignments, outlines, and routing rules remain intact. Search
 evidence records the actual order used. The original exported DSN is preserved.
 
 Builds advertising `-random_seed` use consecutive seeds (zero-based if unspecified).
-Other builds cycle through greedy, global, and hybrid optimizer strategies unless
-a strategy was explicitly selected. Those strategies affect enabled optimization;
+Other builds cycle through supported optimizer settings unless a strategy was
+explicitly selected. Older engines use greedy, global and hybrid modes;
+Freerouting 2.5+ uses global optimization with sequential or prioritized item
+ordering and rejects removed greedy, hybrid and random modes before routing.
+Those strategies affect enabled optimization;
 they provide no primary-routing variation when optimizer threads are zero.
 Native declaration-order variants provide that variation without enabling the
 optimizer. Direct caller-provided DSNs are routed unchanged. An explicit seed
@@ -191,6 +205,11 @@ other multiple-attempt runs default to one optimizer thread. The timeout is a sh
 budget for routing attempts; capability probes and optional DSN export have
 their existing separate limits. Each attempt receives the remaining time divided
 by the remaining attempts, so time saved by early completion can be reused.
+
+On Freerouting 2.4+, zero optimizer threads explicitly sets
+`--router.optimizer.enabled=false`; a positive count sets the nested optimizer
+thread cap. The legacy `-mt` spelling alone does not reliably control the modern
+optimizer stage or its worker pool. Older engines retain their legacy flags.
 
 Each candidate must pass existing SES syntax, semantic, source correlation,
 connection-statistics, and reported-clearance checks. Candidates with clearance
