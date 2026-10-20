@@ -12,6 +12,7 @@ stdout, so tool calls are isolated to keep the stdio protocol stream clean.
 from __future__ import annotations
 
 import contextlib
+import copy
 import io
 import json
 import logging
@@ -20,7 +21,7 @@ import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 _logger = logging.getLogger(__name__)
 _STDOUT_LOCK = threading.RLock()
@@ -65,8 +66,11 @@ def _load_spec_json(spec_json: str) -> dict[str, Any]:
     return spec
 
 
-def _validate_design_tool(spec_json: str) -> str:
+def _validate_design_tool(spec_json: str, detail_level: Literal["summary", "full"] = "summary") -> str:
     """Validate a Circuit Weaver design spec supplied as JSON."""
+    if not isinstance(detail_level, str) or detail_level not in {"summary", "full"}:
+        return _error_json("invalid_detail_level", "detail_level must be 'summary' or 'full'")
+
     try:
         spec = _load_spec_json(spec_json)
     except json.JSONDecodeError as exc:
@@ -78,7 +82,7 @@ def _validate_design_tool(spec_json: str) -> str:
         from circuit_weaver.dispatcher import validate_design
 
         report = _call_without_stdout(validate_design, spec)
-        return _report_to_json(report)
+        return _report_to_json(report, detail_level=detail_level)
     except Exception as exc:
         _logger.exception("MCP validate_design failed")
         return _error_json("validation_failed", str(exc) or type(exc).__name__)
@@ -195,9 +199,9 @@ def _create_app() -> Any:
     mcp = FastMCP("circuit-weaver", log_level="WARNING")
 
     @mcp.tool()
-    def validate_design(spec_json: str) -> str:
-        """Validate a design spec passed as a JSON object string."""
-        return _as_mcp_tool_result(_validate_design_tool(spec_json))
+    def validate_design(spec_json: str, detail_level: Literal["summary", "full"] = "summary") -> str:
+        """Validate a design spec; use full detail to include embedded evidence metadata."""
+        return _as_mcp_tool_result(_validate_design_tool(spec_json, detail_level))
 
     @mcp.tool()
     def generate_artifacts(spec_json: str, output_dir: str = "") -> str:
@@ -223,34 +227,49 @@ def _create_app() -> Any:
     return mcp
 
 
-def _report_to_json(report: Any) -> str:
-    """Serialize a ValidationReport to JSON."""
+def _report_to_json(report: Any, detail_level: Literal["summary", "full"] = "full") -> str:
+    """Serialize a ValidationReport, optionally omitting bulky embedded ledgers."""
     if hasattr(report, "to_dict"):
-        return json.dumps(report.to_dict(), default=str)
+        payload = report.to_dict()
+    else:
+        payload = None
     valid = getattr(report, "valid", None)
-    if valid is not None:
+    if payload is None and valid is not None:
         summary = getattr(report, "summary", {})
         categories = getattr(report, "categories", {})
-        return json.dumps(
-            {
-                "valid": valid,
-                "summary": summary,
-                "categories": {
-                    key: [
-                        {
-                            "code": getattr(value, "code", ""),
-                            "level": getattr(value, "level", ""),
-                            "subject": getattr(value, "subject", ""),
-                            "message": getattr(value, "message", ""),
-                        }
-                        for value in values
-                    ]
-                    for key, values in (categories or {}).items()
-                },
+        payload = {
+            "valid": valid,
+            "summary": summary,
+            "categories": {
+                key: [
+                    {
+                        "code": getattr(value, "code", ""),
+                        "level": getattr(value, "level", ""),
+                        "subject": getattr(value, "subject", ""),
+                        "message": getattr(value, "message", ""),
+                    }
+                    for value in values
+                ]
+                for key, values in (categories or {}).items()
             },
-            default=str,
-        )
-    return _error_json("invalid_report", "validation returned an unsupported report format")
+        }
+    if payload is None:
+        return _error_json("invalid_report", "validation returned an unsupported report format")
+
+    if detail_level == "full":
+        return json.dumps(payload, default=str)
+
+    payload = copy.deepcopy(payload)
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict):
+        metadata.pop("evidence_manifest", None)
+        metadata.pop("evidence_ids_by_reference", None)
+    payload["detail_level"] = "summary"
+    payload["omitted_fields"] = [
+        "metadata.evidence_manifest",
+        "metadata.evidence_ids_by_reference",
+    ]
+    return json.dumps(payload, default=str)
 
 
 def _parse_port(raw_port: str) -> int:

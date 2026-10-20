@@ -15,6 +15,7 @@
 - Use native label failures to increase placement spacing from real reference dimensions on later attempts. Retain authored minimum gaps, font sizes, board constraints and the three-attempt limit; incomplete native reports fail closed.
 - Preserve the selected virtual-environment interpreter for workflow and MCP subprocesses. Validate all 13 shipped samples and three connected 145–155-part benchmark boards through 16 prototype stages, including native routing, DRC, assembled previews and real MCP sessions; these finite fixtures do not establish arbitrary-circuit, RF or fabrication correctness.
 - Clarify the supported agent entry points and prototype validation scope, including the need for separate controlled-impedance and RF engineering verification.
+- Keep MCP validation responses compact by default without dropping findings or evidence IDs. Offer explicit full-detail retrieval for the embedded evidence ledger, after a real Claude Code check reproduced a tool-output overflow on the IoT example.
 
 ## [0.36.0] - 2026-10-19
 
