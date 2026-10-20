@@ -1381,6 +1381,12 @@ def execute(request):
 
 if __name__ == "__main__":
     try:
+        # Retain the app for the native worker's lifetime; create no window.
+        if sys.platform == "win32":
+            import wx
+            _native_wx_app = wx.GetApp() or wx.App(False)
+            _native_wx_log = wx.LogStderr()
+            wx.Log.SetActiveTarget(_native_wx_log)
         payload = execute(json.load(sys.stdin))
     except Exception as exc:
         payload = {"status": "error", "message": str(exc)}

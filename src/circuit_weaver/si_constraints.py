@@ -13,8 +13,6 @@ from .component_db import ComponentDef
 _BUS_IMPEDANCE: dict[str, dict] = {
     "usb2": {"z_diff": 90, "tolerance_pct": 15, "length_match_mm": 2.5, "description": "USB 2.0 Full/High Speed"},
     "usb3": {"z_diff": 85, "tolerance_pct": 15, "length_match_mm": 1.5, "description": "USB 3.x SuperSpeed"},
-    "ddr3": {"z_diff": 67, "tolerance_pct": 10, "length_match_mm": 0.127, "description": "DDR3 DQ/DQS"},
-    "ddr4": {"z_diff": 67, "tolerance_pct": 10, "length_match_mm": 0.127, "description": "DDR4 DQ/DQS"},
     "lvds": {"z_diff": 100, "tolerance_pct": 10, "length_match_mm": 2.5, "description": "LVDS"},
     "pcie": {"z_diff": 85, "tolerance_pct": 15, "length_match_mm": 2.5, "description": "PCIe"},
     "mipi_dsi": {"z_diff": 100, "tolerance_pct": 10, "length_match_mm": 2.5, "description": "MIPI DSI"},
@@ -35,8 +33,12 @@ _BUS_IMPEDANCE: dict[str, dict] = {
 _NET_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("usb2", re.compile(r"USB.*?[DP][+-]|USB_D[MP]|DP[12]?|DM[12]?", re.IGNORECASE)),
     ("usb3", re.compile(r"USB3.*?[TR]X|SS[TR]X|SSTX|SSRX", re.IGNORECASE)),
-    ("ddr4", re.compile(r"DDR4?_D[QS]|DQ[0-9]|DQS[0-9]|DDR_A[0-9]|DDR_BA", re.IGNORECASE)),
-    ("ddr3", re.compile(r"DDR3_D[QS]|DDR3_A[0-9]", re.IGNORECASE)),
+    ("ddr4", re.compile(r"(?:DDR4|LPDDR4)[_-]?(?:DQ|DQS|DM|A|BA|CK|CKE|CS|RAS|CAS|WE|ODT)[0-9A-Z_+-]*", re.IGNORECASE)),
+    ("ddr3", re.compile(r"(?:DDR3|LPDDR3)[_-]?(?:DQ|DQS|DM|A|BA|CK|CKE|CS|RAS|CAS|WE|ODT)[0-9A-Z_+-]*", re.IGNORECASE)),
+    ("ddr_unknown", re.compile(
+        r"DQ[0-9]+|DQS[0-9]*[_-]?[PN]?|DQM[0-9]+|DDR[_-]?(?:A|BA)[0-9]+|SCK[_-][PN]",
+        re.IGNORECASE,
+    )),
     ("lvds", re.compile(r"LVDS.*?[PN]|TX[0-9]+[PN]|RX[0-9]+[PN]", re.IGNORECASE)),
     ("pcie", re.compile(r"PCIE.*?[TR]X|PCI_TX|PCI_RX", re.IGNORECASE)),
     ("mipi_dsi", re.compile(r"DSI.*?[DP][0-9]|MIPI_D[0-9]", re.IGNORECASE)),
@@ -70,7 +72,31 @@ def _detect_bus_from_nets(comp: ComponentDef) -> dict[str, list[str]]:
             if pattern.search(net):
                 buses.setdefault(bus_type, []).append(net)
                 break
-    return buses
+    return {bus_type: list(dict.fromkeys(nets)) for bus_type, nets in buses.items()}
+
+
+def _resolve_ddr_family(comp: ComponentDef, net_buses: dict[str, list[str]]) -> tuple[str, list[str]] | None:
+    ddr_nets = {key: values for key, values in net_buses.items() if key.startswith("ddr")}
+    explicit_net_families = {key for key in ddr_nets if key in {"ddr3", "ddr4"}}
+    description = f"{comp.description or ''} {comp.mpn or ''}"
+    description_families = {
+        family for family, pattern in _DESC_PATTERNS if family in {"ddr3", "ddr4"} and pattern.search(description)
+    }
+    description_family = next(iter(description_families)) if len(description_families) == 1 else None
+    all_nets = list(dict.fromkeys(net for values in ddr_nets.values() for net in values))
+
+    if not ddr_nets and not description_families:
+        return None
+
+    if len(description_families) > 1 or len(explicit_net_families) > 1 or (
+        description_family and explicit_net_families and description_family not in explicit_net_families
+    ):
+        return "ddr_conflict", all_nets
+    if description_family:
+        return description_family, all_nets
+    if explicit_net_families:
+        return next(iter(explicit_net_families)), all_nets
+    return "ddr_unknown", all_nets
 
 
 def _detect_bus_from_description(comp: ComponentDef) -> str | None:
@@ -99,16 +125,24 @@ def _find_diff_pairs(nets: list[str]) -> list[tuple[str, str]]:
 
 
 def analyze_si_constraints(components: list[ComponentDef]) -> dict:
-    """Analyze a design for signal integrity constraints.
+    """Analyze a design for signal-integrity clues and supported constraints.
 
-    Returns dict with buses_detected, diff_pairs, impedance_constraints,
-    length_groups, routing_rules, warnings, summary.
+    DDR family names and signal labels are reported separately from numeric
+    rules. Device- and topology-specific DDR values are never guessed here.
     """
     buses_detected: list[dict] = []
     diff_pairs: list[dict] = []
     impedance_constraints: list[dict] = []
     length_groups: list[dict] = []
     routing_rules: list[dict] = []
+    warnings: list[str] = []
+    unverified_constraints: list[dict] = []
+    ddr_descriptions = {
+        "ddr3": "DDR3 memory interface",
+        "ddr4": "DDR4 memory interface",
+        "ddr_unknown": "DDR memory-like signals; generation unknown",
+        "ddr_conflict": "DDR generation evidence conflicts",
+    }
 
     for comp in components:
         ref = comp.source_ref or ""
@@ -116,14 +150,57 @@ def analyze_si_constraints(components: list[ComponentDef]) -> dict:
             continue
 
         net_buses = _detect_bus_from_nets(comp)
+        ddr_resolution = _resolve_ddr_family(comp, net_buses)
+        if ddr_resolution:
+            ddr_type, ddr_nets = ddr_resolution
+            buses_detected.append({
+                "bus_type": ddr_type,
+                "component": ref,
+                "net_count": len(ddr_nets),
+                "description": ddr_descriptions[ddr_type],
+                "generation_status": "conflict" if ddr_type == "ddr_conflict" else (
+                    "unknown" if ddr_type == "ddr_unknown" else "explicit"
+                ),
+                "constraint_status": "unverified_device_specific_requirements",
+            })
+            required = [
+                "authoritative controller and memory timing/topology requirements",
+                "signal-role and byte-lane grouping evidence",
+                "stackup/cross-section and fabrication impedance model",
+            ]
+            if ddr_type == "ddr_conflict":
+                warning = f"{ref}: DDR generation evidence conflicts; family-dependent constraints are unresolved."
+            elif ddr_type == "ddr_unknown":
+                warning = (
+                    f"{ref}: DDR-like net names do not establish DDR generation; "
+                    "family-dependent constraints are unresolved."
+                )
+            else:
+                warning = (
+                    f"{ref}: {ddr_type.upper()} identified, but numeric impedance and matching constraints "
+                    "require authoritative device/topology evidence."
+                )
+            warnings.append(warning)
+            unverified_constraints.append({
+                "component": ref,
+                "bus_type": ddr_type,
+                "status": "conflict" if ddr_type == "ddr_conflict" else (
+                    "unknown" if ddr_type == "ddr_unknown" else "unverified"
+                ),
+                "nets": ddr_nets,
+                "required_inputs": required,
+                "generated_hard_constraints": [],
+            })
+            for key in [key for key in net_buses if key.startswith("ddr")]:
+                del net_buses[key]
+
         if not net_buses:
             desc_bus = _detect_bus_from_description(comp)
-            if desc_bus:
+            if desc_bus and desc_bus not in {"ddr3", "ddr4"}:
                 net_buses = {desc_bus: []}
 
         for bus_type, nets in net_buses.items():
             bus_info = _BUS_IMPEDANCE.get(bus_type, {})
-
             buses_detected.append(
                 {
                     "bus_type": bus_type,
@@ -190,33 +267,19 @@ def analyze_si_constraints(components: list[ComponentDef]) -> dict:
                         "description": usb_desc,
                     }
                 )
-            if bus_type.startswith("ddr"):
-                ddr_desc = (
-                    f"Route {bus_info['description']} with matched delays; "
-                    f"place termination resistors within 10mm of memory IC"
-                )
-                routing_rules.append(
-                    {
-                        "bus_type": bus_type,
-                        "nets": nets,
-                        "source_ref": ref,
-                        "description": ddr_desc,
-                    }
-                )
 
-    # Deduplicate
     seen_buses: set[tuple] = set()
     unique_buses = []
-    for b in buses_detected:
-        key = (b["bus_type"], b["component"])
+    for bus in buses_detected:
+        key = (bus["bus_type"], bus["component"])
         if key not in seen_buses:
             seen_buses.add(key)
-            unique_buses.append(b)
+            unique_buses.append(bus)
     buses_detected = unique_buses
 
     parts = []
     if buses_detected:
-        bus_types = ", ".join(sorted(set(b["bus_type"] for b in buses_detected)))
+        bus_types = ", ".join(sorted(set(bus["bus_type"] for bus in buses_detected)))
         parts.append(f"Detected {len(buses_detected)} high-speed buses: {bus_types}")
     if diff_pairs:
         parts.append(f"{len(diff_pairs)} differential pairs")
@@ -224,6 +287,8 @@ def analyze_si_constraints(components: list[ComponentDef]) -> dict:
         parts.append(f"{len(impedance_constraints)} impedance constraints")
     if length_groups:
         parts.append(f"{len(length_groups)} length-matching groups")
+    if unverified_constraints:
+        parts.append(f"{len(unverified_constraints)} DDR requirement set(s) need authoritative review")
     if not parts:
         parts.append("No high-speed buses detected")
 
@@ -234,6 +299,7 @@ def analyze_si_constraints(components: list[ComponentDef]) -> dict:
         "impedance_constraints": impedance_constraints,
         "length_groups": length_groups,
         "routing_rules": routing_rules,
-        "warnings": [],
+        "warnings": warnings,
+        "unverified_constraints": unverified_constraints,
         "summary": ". ".join(parts) + ".",
     }

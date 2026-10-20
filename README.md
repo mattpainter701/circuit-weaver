@@ -399,10 +399,15 @@ result. Returned diagnostics and statistics parsing use bounded windows; missing
 final statistics remain unverified. Full log files can grow for the duration of
 a run and should be included when diagnosing a timeout.
 
+PCB handoff manifests distinguish requested constraints from emitted KiCad rules.
+DDR interfaces retain explicit unverified requirements for device timing,
+topology, signal roles and stackup. Rule rendering and ordinary DRC do not
+establish DDR timing closure or controlled impedance.
+
 ### 6 — DFM check and panelization
 
 ```bash
-# Check clearances, pad sizes, and DFM rules
+# Check static track/via dimensions; native KiCad DRC is also required
 circuit-weaver check-dfm electrical_board.kicad_pcb --profile jlcpcb
 
 # Get panel layout suggestions for small boards

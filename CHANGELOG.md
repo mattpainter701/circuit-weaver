@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Initialize the Windows native helpers' wx application before loading boards, preventing crashes or hangs reproduced on a 459-footprint motherboard reference. Preserve hidden operation and the existing geometry, identity and DRC checks.
+- Distinguish declared DDR generations from generic or conflicting data-net names. Retain unverified device-specific DDR requirements through compilation and PCB handoff instead of guessing impedance and flat length-matching limits. Report which requested constraints produced KiCad rules and which remain unrendered.
+- Read KiCad trace and via geometry in millimetres, including arc track widths, and measure via copper clearance from actual rectangular Edge.Cuts. Report malformed inputs and unsupported geometry as unknown instead of assuming zero widths or invented board bounds.
+- Replace the discontinuous stripline approximation with an explicitly named ideal symmetric, zero-thickness Cohn model. Keep the existing helper signature but reject unsupported offset and finite-copper cases instead of returning unreliable impedance values.
 - Stream router stdout and stderr to persistent per-attempt log files instead of retaining unlimited output in memory. Keep full-log hashes and byte counts, bound returned diagnostics and parser windows, and reject uncertain routing statistics after truncation.
 - Repair remaining native reference-label conflicts with a bounded local assignment search before widening placement. Preserve other text, footprint and pad geometry, copper and locked fields; retain the native label and DRC gates.
 - Correct large analog benchmark filter-pad contracts from compiled ownership and native evidence. Check snapshotted channel and signal/return pad-net assertions on the built board before placement and routing, then verify them again on the final board.

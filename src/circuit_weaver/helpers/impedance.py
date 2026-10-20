@@ -50,6 +50,64 @@ def microstrip_z0(w_mm: float, h_mm: float, er: float, t_mm: float = 0.035) -> t
     return z0, er_eff
 
 
+def _arithmetic_geometric_mean(a: float, b: float) -> float:
+    """Evaluate AGM(a, b) with the standard convergent iteration."""
+    for _ in range(256):
+        arithmetic = (a + b) / 2.0
+        geometric = math.sqrt(a * b)
+        if arithmetic == geometric or abs(arithmetic - geometric) <= 1e-15 * arithmetic:
+            return arithmetic
+        a, b = arithmetic, geometric
+    raise ArithmeticError("arithmetic-geometric mean did not converge")
+
+
+def _finite_positive(name: str, value: float) -> float:
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        raise ValueError(f"{name} must be finite and positive")
+    return number
+
+
+def symmetric_stripline_z0_ideal(
+    w_mm: float,
+    plane_separation_mm: float,
+    er: float,
+) -> tuple[float, float]:
+    """Exact ideal-conductor, zero-thickness symmetric stripline impedance.
+
+    Uses Cohn's closed-form elliptic-integral result for one centered strip
+    between parallel ground planes in a homogeneous dielectric. This ideal
+    model does not include finite copper thickness, roughness, loss,
+    dispersion, soldermask, vias, launches, or inhomogeneous stackups.
+
+    Reference: S. B. Cohn (1954), DOI 10.1109/TMTT.1954.1124875;
+    Polar Instruments Si6000b User Guide, equations (4), (5a), (5b).
+    """
+    width = _finite_positive("w_mm", w_mm)
+    separation = _finite_positive("plane_separation_mm", plane_separation_mm)
+    dielectric = float(er)
+    if not math.isfinite(dielectric) or dielectric < 1.0:
+        raise ValueError("er must be finite and at least 1")
+
+    normalized_width = width / separation
+    q = (math.pi / 2.0) * normalized_width
+    if not math.isfinite(q) or q <= 0.0:
+        raise ValueError("w_mm/plane_separation_mm is outside the numeric range")
+    exp_minus_q = math.exp(-q)
+    k = (2.0 * exp_minus_q) / (1.0 + exp_minus_q * exp_minus_q)
+    k_prime = math.tanh(q)
+    if k <= 0.0 or k_prime <= 0.0:
+        raise ValueError("w_mm/plane_separation_mm is outside the numeric range")
+
+    # K(k)/K(k') = AGM(1, k) / AGM(1, k') for complementary moduli.
+    elliptic_ratio = _arithmetic_geometric_mean(1.0, k) / _arithmetic_geometric_mean(1.0, k_prime)
+    eta0 = 376.730313668
+    z0 = (eta0 / (4.0 * math.sqrt(dielectric))) * elliptic_ratio
+    if not math.isfinite(z0) or z0 <= 0.0:
+        raise ValueError("stripline impedance is outside the numeric range")
+    return z0, dielectric
+
+
 def stripline_z0(
     w_mm: float,
     h1_mm: float,
@@ -57,25 +115,22 @@ def stripline_z0(
     er: float,
     t_mm: float = 0.018,
 ) -> tuple[float, float]:
-    """Offset stripline impedance using a Cohn/Wadell-style approximation."""
-    h_eff = 2.0 * h1_mm * h2_mm / (h1_mm + h2_mm)
-    if w_mm <= 0 or h_eff <= 0:
-        return 0.0, er
-    cf = w_mm / (2.0 * h_eff)
-    if cf < 0.35:
-        z0 = (60.0 / math.sqrt(er)) * math.log(4.0 * h_eff / (0.67 * (0.8 * w_mm + t_mm)))
-    else:
-        z0 = (
-            (377.0 / (2.0 * math.sqrt(er)))
-            / (
-                cf
-                + (2.0 / math.pi)
-                * math.log((2.0 * cf + 1.0) / (2.0 * cf - 1.0) if cf > 0.5 else 10.0)
-            )
-            if cf > 0.5
-            else (60.0 / math.sqrt(er)) * math.log(4.0 * h_eff / (0.67 * (0.8 * w_mm + t_mm)))
-        )
-    return z0, er
+    """Calculate only the supported symmetric, zero-thickness stripline case.
+
+    ``h1_mm`` and ``h2_mm`` are conductor-to-plane distances. Asymmetric
+    offset geometry and finite copper thickness are not modeled; they fail
+    explicitly. Set ``t_mm=0`` to request the ideal Cohn model.
+    """
+    h1 = _finite_positive("h1_mm", h1_mm)
+    h2 = _finite_positive("h2_mm", h2_mm)
+    thickness = float(t_mm)
+    if not math.isfinite(thickness) or thickness < 0.0:
+        raise ValueError("t_mm must be finite and non-negative")
+    if h1 != h2:
+        raise ValueError("offset stripline is unsupported; use symmetric h1_mm == h2_mm")
+    if thickness != 0.0:
+        raise ValueError("finite copper thickness is unsupported; set t_mm=0 for the ideal thin-strip model")
+    return symmetric_stripline_z0_ideal(w_mm, h1 + h2, er)
 
 
 def differential_microstrip_z0(
