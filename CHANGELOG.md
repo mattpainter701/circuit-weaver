@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-10-20
+
 ### Physical sample inventory and workflow scale
 
 - Give logical I²C pull-up containers an explicit nonphysical identity while retaining their two real resistors in schematics, assembly inventories, and native boards. Keep missing physical footprints as errors, and preserve distinct references for multi-component templates.
@@ -11,6 +13,8 @@
 - Retain raw router findings and compare exact pre-existing same-pad thermal-land overlaps against native identities, followed by full imported-board DRC. Supply the missing dimensioned TDFN STEP with pinned KiCad generator provenance and license.
 - Reduce repeated placement and label searches with conservative spatial candidates followed by the existing exact geometry checks. Add reproducible full-workflow corpus and diverse 100-part benchmark evidence, including package identity, native routing and assembled model coverage.
 - Use native label failures to increase placement spacing from real reference dimensions on later attempts. Retain authored minimum gaps, font sizes, board constraints and the three-attempt limit; incomplete native reports fail closed.
+- Preserve the selected virtual-environment interpreter for workflow and MCP subprocesses. Validate all 13 shipped samples and three connected 145–155-part benchmark boards through 16 prototype stages, including native routing, DRC, assembled previews and real MCP sessions; these finite fixtures do not establish arbitrary-circuit, RF or fabrication correctness.
+- Clarify the supported agent entry points and prototype validation scope, including the need for separate controlled-impedance and RF engineering verification.
 
 ## [0.36.0] - 2026-10-19
 

@@ -14,7 +14,7 @@ def test_distribution_version_and_core_dependencies() -> None:
     package_metadata = metadata("circuit-weaver")
     requirements = package_metadata.get_all("Requires-Dist") or []
 
-    assert version("circuit-weaver") == circuit_weaver.__version__ == "0.36.0"
+    assert version("circuit-weaver") == circuit_weaver.__version__ == "0.37.0"
     assert any(
         requirement.lower().startswith("pyyaml") and "extra ==" not in requirement
         for requirement in requirements
