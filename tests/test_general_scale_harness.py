@@ -276,6 +276,44 @@ def test_native_connectivity_probe_preserves_selected_executable(tmp_path: Path,
     assert commands[0][0] == str(executable.absolute())
 
 
+@pytest.mark.parametrize("signal_proof", [None, {"status": "failed", "verified_paths": 1},
+                                          {"status": "pass", "verified_paths": 0}])
+def test_native_signal_paths_require_complete_passing_proof(tmp_path: Path, monkeypatch, signal_proof):
+    board = tmp_path / "board.kicad_pcb"
+    board.write_bytes(b"native board")
+    output, logs = tmp_path / "run", tmp_path / "logs"
+    output.mkdir()
+    logs.mkdir()
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, json.dumps({
+            "inventory": {"status": "ok", "footprints": []}, "signal_connectivity": signal_proof,
+        }), "")
+
+    monkeypatch.setattr(HARNESS.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="signal path verification did not pass"):
+        HARNESS._inspect_and_verify_connectivity(
+            {"id": "signal_probe", "required_paths": [{"id": "controller_to_load"}]},
+            argparse.Namespace(python=Path("python"), installed=False, timeout=60), output, logs, board,
+        )
+
+
+@pytest.mark.parametrize("minimum", [155, True, "200"])
+def test_suite_rejects_case_floor_below_suite_or_malformed(tmp_path: Path, monkeypatch, minimum):
+    import yaml
+
+    monkeypatch.setattr(HARNESS, "REPO", tmp_path)
+    (tmp_path / "design.yaml").write_text("project: fixture\n", encoding="utf-8")
+    suite = {"schema_version": 1, "minimum_physical_parts": 156, "cases": [
+        {"id": f"case_{i}", "family": f"family_{i}", "spec": "design.yaml",
+         "minimum_physical_parts": minimum if i == 0 else 200} for i in range(3)
+    ]}
+    path = tmp_path / "suite.yaml"
+    path.write_text(yaml.safe_dump(suite), encoding="utf-8")
+    with pytest.raises(ValueError, match="minimum_physical_parts must be an integer of at least 156"):
+        HARNESS._load_suite(path)
+
+
 def test_main_aggregates_canonical_pass_with_verbose_workflow_status(tmp_path: Path, monkeypatch, capsys):
     suite_path = HARNESS.DEFAULT_SUITE
     case = {"id": "fixture", "family": "test"}

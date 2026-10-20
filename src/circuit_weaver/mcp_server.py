@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import hashlib
 import io
 import json
 import logging
@@ -66,10 +67,27 @@ def _load_spec_json(spec_json: str) -> dict[str, Any]:
     return spec
 
 
-def _validate_design_tool(spec_json: str, detail_level: Literal["summary", "full"] = "summary") -> str:
+def _validate_design_tool(
+    spec_json: str, detail_level: Literal["summary", "full", "page"] = "summary",
+    collection: Literal["findings", "evidence_ids"] = "evidence_ids", offset: int = 0,
+    limit: int = 100, expected_report_sha256: str = "",
+) -> str:
     """Validate a Circuit Weaver design spec supplied as JSON."""
-    if not isinstance(detail_level, str) or detail_level not in {"summary", "full"}:
-        return _error_json("invalid_detail_level", "detail_level must be 'summary' or 'full'")
+    if not isinstance(detail_level, str) or detail_level not in {"summary", "full", "page"}:
+        return _error_json("invalid_detail_level", "detail_level must be 'summary', 'full', or 'page'")
+    if collection not in ("findings", "evidence_ids"):
+        return _error_json("invalid_pagination", "collection must be 'findings' or 'evidence_ids'")
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0 \
+            or isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+        return _error_json("invalid_pagination", "offset must be nonnegative and limit an integer from 1 to 100")
+    if not isinstance(expected_report_sha256, str) or (expected_report_sha256 and (
+        len(expected_report_sha256) != 64 or any(c not in "0123456789abcdef" for c in expected_report_sha256)
+    )):
+        return _error_json("invalid_pagination", "expected_report_sha256 must be empty or a lowercase SHA-256 digest")
+    if detail_level != "page" and (collection != "evidence_ids" or offset or limit != 100 or expected_report_sha256):
+        return _error_json("invalid_pagination", "pagination arguments require detail_level='page'")
+    if detail_level == "page" and offset and not expected_report_sha256:
+        return _error_json("invalid_pagination", "subsequent pages require expected_report_sha256")
 
     try:
         spec = _load_spec_json(spec_json)
@@ -82,6 +100,12 @@ def _validate_design_tool(spec_json: str, detail_level: Literal["summary", "full
         from circuit_weaver.dispatcher import validate_design
 
         report = _call_without_stdout(validate_design, spec)
+        if detail_level == "page":
+            summary = _report_to_json(report, detail_level="summary")
+            payload = json.loads(summary)
+            if payload.get("status") == "error":
+                return summary
+            return _validation_page(payload, collection, offset, limit, expected_report_sha256)
         return _report_to_json(report, detail_level=detail_level)
     except Exception as exc:
         _logger.exception("MCP validate_design failed")
@@ -199,9 +223,20 @@ def _create_app() -> Any:
     mcp = FastMCP("circuit-weaver", log_level="WARNING")
 
     @mcp.tool()
-    def validate_design(spec_json: str, detail_level: Literal["summary", "full"] = "summary") -> str:
-        """Validate a design spec; use full detail to include embedded evidence metadata."""
-        return _as_mcp_tool_result(_validate_design_tool(spec_json, detail_level))
+    def validate_design(
+        spec_json: str, detail_level: Literal["summary", "full", "page"] = "summary",
+        collection: Literal["findings", "evidence_ids"] = "evidence_ids", offset: int = 0,
+        limit: int = 100, expected_report_sha256: str = "",
+    ) -> str:
+        """Validate a design. Summary preserves every finding and evidence ID; full adds the ledger.
+
+        For large reports use page, collection=findings or evidence_ids, and follow next_offset
+        for BOTH collections. Bind subsequent pages with expected_report_sha256 from page one.
+        Counts and digests allow verification that every item was retrieved without truncation.
+        """
+        return _as_mcp_tool_result(_validate_design_tool(
+            spec_json, detail_level, collection, offset, limit, expected_report_sha256,
+        ))
 
     @mcp.tool()
     def generate_artifacts(spec_json: str, output_dir: str = "") -> str:
@@ -225,6 +260,43 @@ def _create_app() -> Any:
         return _as_mcp_tool_result(_manufacturing_readiness_tool(readiness_path))
 
     return mcp
+
+
+def _validation_digest(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+
+
+def _validation_page(payload: dict, collection: str, offset: int, limit: int, expected_digest: str) -> str:
+    """Page growing collections without discarding provenance or finding fields."""
+    report_digest = _validation_digest(payload)
+    if expected_digest and expected_digest != report_digest:
+        return _error_json("report_changed", "Validation report changed; restart paging from offset zero")
+    collections = {
+        "evidence_ids": payload.get("evidence_ids", []),
+        "findings": [{"category": category, "finding": finding}
+                     for category, findings in payload.get("categories", {}).items() for finding in findings],
+    }
+    items = collections[collection]
+    if offset > len(items):
+        return _error_json("invalid_pagination", "offset exceeds collection length")
+    page = {key: copy.deepcopy(value) for key, value in payload.items()
+            if key not in {"evidence_ids", "categories", "detail_level"}}
+    page.update(detail_level="page", report_sha256=report_digest, collection=collection,
+                category_order=list(payload.get("categories", {})),
+                offset=offset, limit=limit,
+                collections={name: {"total": len(values), "sha256": _validation_digest(values)}
+                             for name, values in collections.items()})
+    count = min(limit, len(items) - offset)
+    while True:
+        page["items"] = items[offset:offset + count]
+        page["next_offset"] = offset + count if offset + count < len(items) else None
+        serialized = json.dumps(page, default=str)
+        if len(serialized.encode("utf-8")) <= 16000:
+            return serialized
+        if count <= 1:
+            return _error_json("page_item_too_large", "A validation item or header exceeds the 16000-byte page budget; "
+                               "use the CLI or full-detail report to inspect it without truncation")
+        count = max(1, count // 2)
 
 
 def _report_to_json(report: Any, detail_level: Literal["summary", "full"] = "full") -> str:

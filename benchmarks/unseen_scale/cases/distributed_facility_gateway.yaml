@@ -1,0 +1,499 @@
+project: UnseenScale_Distributed_Facility_Gateway
+company: Circuit Weaver Benchmark
+version: '1.0'
+description: 'Distributed facility gateway for four HVAC/energy zones: one protected
+  12V input, two regulated rails, a shared STM32 controller, three baseline RS-485
+  trunks, CAN, and eight differential sensor inputs. Four additional independently
+  controlled RS-485 trunks connect to spare MCU GPIOs, so controller-to-field paths
+  exercise high fanout across a single digital sheet.'
+pcb_constraints:
+- kind: placement
+  target: board
+  width_mm: 180
+  height_mm: 135
+power:
+- type: connector
+  ic: BARREL_JACK_2.1MM
+  ref: J1
+  positive_net: VIN_12V
+  negative_net: GND
+  decoupling: true
+- type: buck
+  ic: AP62300
+  ref: U1
+  vin: 12
+  vout: 5
+  iout: 2
+  vin_net: VIN_12V
+  rail_name: VDD_5V
+- type: buck
+  ic: AP62300
+  ref: U2
+  vin: 5
+  vout: 3.3
+  iout: 1
+  vin_net: VDD_5V
+  rail_name: VDD_3P3
+digital:
+- ic: STM32F103C8T6
+  ref: U3
+  pin_nets_extra:
+    '25': SPI_CS_N
+    '26': SPI_SCK
+    '27': SPI_MISO
+    '28': SPI_MOSI
+    '30': FIELD_A_TX
+    '31': FIELD_A_RX
+    '29': FIELD_A_DE
+    '12': FIELD_B_TX
+    '13': FIELD_B_RX
+    '11': FIELD_B_DE
+    '21': FIELD_C_TX
+    '22': FIELD_C_RX
+    '20': FIELD_C_DE
+    '33': CAN_TXD
+    '32': CAN_RXD
+    '10': FIELD_D_TX
+    '14': FIELD_D_RX
+    '15': FIELD_D_DE
+    '16': FIELD_E_TX
+    '17': FIELD_E_RX
+    '18': FIELD_E_DE
+    '19': FIELD_F_TX
+    '38': FIELD_F_RX
+    '39': FIELD_F_DE
+    '40': FIELD_G_TX
+    '41': FIELD_G_RX
+    '42': FIELD_G_DE
+  no_connects:
+  - '2'
+  - '3'
+  - '4'
+  - '5'
+  - '6'
+  - '34'
+  - '37'
+  - '43'
+  - '45'
+  - '46'
+communication:
+- type: rs485_transceiver
+  ic: SP3485EN-L/TR
+  ref: U4
+  vdd_net: VDD_3P3
+  txd_net: FIELD_A_TX
+  rxd_net: FIELD_A_RX
+  de_net: FIELD_A_DE
+  bus_net_prefix: FIELD_A_RS485
+  termination: true
+  failsafe_bias: true
+- type: rs485_transceiver
+  ic: SP3485EN-L/TR
+  ref: U5
+  vdd_net: VDD_3P3
+  txd_net: FIELD_B_TX
+  rxd_net: FIELD_B_RX
+  de_net: FIELD_B_DE
+  bus_net_prefix: FIELD_B_RS485
+  termination: true
+  failsafe_bias: true
+- type: rs485_transceiver
+  ic: SP3485EN-L/TR
+  ref: U6
+  vdd_net: VDD_3P3
+  txd_net: FIELD_C_TX
+  rxd_net: FIELD_C_RX
+  de_net: FIELD_C_DE
+  bus_net_prefix: FIELD_C_RS485
+  termination: true
+  failsafe_bias: true
+- type: can_transceiver
+  ic: SN65HVD230
+  params:
+    ic: SN65HVD230
+  ref: U7
+  vdd_net: VDD_3P3
+  txd_net: CAN_TXD
+  rxd_net: CAN_RXD
+  bus_net_prefix: FIELD_CAN
+  termination: true
+- type: rs485_transceiver
+  ic: SP3485EN-L/TR
+  ref: U25
+  vdd_net: VDD_3P3
+  txd_net: FIELD_D_TX
+  rxd_net: FIELD_D_RX
+  de_net: FIELD_D_DE
+  bus_net_prefix: FIELD_D_RS485
+  termination: true
+  failsafe_bias: true
+- type: rs485_transceiver
+  ic: SP3485EN-L/TR
+  ref: U26
+  vdd_net: VDD_3P3
+  txd_net: FIELD_E_TX
+  rxd_net: FIELD_E_RX
+  de_net: FIELD_E_DE
+  bus_net_prefix: FIELD_E_RS485
+  termination: true
+  failsafe_bias: true
+- type: rs485_transceiver
+  ic: SP3485EN-L/TR
+  ref: U27
+  vdd_net: VDD_3P3
+  txd_net: FIELD_F_TX
+  rxd_net: FIELD_F_RX
+  de_net: FIELD_F_DE
+  bus_net_prefix: FIELD_F_RS485
+  termination: true
+  failsafe_bias: true
+- type: rs485_transceiver
+  ic: SP3485EN-L/TR
+  ref: U28
+  vdd_net: VDD_3P3
+  txd_net: FIELD_G_TX
+  rxd_net: FIELD_G_RX
+  de_net: FIELD_G_DE
+  bus_net_prefix: FIELD_G_RS485
+  termination: true
+  failsafe_bias: true
+analog:
+- type: adc
+  ic: MCP3208-CI/SL
+  params:
+    ic: MCP3208-CI/SL
+  ref: U8
+  vdd_net: VDD_3P3
+  channels: 8
+  input_filter_bw: 250
+  cs_net: SPI_CS_N
+  spi_mosi_net: SPI_MOSI
+  spi_miso_net: SPI_MISO
+  spi_sck_net: SPI_SCK
+- type: voltage_reference
+  ic: REF3030
+  params:
+    ic: REF3030
+  ref: U15
+  vin: 5
+  vin_net: VDD_5V
+  vref_net: REF_U9
+  interfaces:
+  - name: REF_U9
+    direction: output
+- type: voltage_reference
+  ic: REF3030
+  params:
+    ic: REF3030
+  ref: U16
+  vin: 5
+  vin_net: VDD_5V
+  vref_net: REF_U10
+  interfaces:
+  - name: REF_U10
+    direction: output
+- type: voltage_reference
+  ic: REF3030
+  params:
+    ic: REF3030
+  ref: U17
+  vin: 5
+  vin_net: VDD_5V
+  vref_net: REF_U11
+  interfaces:
+  - name: REF_U11
+    direction: output
+- type: voltage_reference
+  ic: REF3030
+  params:
+    ic: REF3030
+  ref: U18
+  vin: 5
+  vin_net: VDD_5V
+  vref_net: REF_U12
+  interfaces:
+  - name: REF_U12
+    direction: output
+- type: voltage_reference
+  ic: REF3030
+  params:
+    ic: REF3030
+  ref: U19
+  vin: 5
+  vin_net: VDD_5V
+  vref_net: REF_U13
+  interfaces:
+  - name: REF_U13
+    direction: output
+- type: voltage_reference
+  ic: REF3030
+  params:
+    ic: REF3030
+  ref: U20
+  vin: 5
+  vin_net: VDD_5V
+  vref_net: REF_U14
+  interfaces:
+  - name: REF_U14
+    direction: output
+- type: sensor_frontend
+  ic: INA128PA
+  ref: U9
+  gain: 5
+  vdd_net: VDD_5V
+  sensor_p_net: FIELD_AI0_P
+  sensor_n_net: FIELD_AI0_N
+  output_net: CH0_U8
+  interfaces:
+  - name: REF_U9
+    direction: input
+- type: sensor_frontend
+  ic: INA128PA
+  ref: U10
+  gain: 5
+  vdd_net: VDD_5V
+  sensor_p_net: FIELD_AI1_P
+  sensor_n_net: FIELD_AI1_N
+  output_net: CH1_U8
+  interfaces:
+  - name: REF_U10
+    direction: input
+- type: sensor_frontend
+  ic: INA128PA
+  ref: U11
+  gain: 5
+  vdd_net: VDD_5V
+  sensor_p_net: FIELD_AI2_P
+  sensor_n_net: FIELD_AI2_N
+  output_net: CH2_U8
+  interfaces:
+  - name: REF_U11
+    direction: input
+- type: sensor_frontend
+  ic: INA128PA
+  ref: U12
+  gain: 5
+  vdd_net: VDD_5V
+  sensor_p_net: FIELD_AI3_P
+  sensor_n_net: FIELD_AI3_N
+  output_net: CH3_U8
+  interfaces:
+  - name: REF_U12
+    direction: input
+- type: sensor_frontend
+  ic: INA128PA
+  ref: U13
+  gain: 5
+  vdd_net: VDD_5V
+  sensor_p_net: FIELD_AI4_P
+  sensor_n_net: FIELD_AI4_N
+  output_net: CH4_U8
+  interfaces:
+  - name: REF_U13
+    direction: input
+- type: sensor_frontend
+  ic: INA128PA
+  ref: U14
+  gain: 5
+  vdd_net: VDD_5V
+  sensor_p_net: FIELD_AI5_P
+  sensor_n_net: FIELD_AI5_N
+  output_net: CH5_U8
+  interfaces:
+  - name: REF_U14
+    direction: input
+- type: voltage_reference
+  ic: REF3030
+  params:
+    ic: REF3030
+  ref: U21
+  vin: 5
+  vin_net: VDD_5V
+  vref_net: REF_U23
+  interfaces:
+  - name: REF_U23
+    direction: output
+- type: voltage_reference
+  ic: REF3030
+  params:
+    ic: REF3030
+  ref: U22
+  vin: 5
+  vin_net: VDD_5V
+  vref_net: REF_U24
+  interfaces:
+  - name: REF_U24
+    direction: output
+- type: sensor_frontend
+  ic: INA128PA
+  ref: U23
+  gain: 5
+  vdd_net: VDD_5V
+  sensor_p_net: FIELD_AI6_P
+  sensor_n_net: FIELD_AI6_N
+  output_net: CH6_U8
+  interfaces:
+  - name: REF_U23
+    direction: input
+- type: sensor_frontend
+  ic: INA128PA
+  ref: U24
+  gain: 5
+  vdd_net: VDD_5V
+  sensor_p_net: FIELD_AI7_P
+  sensor_n_net: FIELD_AI7_N
+  output_net: CH7_U8
+  interfaces:
+  - name: REF_U24
+    direction: input
+connectors:
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J2
+  signal_nets: FIELD_A_RS485_A_U4,FIELD_A_RS485_B_U4,VDD_3P3,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J3
+  signal_nets: FIELD_B_RS485_A_U5,FIELD_B_RS485_B_U5,VDD_3P3,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J4
+  signal_nets: FIELD_C_RS485_A_U6,FIELD_C_RS485_B_U6,VDD_3P3,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J5
+  signal_nets: FIELD_CAN_H_U7,FIELD_CAN_L_U7,VDD_3P3,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J6
+  signal_nets: FIELD_AI0_P,FIELD_AI0_N,VDD_3P3,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J7
+  signal_nets: FIELD_AI1_P,FIELD_AI1_N,VDD_3P3,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J8
+  signal_nets: FIELD_AI2_P,FIELD_AI2_N,VDD_3P3,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J9
+  signal_nets: FIELD_AI3_P,FIELD_AI3_N,VDD_3P3,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J10
+  signal_nets: FIELD_AI4_P,FIELD_AI4_N,VDD_3P3,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J11
+  signal_nets: FIELD_AI5_P,FIELD_AI5_N,VDD_3P3,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J12
+  signal_nets: FIELD_AI6_P,FIELD_AI6_N,VDD_5V,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J13
+  signal_nets: FIELD_AI7_P,FIELD_AI7_N,VDD_5V,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J14
+  signal_nets: FIELD_D_RS485_A_U25,FIELD_D_RS485_B_U25,VDD_3P3,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J15
+  signal_nets: FIELD_E_RS485_A_U26,FIELD_E_RS485_B_U26,VDD_3P3,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J16
+  signal_nets: FIELD_F_RS485_A_U27,FIELD_F_RS485_B_U27,VDD_3P3,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J17
+  signal_nets: FIELD_G_RS485_A_U28,FIELD_G_RS485_B_U28,VDD_3P3,GND
+protection:
+- type: protection
+  ic: SMBJ12A
+  ref: D1
+  protect_net: VIN_12V
+  protection_type: tvs
+- type: protection
+  ic: PESD5V0S1BA
+  ref: D2
+  protect_net: FIELD_A_RS485_A_U4
+  protection_type: esd
+- type: protection
+  ic: PESD5V0S1BA
+  ref: D3
+  protect_net: FIELD_A_RS485_B_U4
+  protection_type: esd
+- type: protection
+  ic: PESD5V0S1BA
+  ref: D4
+  protect_net: FIELD_B_RS485_A_U5
+  protection_type: esd
+- type: protection
+  ic: PESD5V0S1BA
+  ref: D5
+  protect_net: FIELD_B_RS485_B_U5
+  protection_type: esd
+- type: protection
+  ic: PESD5V0S1BA
+  ref: D6
+  protect_net: FIELD_C_RS485_A_U6
+  protection_type: esd
+- type: protection
+  ic: PESD5V0S1BA
+  ref: D7
+  protect_net: FIELD_C_RS485_B_U6
+  protection_type: esd
+- type: protection
+  ic: PESD5V0S1BA
+  ref: D8
+  protect_net: FIELD_CAN_H_U7
+  protection_type: esd
+- type: protection
+  ic: PESD5V0S1BA
+  ref: D9
+  protect_net: FIELD_CAN_L_U7
+  protection_type: esd
+- type: protection
+  ic: PESD5V0S1BA
+  ref: D10
+  protect_net: FIELD_D_RS485_A_U25
+  protection_type: esd
+- type: protection
+  ic: PESD5V0S1BA
+  ref: D11
+  protect_net: FIELD_D_RS485_B_U25
+  protection_type: esd
+- type: protection
+  ic: PESD5V0S1BA
+  ref: D12
+  protect_net: FIELD_E_RS485_A_U26
+  protection_type: esd
+- type: protection
+  ic: PESD5V0S1BA
+  ref: D13
+  protect_net: FIELD_E_RS485_B_U26
+  protection_type: esd
+- type: protection
+  ic: PESD5V0S1BA
+  ref: D14
+  protect_net: FIELD_F_RS485_A_U27
+  protection_type: esd
+- type: protection
+  ic: PESD5V0S1BA
+  ref: D15
+  protect_net: FIELD_F_RS485_B_U27
+  protection_type: esd
+- type: protection
+  ic: PESD5V0S1BA
+  ref: D16
+  protect_net: FIELD_G_RS485_A_U28
+  protection_type: esd
+- type: protection
+  ic: PESD5V0S1BA
+  ref: D17
+  protect_net: FIELD_G_RS485_B_U28
+  protection_type: esd

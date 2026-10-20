@@ -2009,6 +2009,14 @@ def _report_validation_results(results) -> None:
             print(f"    ... and {len(result.issues) - 4} more")
 
 
+def _root_sheet_height_for_ports(max_pins: int) -> float:
+    """Return the grid-aligned sheet-symbol height needed for its ports."""
+    pin_spacing = 2.54
+    base_sheet_h = snap(20)
+    needed_h = max(0, max_pins) * pin_spacing + 2 * pin_spacing if max_pins > 0 else 0
+    return snap(max(base_sheet_h, needed_h))
+
+
 def _pick_root_sheet_geometry(sheet_count: int, sheet_w: float, sheet_h: float):
     x_margin = snap(30)
     y_start = snap(40)
@@ -2022,8 +2030,10 @@ def _pick_root_sheet_geometry(sheet_count: int, sheet_w: float, sheet_h: float):
         bottom = y_start + (rows - 1) * y_spacing + sheet_h + 10
         if bottom <= ph - TITLE_BLOCK_H:
             return paper, x_margin, y_start, cols, x_spacing, y_spacing
-    cols = max(1, int((PAPER_SIZES["A0"][0] - x_margin - 30 + 15) // x_spacing))
-    return "A0", x_margin, y_start, cols, x_spacing, y_spacing
+    raise ValueError(
+        f"Root schematic with {sheet_count} sheet symbols of height {sheet_h:.2f} mm "
+        "does not fit within standard KiCad pages through A0"
+    )
 
 
 def _annotate_power_symbols(paths: Iterable[str | Path]) -> None:
@@ -2177,46 +2187,108 @@ def generate_from_components(
         # (single component) is a hard "design too large" failure.
         from .placer import _restore_ref_state, _snapshot_ref_state, split_sheet_allocation
 
-        layouts = []
-        pending = list(sheets)
-        split_rounds = 0
-        _MAX_SHEET_SPLITS = 8
-        idx = 0
-        while idx < len(pending):
-            sheet_alloc = pending[idx]
-            ref_state = _snapshot_ref_state()
-            layout = layout_sheet(sheet_alloc, presentation_wiring_policy=resolved_presentation_wiring_policy)
-            if layout.overflow:
-                halves = split_sheet_allocation(sheet_alloc) if split_rounds < _MAX_SHEET_SPLITS else None
-                if halves is None:
-                    raise ValueError(
-                        f"Design too large: sheet '{sheet_alloc.name}' does not fit on A0 "
-                        "and cannot be split further. Reduce the design or partition it "
-                        "into explicit functional blocks."
+        initial_ref_state = _snapshot_ref_state()
+
+        def _layout_with_bounded_splits(allocations):
+            """Lay out allocations, splitting any child page that exceeds A0."""
+            _restore_ref_state(initial_ref_state)
+            pending = list(allocations)
+            layouts_for_allocations = []
+            split_rounds = 0
+            idx = 0
+            while idx < len(pending):
+                sheet_alloc = pending[idx]
+                ref_state = _snapshot_ref_state()
+                layout = layout_sheet(sheet_alloc, presentation_wiring_policy=resolved_presentation_wiring_policy)
+                if layout.overflow:
+                    halves = split_sheet_allocation(sheet_alloc) if split_rounds < 64 else None
+                    if halves is None:
+                        raise ValueError(
+                            f"Design too large: sheet '{sheet_alloc.name}' does not fit on A0 "
+                            "and cannot be split further. Reduce the design or partition it "
+                            "into explicit functional blocks."
+                        )
+                    split_rounds += 1
+                    _restore_ref_state(ref_state)
+                    _logger.warning(
+                        "Sheet '%s' overflows A0 — splitting into '%s' and '%s'",
+                        sheet_alloc.name,
+                        halves[0].name,
+                        halves[1].name,
                     )
-                split_rounds += 1
-                _restore_ref_state(ref_state)
-                _logger.warning(
-                    "Sheet '%s' overflows A0 — splitting into '%s' and '%s'",
+                    pending[idx : idx + 1] = halves
+                    continue
+                layouts_for_allocations.append(layout)
+                _logger.info(
+                    "  %s: %d ICs, %d passives on %s",
                     sheet_alloc.name,
-                    halves[0].name,
-                    halves[1].name,
+                    len(layout.placed_ics),
+                    len(layout.placed_passives),
+                    layout.paper,
                 )
-                pending[idx : idx + 1] = halves
-                continue
-            layouts.append(layout)
-            _logger.info(
-                "  %s: %d ICs, %d passives on %s",
-                sheet_alloc.name,
-                len(layout.placed_ics),
-                len(layout.placed_passives),
-                layout.paper,
-            )
-            idx += 1
-        sheets = pending
-        ensure_unique_sheet_names(sheets)
-        for sheet_alloc, layout in zip(sheets, layouts):
-            layout.name = sheet_alloc.name
+                idx += 1
+            ensure_unique_sheet_names(pending)
+            for sheet_alloc, layout in zip(pending, layouts_for_allocations):
+                layout.name = sheet_alloc.name
+            return pending, layouts_for_allocations
+
+        sheets, layouts = _layout_with_bounded_splits(sheets)
+        resolved_interface_policy = _normalize_interface_policy(interface_policy)
+        use_hierarchy = hierarchical and len(sheets) > 1
+
+        # A child page may fit A0 while its root sheet symbol does not: each
+        # hierarchical port consumes a 2.54 mm row. Split the port-heavy
+        # allocation and re-layout all children until the root fits a standard
+        # page. The exact boundary set is recomputed after every split because
+        # new inter-sheet nets can become hierarchical ports.
+        if use_hierarchy:
+            root_split_rounds = 0
+            max_root_splits = 64
+            while True:
+                trial_boundary_nets = _compute_boundary_nets(layouts, resolved_interface_policy)
+                port_counts = [
+                    len(_collect_layout_nets(layout) & trial_boundary_nets)
+                    for layout in layouts
+                ]
+                max_ports = max(port_counts, default=0)
+                sheet_height = _root_sheet_height_for_ports(max_ports)
+                try:
+                    _pick_root_sheet_geometry(len(sheets), snap(50), sheet_height)
+                    break
+                except ValueError as geometry_error:
+                    minimum_height = snap(20)
+                    try:
+                        _pick_root_sheet_geometry(len(sheets), snap(50), minimum_height)
+                    except ValueError:
+                        raise ValueError(
+                            f"Root schematic cannot fit {len(sheets)} child sheets on standard pages through A0"
+                        ) from geometry_error
+                    if root_split_rounds >= max_root_splits or not port_counts:
+                        raise ValueError(
+                            "Root schematic hierarchical ports still exceed standard-page capacity "
+                            f"after {root_split_rounds} child-sheet splits"
+                        ) from geometry_error
+                    split_index = max(range(len(port_counts)), key=port_counts.__getitem__)
+                    allocation = sheets[split_index]
+                    halves = split_sheet_allocation(allocation)
+                    if halves is None:
+                        raise ValueError(
+                            f"Root schematic cannot fit hierarchical ports for unsplittable sheet "
+                            f"'{allocation.name}' ({port_counts[split_index]} ports) on A0"
+                        ) from geometry_error
+                    _logger.warning(
+                        "Root sheet symbols exceed standard-page capacity; splitting '%s' "
+                        "with %d hierarchical ports into '%s' and '%s'",
+                        allocation.name,
+                        port_counts[split_index],
+                        halves[0].name,
+                        halves[1].name,
+                    )
+                    sheets = list(sheets)
+                    sheets[split_index : split_index + 1] = halves
+                    sheets, layouts = _layout_with_bounded_splits(sheets)
+                    use_hierarchy = hierarchical and len(sheets) > 1
+                    root_split_rounds += 1
 
         if len(sheets) > 1:
             planned_filenames = [f"{sheet.name}.kicad_sch" for sheet in sheets]
@@ -2235,8 +2307,6 @@ def generate_from_components(
 
         # 1c. Compute boundary nets for hierarchical mode
         boundary_nets: set[str] = set()
-        use_hierarchy = hierarchical and len(sheets) > 1
-        resolved_interface_policy = _normalize_interface_policy(interface_policy)
         if use_hierarchy:
             boundary_nets = _compute_boundary_nets(layouts, resolved_interface_policy)
             if boundary_nets:
@@ -2480,16 +2550,13 @@ def _generate_root_schematic(
     """
     project_name = _validate_project_name(project_name)
     pin_spacing = 2.54  # mm between hierarchical pins on the sheet symbol
-
     # Compute minimum sheet symbol height based on hierarchical pin count
-    base_sheet_h = snap(20)  # mm, minimum symbol height on the KiCad connection grid
     max_pins = 0
     if hierarchical:
         for si in sheet_infos:
             max_pins = max(max_pins, len(si.get("hier_labels", set())))
     # Each pin needs pin_spacing mm; add margins top and bottom
-    needed_h = max_pins * pin_spacing + 2 * pin_spacing if max_pins > 0 else 0
-    sheet_h = snap(max(base_sheet_h, needed_h))
+    sheet_h = _root_sheet_height_for_ports(max_pins)
 
     # Sheet pins must land on the serialized rectangle edge exactly.  Using
     # an unsnapped width here and independently snapping ``sx + sheet_w``

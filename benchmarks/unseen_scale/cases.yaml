@@ -1,0 +1,7501 @@
+schema_version: 1
+description: Three independently connected, high-count functional circuits spanning
+  fieldbus acquisition, serial relay outputs, and precision analog setpoints.
+minimum_physical_parts: 156
+cases:
+- id: distributed_facility_gateway
+  spec: cases/distributed_facility_gateway.yaml
+  family: distributed_facility_control
+  minimum_physical_parts: 180
+  required_sections:
+  - power
+  - digital
+  - communication
+  - connectors
+  - protection
+  board_mm:
+  - 180
+  - 135
+  required_channels:
+  - frontend_ref: U9
+    frontend_p_pad: '3'
+    sensor_p_net: FIELD_AI0_P
+    frontend_n_pad: '2'
+    sensor_n_net: FIELD_AI0_N
+    frontend_ref_pad: '5'
+    reference_net: REF_U9
+    reference_ref: U15
+    reference_output_pad: '2'
+    frontend_out_pad: '6'
+    frontend_out_net: CH0_U8
+    adc_ref: U8
+    adc_channel: 0
+    adc_pad: '1'
+    adc_net: FILT_CH0_U8
+    adc_filter_ref: R18
+    adc_filter_input_pad: '1'
+    adc_filter_output_pad: '2'
+    input_connector_ref: J6
+    input_positive_pad: '1'
+    input_positive_net: FIELD_AI0_P
+    input_negative_pad: '2'
+    input_negative_net: FIELD_AI0_N
+  - frontend_ref: U10
+    frontend_p_pad: '3'
+    sensor_p_net: FIELD_AI1_P
+    frontend_n_pad: '2'
+    sensor_n_net: FIELD_AI1_N
+    frontend_ref_pad: '5'
+    reference_net: REF_U10
+    reference_ref: U16
+    reference_output_pad: '2'
+    frontend_out_pad: '6'
+    frontend_out_net: CH1_U8
+    adc_ref: U8
+    adc_channel: 1
+    adc_pad: '2'
+    adc_net: FILT_CH1_U8
+    adc_filter_ref: R19
+    adc_filter_input_pad: '1'
+    adc_filter_output_pad: '2'
+    input_connector_ref: J7
+    input_positive_pad: '1'
+    input_positive_net: FIELD_AI1_P
+    input_negative_pad: '2'
+    input_negative_net: FIELD_AI1_N
+  - frontend_ref: U11
+    frontend_p_pad: '3'
+    sensor_p_net: FIELD_AI2_P
+    frontend_n_pad: '2'
+    sensor_n_net: FIELD_AI2_N
+    frontend_ref_pad: '5'
+    reference_net: REF_U11
+    reference_ref: U17
+    reference_output_pad: '2'
+    frontend_out_pad: '6'
+    frontend_out_net: CH2_U8
+    adc_ref: U8
+    adc_channel: 2
+    adc_pad: '3'
+    adc_net: FILT_CH2_U8
+    adc_filter_ref: R20
+    adc_filter_input_pad: '1'
+    adc_filter_output_pad: '2'
+    input_connector_ref: J8
+    input_positive_pad: '1'
+    input_positive_net: FIELD_AI2_P
+    input_negative_pad: '2'
+    input_negative_net: FIELD_AI2_N
+  - frontend_ref: U12
+    frontend_p_pad: '3'
+    sensor_p_net: FIELD_AI3_P
+    frontend_n_pad: '2'
+    sensor_n_net: FIELD_AI3_N
+    frontend_ref_pad: '5'
+    reference_net: REF_U12
+    reference_ref: U18
+    reference_output_pad: '2'
+    frontend_out_pad: '6'
+    frontend_out_net: CH3_U8
+    adc_ref: U8
+    adc_channel: 3
+    adc_pad: '4'
+    adc_net: FILT_CH3_U8
+    adc_filter_ref: R21
+    adc_filter_input_pad: '1'
+    adc_filter_output_pad: '2'
+    input_connector_ref: J9
+    input_positive_pad: '1'
+    input_positive_net: FIELD_AI3_P
+    input_negative_pad: '2'
+    input_negative_net: FIELD_AI3_N
+  - frontend_ref: U13
+    frontend_p_pad: '3'
+    sensor_p_net: FIELD_AI4_P
+    frontend_n_pad: '2'
+    sensor_n_net: FIELD_AI4_N
+    frontend_ref_pad: '5'
+    reference_net: REF_U13
+    reference_ref: U19
+    reference_output_pad: '2'
+    frontend_out_pad: '6'
+    frontend_out_net: CH4_U8
+    adc_ref: U8
+    adc_channel: 4
+    adc_pad: '5'
+    adc_net: FILT_CH4_U8
+    adc_filter_ref: R22
+    adc_filter_input_pad: '1'
+    adc_filter_output_pad: '2'
+    input_connector_ref: J10
+    input_positive_pad: '1'
+    input_positive_net: FIELD_AI4_P
+    input_negative_pad: '2'
+    input_negative_net: FIELD_AI4_N
+  - frontend_ref: U14
+    frontend_p_pad: '3'
+    sensor_p_net: FIELD_AI5_P
+    frontend_n_pad: '2'
+    sensor_n_net: FIELD_AI5_N
+    frontend_ref_pad: '5'
+    reference_net: REF_U14
+    reference_ref: U20
+    reference_output_pad: '2'
+    frontend_out_pad: '6'
+    frontend_out_net: CH5_U8
+    adc_ref: U8
+    adc_channel: 5
+    adc_pad: '6'
+    adc_net: FILT_CH5_U8
+    adc_filter_ref: R23
+    adc_filter_input_pad: '1'
+    adc_filter_output_pad: '2'
+    input_connector_ref: J11
+    input_positive_pad: '1'
+    input_positive_net: FIELD_AI5_P
+    input_negative_pad: '2'
+    input_negative_net: FIELD_AI5_N
+  - frontend_ref: U23
+    frontend_p_pad: '3'
+    sensor_p_net: FIELD_AI6_P
+    frontend_n_pad: '2'
+    sensor_n_net: FIELD_AI6_N
+    frontend_ref_pad: '5'
+    reference_net: REF_U23
+    reference_ref: U21
+    reference_output_pad: '2'
+    frontend_out_pad: '6'
+    frontend_out_net: CH6_U8
+    adc_ref: U8
+    adc_channel: 6
+    adc_pad: '7'
+    adc_net: FILT_CH6_U8
+    adc_filter_ref: R24
+    adc_filter_input_pad: '1'
+    adc_filter_output_pad: '2'
+    input_connector_ref: J12
+    input_positive_pad: '1'
+    input_positive_net: FIELD_AI6_P
+    input_negative_pad: '2'
+    input_negative_net: FIELD_AI6_N
+  - frontend_ref: U24
+    frontend_p_pad: '3'
+    sensor_p_net: FIELD_AI7_P
+    frontend_n_pad: '2'
+    sensor_n_net: FIELD_AI7_N
+    frontend_ref_pad: '5'
+    reference_net: REF_U24
+    reference_ref: U22
+    reference_output_pad: '2'
+    frontend_out_pad: '6'
+    frontend_out_net: CH7_U8
+    adc_ref: U8
+    adc_channel: 7
+    adc_pad: '8'
+    adc_net: FILT_CH7_U8
+    adc_filter_ref: R25
+    adc_filter_input_pad: '1'
+    adc_filter_output_pad: '2'
+    input_connector_ref: J13
+    input_positive_pad: '1'
+    input_positive_net: FIELD_AI7_P
+    input_negative_pad: '2'
+    input_negative_net: FIELD_AI7_N
+  required_paths:
+  - id: a_tx
+    source:
+      ref: U3
+      pad: '30'
+    loads:
+    - ref: U4
+      pad: '4'
+    segments:
+    - net: FIELD_A_TX
+      endpoints:
+      - ref: U3
+        pad: '30'
+      - ref: U4
+        pad: '4'
+    through: []
+  - id: a_rx
+    source:
+      ref: U4
+      pad: '1'
+    loads:
+    - ref: U3
+      pad: '31'
+    segments:
+    - net: FIELD_A_RX
+      endpoints:
+      - ref: U4
+        pad: '1'
+      - ref: U3
+        pad: '31'
+    through: []
+  - id: a_de
+    source:
+      ref: U3
+      pad: '29'
+    loads:
+    - ref: U4
+      pad: '3'
+    segments:
+    - net: FIELD_A_DE
+      endpoints:
+      - ref: U3
+        pad: '29'
+      - ref: U4
+        pad: '3'
+    through: []
+  - id: a_bus_a
+    source:
+      ref: U4
+      pad: '6'
+    loads:
+    - ref: J2
+      pad: '1'
+    - ref: D2
+      pad: '1'
+    segments:
+    - net: FIELD_A_RS485_A_U4
+      endpoints:
+      - ref: U4
+        pad: '6'
+      - ref: J2
+        pad: '1'
+      - ref: D2
+        pad: '1'
+    through: []
+  - id: a_bus_b
+    source:
+      ref: U4
+      pad: '7'
+    loads:
+    - ref: J2
+      pad: '2'
+    - ref: D3
+      pad: '1'
+    segments:
+    - net: FIELD_A_RS485_B_U4
+      endpoints:
+      - ref: U4
+        pad: '7'
+      - ref: J2
+        pad: '2'
+      - ref: D3
+        pad: '1'
+    through: []
+  - id: b_tx
+    source:
+      ref: U3
+      pad: '12'
+    loads:
+    - ref: U5
+      pad: '4'
+    segments:
+    - net: FIELD_B_TX
+      endpoints:
+      - ref: U3
+        pad: '12'
+      - ref: U5
+        pad: '4'
+    through: []
+  - id: b_rx
+    source:
+      ref: U5
+      pad: '1'
+    loads:
+    - ref: U3
+      pad: '13'
+    segments:
+    - net: FIELD_B_RX
+      endpoints:
+      - ref: U5
+        pad: '1'
+      - ref: U3
+        pad: '13'
+    through: []
+  - id: b_de
+    source:
+      ref: U3
+      pad: '11'
+    loads:
+    - ref: U5
+      pad: '3'
+    segments:
+    - net: FIELD_B_DE
+      endpoints:
+      - ref: U3
+        pad: '11'
+      - ref: U5
+        pad: '3'
+    through: []
+  - id: b_bus_a
+    source:
+      ref: U5
+      pad: '6'
+    loads:
+    - ref: J3
+      pad: '1'
+    - ref: D4
+      pad: '1'
+    segments:
+    - net: FIELD_B_RS485_A_U5
+      endpoints:
+      - ref: U5
+        pad: '6'
+      - ref: J3
+        pad: '1'
+      - ref: D4
+        pad: '1'
+    through: []
+  - id: b_bus_b
+    source:
+      ref: U5
+      pad: '7'
+    loads:
+    - ref: J3
+      pad: '2'
+    - ref: D5
+      pad: '1'
+    segments:
+    - net: FIELD_B_RS485_B_U5
+      endpoints:
+      - ref: U5
+        pad: '7'
+      - ref: J3
+        pad: '2'
+      - ref: D5
+        pad: '1'
+    through: []
+  - id: c_tx
+    source:
+      ref: U3
+      pad: '21'
+    loads:
+    - ref: U6
+      pad: '4'
+    segments:
+    - net: FIELD_C_TX
+      endpoints:
+      - ref: U3
+        pad: '21'
+      - ref: U6
+        pad: '4'
+    through: []
+  - id: c_rx
+    source:
+      ref: U6
+      pad: '1'
+    loads:
+    - ref: U3
+      pad: '22'
+    segments:
+    - net: FIELD_C_RX
+      endpoints:
+      - ref: U6
+        pad: '1'
+      - ref: U3
+        pad: '22'
+    through: []
+  - id: c_de
+    source:
+      ref: U3
+      pad: '20'
+    loads:
+    - ref: U6
+      pad: '3'
+    segments:
+    - net: FIELD_C_DE
+      endpoints:
+      - ref: U3
+        pad: '20'
+      - ref: U6
+        pad: '3'
+    through: []
+  - id: c_bus_a
+    source:
+      ref: U6
+      pad: '6'
+    loads:
+    - ref: J4
+      pad: '1'
+    - ref: D6
+      pad: '1'
+    segments:
+    - net: FIELD_C_RS485_A_U6
+      endpoints:
+      - ref: U6
+        pad: '6'
+      - ref: J4
+        pad: '1'
+      - ref: D6
+        pad: '1'
+    through: []
+  - id: c_bus_b
+    source:
+      ref: U6
+      pad: '7'
+    loads:
+    - ref: J4
+      pad: '2'
+    - ref: D7
+      pad: '1'
+    segments:
+    - net: FIELD_C_RS485_B_U6
+      endpoints:
+      - ref: U6
+        pad: '7'
+      - ref: J4
+        pad: '2'
+      - ref: D7
+        pad: '1'
+    through: []
+  - id: can_controller_tx
+    source:
+      ref: U3
+      pad: '33'
+    loads:
+    - ref: U7
+      pad: '1'
+    segments:
+    - net: CAN_TXD
+      endpoints:
+      - ref: U3
+        pad: '33'
+      - ref: U7
+        pad: '1'
+    through: []
+  - id: can_controller_rx
+    source:
+      ref: U7
+      pad: '4'
+    loads:
+    - ref: U3
+      pad: '32'
+    segments:
+    - net: CAN_RXD
+      endpoints:
+      - ref: U7
+        pad: '4'
+      - ref: U3
+        pad: '32'
+    through: []
+  - id: can_bus_h
+    source:
+      ref: U7
+      pad: '7'
+    loads:
+    - ref: J5
+      pad: '1'
+    - ref: D8
+      pad: '1'
+    segments:
+    - net: FIELD_CAN_H_U7
+      endpoints:
+      - ref: U7
+        pad: '7'
+      - ref: J5
+        pad: '1'
+      - ref: D8
+        pad: '1'
+    through: []
+  - id: can_bus_l
+    source:
+      ref: U7
+      pad: '6'
+    loads:
+    - ref: J5
+      pad: '2'
+    - ref: D9
+      pad: '1'
+    segments:
+    - net: FIELD_CAN_L_U7
+      endpoints:
+      - ref: U7
+        pad: '6'
+      - ref: J5
+        pad: '2'
+      - ref: D9
+        pad: '1'
+    through: []
+  - id: d_tx
+    source:
+      ref: U3
+      pad: '10'
+    loads:
+    - ref: U25
+      pad: '4'
+    segments:
+    - net: FIELD_D_TX
+      endpoints:
+      - ref: U3
+        pad: '10'
+      - ref: U25
+        pad: '4'
+    through: []
+  - id: d_rx
+    source:
+      ref: U25
+      pad: '1'
+    loads:
+    - ref: U3
+      pad: '14'
+    segments:
+    - net: FIELD_D_RX
+      endpoints:
+      - ref: U25
+        pad: '1'
+      - ref: U3
+        pad: '14'
+    through: []
+  - id: d_de
+    source:
+      ref: U3
+      pad: '15'
+    loads:
+    - ref: U25
+      pad: '3'
+    segments:
+    - net: FIELD_D_DE
+      endpoints:
+      - ref: U3
+        pad: '15'
+      - ref: U25
+        pad: '3'
+    through: []
+  - id: d_bus_a
+    source:
+      ref: U25
+      pad: '6'
+    loads:
+    - ref: J14
+      pad: '1'
+    - ref: D10
+      pad: '1'
+    segments:
+    - net: FIELD_D_RS485_A_U25
+      endpoints:
+      - ref: U25
+        pad: '6'
+      - ref: J14
+        pad: '1'
+      - ref: D10
+        pad: '1'
+    through: []
+  - id: d_bus_b
+    source:
+      ref: U25
+      pad: '7'
+    loads:
+    - ref: J14
+      pad: '2'
+    - ref: D11
+      pad: '1'
+    segments:
+    - net: FIELD_D_RS485_B_U25
+      endpoints:
+      - ref: U25
+        pad: '7'
+      - ref: J14
+        pad: '2'
+      - ref: D11
+        pad: '1'
+    through: []
+  - id: e_tx
+    source:
+      ref: U3
+      pad: '16'
+    loads:
+    - ref: U26
+      pad: '4'
+    segments:
+    - net: FIELD_E_TX
+      endpoints:
+      - ref: U3
+        pad: '16'
+      - ref: U26
+        pad: '4'
+    through: []
+  - id: e_rx
+    source:
+      ref: U26
+      pad: '1'
+    loads:
+    - ref: U3
+      pad: '17'
+    segments:
+    - net: FIELD_E_RX
+      endpoints:
+      - ref: U26
+        pad: '1'
+      - ref: U3
+        pad: '17'
+    through: []
+  - id: e_de
+    source:
+      ref: U3
+      pad: '18'
+    loads:
+    - ref: U26
+      pad: '3'
+    segments:
+    - net: FIELD_E_DE
+      endpoints:
+      - ref: U3
+        pad: '18'
+      - ref: U26
+        pad: '3'
+    through: []
+  - id: e_bus_a
+    source:
+      ref: U26
+      pad: '6'
+    loads:
+    - ref: J15
+      pad: '1'
+    - ref: D12
+      pad: '1'
+    segments:
+    - net: FIELD_E_RS485_A_U26
+      endpoints:
+      - ref: U26
+        pad: '6'
+      - ref: J15
+        pad: '1'
+      - ref: D12
+        pad: '1'
+    through: []
+  - id: e_bus_b
+    source:
+      ref: U26
+      pad: '7'
+    loads:
+    - ref: J15
+      pad: '2'
+    - ref: D13
+      pad: '1'
+    segments:
+    - net: FIELD_E_RS485_B_U26
+      endpoints:
+      - ref: U26
+        pad: '7'
+      - ref: J15
+        pad: '2'
+      - ref: D13
+        pad: '1'
+    through: []
+  - id: f_tx
+    source:
+      ref: U3
+      pad: '19'
+    loads:
+    - ref: U27
+      pad: '4'
+    segments:
+    - net: FIELD_F_TX
+      endpoints:
+      - ref: U3
+        pad: '19'
+      - ref: U27
+        pad: '4'
+    through: []
+  - id: f_rx
+    source:
+      ref: U27
+      pad: '1'
+    loads:
+    - ref: U3
+      pad: '38'
+    segments:
+    - net: FIELD_F_RX
+      endpoints:
+      - ref: U27
+        pad: '1'
+      - ref: U3
+        pad: '38'
+    through: []
+  - id: f_de
+    source:
+      ref: U3
+      pad: '39'
+    loads:
+    - ref: U27
+      pad: '3'
+    segments:
+    - net: FIELD_F_DE
+      endpoints:
+      - ref: U3
+        pad: '39'
+      - ref: U27
+        pad: '3'
+    through: []
+  - id: f_bus_a
+    source:
+      ref: U27
+      pad: '6'
+    loads:
+    - ref: J16
+      pad: '1'
+    - ref: D14
+      pad: '1'
+    segments:
+    - net: FIELD_F_RS485_A_U27
+      endpoints:
+      - ref: U27
+        pad: '6'
+      - ref: J16
+        pad: '1'
+      - ref: D14
+        pad: '1'
+    through: []
+  - id: f_bus_b
+    source:
+      ref: U27
+      pad: '7'
+    loads:
+    - ref: J16
+      pad: '2'
+    - ref: D15
+      pad: '1'
+    segments:
+    - net: FIELD_F_RS485_B_U27
+      endpoints:
+      - ref: U27
+        pad: '7'
+      - ref: J16
+        pad: '2'
+      - ref: D15
+        pad: '1'
+    through: []
+  - id: g_tx
+    source:
+      ref: U3
+      pad: '40'
+    loads:
+    - ref: U28
+      pad: '4'
+    segments:
+    - net: FIELD_G_TX
+      endpoints:
+      - ref: U3
+        pad: '40'
+      - ref: U28
+        pad: '4'
+    through: []
+  - id: g_rx
+    source:
+      ref: U28
+      pad: '1'
+    loads:
+    - ref: U3
+      pad: '41'
+    segments:
+    - net: FIELD_G_RX
+      endpoints:
+      - ref: U28
+        pad: '1'
+      - ref: U3
+        pad: '41'
+    through: []
+  - id: g_de
+    source:
+      ref: U3
+      pad: '42'
+    loads:
+    - ref: U28
+      pad: '3'
+    segments:
+    - net: FIELD_G_DE
+      endpoints:
+      - ref: U3
+        pad: '42'
+      - ref: U28
+        pad: '3'
+    through: []
+  - id: g_bus_a
+    source:
+      ref: U28
+      pad: '6'
+    loads:
+    - ref: J17
+      pad: '1'
+    - ref: D16
+      pad: '1'
+    segments:
+    - net: FIELD_G_RS485_A_U28
+      endpoints:
+      - ref: U28
+        pad: '6'
+      - ref: J17
+        pad: '1'
+      - ref: D16
+        pad: '1'
+    through: []
+  - id: g_bus_b
+    source:
+      ref: U28
+      pad: '7'
+    loads:
+    - ref: J17
+      pad: '2'
+    - ref: D17
+      pad: '1'
+    segments:
+    - net: FIELD_G_RS485_B_U28
+      endpoints:
+      - ref: U28
+        pad: '7'
+      - ref: J17
+        pad: '2'
+      - ref: D17
+        pad: '1'
+    through: []
+  - id: adc_chip_select
+    source:
+      ref: U3
+      pad: '25'
+    loads:
+    - ref: U8
+      pad: '10'
+    segments:
+    - net: SPI_CS_N
+      endpoints:
+      - ref: U3
+        pad: '25'
+      - ref: U8
+        pad: '10'
+    through: []
+  - id: adc_spi_clock
+    source:
+      ref: U3
+      pad: '26'
+    loads:
+    - ref: U8
+      pad: '13'
+    segments:
+    - net: SPI_SCK
+      endpoints:
+      - ref: U3
+        pad: '26'
+      - ref: U8
+        pad: '13'
+    through: []
+  - id: adc_spi_mosi
+    source:
+      ref: U3
+      pad: '28'
+    loads:
+    - ref: U8
+      pad: '11'
+    segments:
+    - net: SPI_MOSI
+      endpoints:
+      - ref: U3
+        pad: '28'
+      - ref: U8
+        pad: '11'
+    through: []
+  - id: adc_spi_miso
+    source:
+      ref: U8
+      pad: '12'
+    loads:
+    - ref: U3
+      pad: '27'
+    segments:
+    - net: SPI_MISO
+      endpoints:
+      - ref: U8
+        pad: '12'
+      - ref: U3
+        pad: '27'
+    through: []
+- id: serial_relay_output_card
+  spec: cases/serial_relay_output_card.yaml
+  family: serial_expanded_relay_control
+  minimum_physical_parts: 250
+  required_sections:
+  - power
+  - digital
+  - connectors
+  - passives
+  board_mm:
+  - 340
+  - 260
+  required_paths:
+  - id: relay_output_001
+    source:
+      ref: U100
+      pad: '15'
+    loads:
+    - ref: J2
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U200_1
+      endpoints:
+      - ref: U100
+        pad: '15'
+      - ref: U200
+        pad: '1'
+    - net: LOAD_U200_1
+      endpoints:
+      - ref: U200
+        pad: '16'
+      - ref: J2
+        pad: '2'
+    through:
+    - ref: U200
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_002
+    source:
+      ref: U100
+      pad: '1'
+    loads:
+    - ref: J3
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U200_2
+      endpoints:
+      - ref: U100
+        pad: '1'
+      - ref: U200
+        pad: '2'
+    - net: LOAD_U200_2
+      endpoints:
+      - ref: U200
+        pad: '15'
+      - ref: J3
+        pad: '2'
+    through:
+    - ref: U200
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_003
+    source:
+      ref: U100
+      pad: '2'
+    loads:
+    - ref: J4
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U200_3
+      endpoints:
+      - ref: U100
+        pad: '2'
+      - ref: U200
+        pad: '3'
+    - net: LOAD_U200_3
+      endpoints:
+      - ref: U200
+        pad: '14'
+      - ref: J4
+        pad: '2'
+    through:
+    - ref: U200
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_004
+    source:
+      ref: U100
+      pad: '3'
+    loads:
+    - ref: J5
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U200_4
+      endpoints:
+      - ref: U100
+        pad: '3'
+      - ref: U200
+        pad: '4'
+    - net: LOAD_U200_4
+      endpoints:
+      - ref: U200
+        pad: '13'
+      - ref: J5
+        pad: '2'
+    through:
+    - ref: U200
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_005
+    source:
+      ref: U100
+      pad: '4'
+    loads:
+    - ref: J6
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U200_5
+      endpoints:
+      - ref: U100
+        pad: '4'
+      - ref: U200
+        pad: '5'
+    - net: LOAD_U200_5
+      endpoints:
+      - ref: U200
+        pad: '12'
+      - ref: J6
+        pad: '2'
+    through:
+    - ref: U200
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_006
+    source:
+      ref: U100
+      pad: '5'
+    loads:
+    - ref: J7
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U200_6
+      endpoints:
+      - ref: U100
+        pad: '5'
+      - ref: U200
+        pad: '6'
+    - net: LOAD_U200_6
+      endpoints:
+      - ref: U200
+        pad: '11'
+      - ref: J7
+        pad: '2'
+    through:
+    - ref: U200
+      input_pad: '6'
+      output_pad: '11'
+  - id: relay_output_007
+    source:
+      ref: U100
+      pad: '6'
+    loads:
+    - ref: J8
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U200_7
+      endpoints:
+      - ref: U100
+        pad: '6'
+      - ref: U200
+        pad: '7'
+    - net: LOAD_U200_7
+      endpoints:
+      - ref: U200
+        pad: '10'
+      - ref: J8
+        pad: '2'
+    through:
+    - ref: U200
+      input_pad: '7'
+      output_pad: '10'
+  - id: relay_output_008
+    source:
+      ref: U100
+      pad: '7'
+    loads:
+    - ref: J9
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U201_1
+      endpoints:
+      - ref: U100
+        pad: '7'
+      - ref: U201
+        pad: '1'
+    - net: LOAD_U201_1
+      endpoints:
+      - ref: U201
+        pad: '16'
+      - ref: J9
+        pad: '2'
+    through:
+    - ref: U201
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_009
+    source:
+      ref: U101
+      pad: '15'
+    loads:
+    - ref: J10
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U201_2
+      endpoints:
+      - ref: U101
+        pad: '15'
+      - ref: U201
+        pad: '2'
+    - net: LOAD_U201_2
+      endpoints:
+      - ref: U201
+        pad: '15'
+      - ref: J10
+        pad: '2'
+    through:
+    - ref: U201
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_010
+    source:
+      ref: U101
+      pad: '1'
+    loads:
+    - ref: J11
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U201_3
+      endpoints:
+      - ref: U101
+        pad: '1'
+      - ref: U201
+        pad: '3'
+    - net: LOAD_U201_3
+      endpoints:
+      - ref: U201
+        pad: '14'
+      - ref: J11
+        pad: '2'
+    through:
+    - ref: U201
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_011
+    source:
+      ref: U101
+      pad: '2'
+    loads:
+    - ref: J12
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U201_4
+      endpoints:
+      - ref: U101
+        pad: '2'
+      - ref: U201
+        pad: '4'
+    - net: LOAD_U201_4
+      endpoints:
+      - ref: U201
+        pad: '13'
+      - ref: J12
+        pad: '2'
+    through:
+    - ref: U201
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_012
+    source:
+      ref: U101
+      pad: '3'
+    loads:
+    - ref: J13
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U201_5
+      endpoints:
+      - ref: U101
+        pad: '3'
+      - ref: U201
+        pad: '5'
+    - net: LOAD_U201_5
+      endpoints:
+      - ref: U201
+        pad: '12'
+      - ref: J13
+        pad: '2'
+    through:
+    - ref: U201
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_013
+    source:
+      ref: U101
+      pad: '4'
+    loads:
+    - ref: J14
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U201_6
+      endpoints:
+      - ref: U101
+        pad: '4'
+      - ref: U201
+        pad: '6'
+    - net: LOAD_U201_6
+      endpoints:
+      - ref: U201
+        pad: '11'
+      - ref: J14
+        pad: '2'
+    through:
+    - ref: U201
+      input_pad: '6'
+      output_pad: '11'
+  - id: relay_output_014
+    source:
+      ref: U101
+      pad: '5'
+    loads:
+    - ref: J15
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U201_7
+      endpoints:
+      - ref: U101
+        pad: '5'
+      - ref: U201
+        pad: '7'
+    - net: LOAD_U201_7
+      endpoints:
+      - ref: U201
+        pad: '10'
+      - ref: J15
+        pad: '2'
+    through:
+    - ref: U201
+      input_pad: '7'
+      output_pad: '10'
+  - id: relay_output_015
+    source:
+      ref: U101
+      pad: '6'
+    loads:
+    - ref: J16
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U202_1
+      endpoints:
+      - ref: U101
+        pad: '6'
+      - ref: U202
+        pad: '1'
+    - net: LOAD_U202_1
+      endpoints:
+      - ref: U202
+        pad: '16'
+      - ref: J16
+        pad: '2'
+    through:
+    - ref: U202
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_016
+    source:
+      ref: U101
+      pad: '7'
+    loads:
+    - ref: J17
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U202_2
+      endpoints:
+      - ref: U101
+        pad: '7'
+      - ref: U202
+        pad: '2'
+    - net: LOAD_U202_2
+      endpoints:
+      - ref: U202
+        pad: '15'
+      - ref: J17
+        pad: '2'
+    through:
+    - ref: U202
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_017
+    source:
+      ref: U102
+      pad: '15'
+    loads:
+    - ref: J18
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U202_3
+      endpoints:
+      - ref: U102
+        pad: '15'
+      - ref: U202
+        pad: '3'
+    - net: LOAD_U202_3
+      endpoints:
+      - ref: U202
+        pad: '14'
+      - ref: J18
+        pad: '2'
+    through:
+    - ref: U202
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_018
+    source:
+      ref: U102
+      pad: '1'
+    loads:
+    - ref: J19
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U202_4
+      endpoints:
+      - ref: U102
+        pad: '1'
+      - ref: U202
+        pad: '4'
+    - net: LOAD_U202_4
+      endpoints:
+      - ref: U202
+        pad: '13'
+      - ref: J19
+        pad: '2'
+    through:
+    - ref: U202
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_019
+    source:
+      ref: U102
+      pad: '2'
+    loads:
+    - ref: J20
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U202_5
+      endpoints:
+      - ref: U102
+        pad: '2'
+      - ref: U202
+        pad: '5'
+    - net: LOAD_U202_5
+      endpoints:
+      - ref: U202
+        pad: '12'
+      - ref: J20
+        pad: '2'
+    through:
+    - ref: U202
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_020
+    source:
+      ref: U102
+      pad: '3'
+    loads:
+    - ref: J21
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U202_6
+      endpoints:
+      - ref: U102
+        pad: '3'
+      - ref: U202
+        pad: '6'
+    - net: LOAD_U202_6
+      endpoints:
+      - ref: U202
+        pad: '11'
+      - ref: J21
+        pad: '2'
+    through:
+    - ref: U202
+      input_pad: '6'
+      output_pad: '11'
+  - id: relay_output_021
+    source:
+      ref: U102
+      pad: '4'
+    loads:
+    - ref: J22
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U202_7
+      endpoints:
+      - ref: U102
+        pad: '4'
+      - ref: U202
+        pad: '7'
+    - net: LOAD_U202_7
+      endpoints:
+      - ref: U202
+        pad: '10'
+      - ref: J22
+        pad: '2'
+    through:
+    - ref: U202
+      input_pad: '7'
+      output_pad: '10'
+  - id: relay_output_022
+    source:
+      ref: U102
+      pad: '5'
+    loads:
+    - ref: J23
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U203_1
+      endpoints:
+      - ref: U102
+        pad: '5'
+      - ref: U203
+        pad: '1'
+    - net: LOAD_U203_1
+      endpoints:
+      - ref: U203
+        pad: '16'
+      - ref: J23
+        pad: '2'
+    through:
+    - ref: U203
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_023
+    source:
+      ref: U102
+      pad: '6'
+    loads:
+    - ref: J24
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U203_2
+      endpoints:
+      - ref: U102
+        pad: '6'
+      - ref: U203
+        pad: '2'
+    - net: LOAD_U203_2
+      endpoints:
+      - ref: U203
+        pad: '15'
+      - ref: J24
+        pad: '2'
+    through:
+    - ref: U203
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_024
+    source:
+      ref: U102
+      pad: '7'
+    loads:
+    - ref: J25
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U203_3
+      endpoints:
+      - ref: U102
+        pad: '7'
+      - ref: U203
+        pad: '3'
+    - net: LOAD_U203_3
+      endpoints:
+      - ref: U203
+        pad: '14'
+      - ref: J25
+        pad: '2'
+    through:
+    - ref: U203
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_025
+    source:
+      ref: U103
+      pad: '15'
+    loads:
+    - ref: J26
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U203_4
+      endpoints:
+      - ref: U103
+        pad: '15'
+      - ref: U203
+        pad: '4'
+    - net: LOAD_U203_4
+      endpoints:
+      - ref: U203
+        pad: '13'
+      - ref: J26
+        pad: '2'
+    through:
+    - ref: U203
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_026
+    source:
+      ref: U103
+      pad: '1'
+    loads:
+    - ref: J27
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U203_5
+      endpoints:
+      - ref: U103
+        pad: '1'
+      - ref: U203
+        pad: '5'
+    - net: LOAD_U203_5
+      endpoints:
+      - ref: U203
+        pad: '12'
+      - ref: J27
+        pad: '2'
+    through:
+    - ref: U203
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_027
+    source:
+      ref: U103
+      pad: '2'
+    loads:
+    - ref: J28
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U203_6
+      endpoints:
+      - ref: U103
+        pad: '2'
+      - ref: U203
+        pad: '6'
+    - net: LOAD_U203_6
+      endpoints:
+      - ref: U203
+        pad: '11'
+      - ref: J28
+        pad: '2'
+    through:
+    - ref: U203
+      input_pad: '6'
+      output_pad: '11'
+  - id: relay_output_028
+    source:
+      ref: U103
+      pad: '3'
+    loads:
+    - ref: J29
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U203_7
+      endpoints:
+      - ref: U103
+        pad: '3'
+      - ref: U203
+        pad: '7'
+    - net: LOAD_U203_7
+      endpoints:
+      - ref: U203
+        pad: '10'
+      - ref: J29
+        pad: '2'
+    through:
+    - ref: U203
+      input_pad: '7'
+      output_pad: '10'
+  - id: relay_output_029
+    source:
+      ref: U103
+      pad: '4'
+    loads:
+    - ref: J30
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U204_1
+      endpoints:
+      - ref: U103
+        pad: '4'
+      - ref: U204
+        pad: '1'
+    - net: LOAD_U204_1
+      endpoints:
+      - ref: U204
+        pad: '16'
+      - ref: J30
+        pad: '2'
+    through:
+    - ref: U204
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_030
+    source:
+      ref: U103
+      pad: '5'
+    loads:
+    - ref: J31
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U204_2
+      endpoints:
+      - ref: U103
+        pad: '5'
+      - ref: U204
+        pad: '2'
+    - net: LOAD_U204_2
+      endpoints:
+      - ref: U204
+        pad: '15'
+      - ref: J31
+        pad: '2'
+    through:
+    - ref: U204
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_031
+    source:
+      ref: U103
+      pad: '6'
+    loads:
+    - ref: J32
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U204_3
+      endpoints:
+      - ref: U103
+        pad: '6'
+      - ref: U204
+        pad: '3'
+    - net: LOAD_U204_3
+      endpoints:
+      - ref: U204
+        pad: '14'
+      - ref: J32
+        pad: '2'
+    through:
+    - ref: U204
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_032
+    source:
+      ref: U103
+      pad: '7'
+    loads:
+    - ref: J33
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U204_4
+      endpoints:
+      - ref: U103
+        pad: '7'
+      - ref: U204
+        pad: '4'
+    - net: LOAD_U204_4
+      endpoints:
+      - ref: U204
+        pad: '13'
+      - ref: J33
+        pad: '2'
+    through:
+    - ref: U204
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_033
+    source:
+      ref: U104
+      pad: '15'
+    loads:
+    - ref: J34
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U204_5
+      endpoints:
+      - ref: U104
+        pad: '15'
+      - ref: U204
+        pad: '5'
+    - net: LOAD_U204_5
+      endpoints:
+      - ref: U204
+        pad: '12'
+      - ref: J34
+        pad: '2'
+    through:
+    - ref: U204
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_034
+    source:
+      ref: U104
+      pad: '1'
+    loads:
+    - ref: J35
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U204_6
+      endpoints:
+      - ref: U104
+        pad: '1'
+      - ref: U204
+        pad: '6'
+    - net: LOAD_U204_6
+      endpoints:
+      - ref: U204
+        pad: '11'
+      - ref: J35
+        pad: '2'
+    through:
+    - ref: U204
+      input_pad: '6'
+      output_pad: '11'
+  - id: relay_output_035
+    source:
+      ref: U104
+      pad: '2'
+    loads:
+    - ref: J36
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U204_7
+      endpoints:
+      - ref: U104
+        pad: '2'
+      - ref: U204
+        pad: '7'
+    - net: LOAD_U204_7
+      endpoints:
+      - ref: U204
+        pad: '10'
+      - ref: J36
+        pad: '2'
+    through:
+    - ref: U204
+      input_pad: '7'
+      output_pad: '10'
+  - id: relay_output_036
+    source:
+      ref: U104
+      pad: '3'
+    loads:
+    - ref: J37
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U205_1
+      endpoints:
+      - ref: U104
+        pad: '3'
+      - ref: U205
+        pad: '1'
+    - net: LOAD_U205_1
+      endpoints:
+      - ref: U205
+        pad: '16'
+      - ref: J37
+        pad: '2'
+    through:
+    - ref: U205
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_037
+    source:
+      ref: U104
+      pad: '4'
+    loads:
+    - ref: J38
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U205_2
+      endpoints:
+      - ref: U104
+        pad: '4'
+      - ref: U205
+        pad: '2'
+    - net: LOAD_U205_2
+      endpoints:
+      - ref: U205
+        pad: '15'
+      - ref: J38
+        pad: '2'
+    through:
+    - ref: U205
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_038
+    source:
+      ref: U104
+      pad: '5'
+    loads:
+    - ref: J39
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U205_3
+      endpoints:
+      - ref: U104
+        pad: '5'
+      - ref: U205
+        pad: '3'
+    - net: LOAD_U205_3
+      endpoints:
+      - ref: U205
+        pad: '14'
+      - ref: J39
+        pad: '2'
+    through:
+    - ref: U205
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_039
+    source:
+      ref: U104
+      pad: '6'
+    loads:
+    - ref: J40
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U205_4
+      endpoints:
+      - ref: U104
+        pad: '6'
+      - ref: U205
+        pad: '4'
+    - net: LOAD_U205_4
+      endpoints:
+      - ref: U205
+        pad: '13'
+      - ref: J40
+        pad: '2'
+    through:
+    - ref: U205
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_040
+    source:
+      ref: U104
+      pad: '7'
+    loads:
+    - ref: J41
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U205_5
+      endpoints:
+      - ref: U104
+        pad: '7'
+      - ref: U205
+        pad: '5'
+    - net: LOAD_U205_5
+      endpoints:
+      - ref: U205
+        pad: '12'
+      - ref: J41
+        pad: '2'
+    through:
+    - ref: U205
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_041
+    source:
+      ref: U105
+      pad: '15'
+    loads:
+    - ref: J42
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U205_6
+      endpoints:
+      - ref: U105
+        pad: '15'
+      - ref: U205
+        pad: '6'
+    - net: LOAD_U205_6
+      endpoints:
+      - ref: U205
+        pad: '11'
+      - ref: J42
+        pad: '2'
+    through:
+    - ref: U205
+      input_pad: '6'
+      output_pad: '11'
+  - id: relay_output_042
+    source:
+      ref: U105
+      pad: '1'
+    loads:
+    - ref: J43
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U205_7
+      endpoints:
+      - ref: U105
+        pad: '1'
+      - ref: U205
+        pad: '7'
+    - net: LOAD_U205_7
+      endpoints:
+      - ref: U205
+        pad: '10'
+      - ref: J43
+        pad: '2'
+    through:
+    - ref: U205
+      input_pad: '7'
+      output_pad: '10'
+  - id: relay_output_043
+    source:
+      ref: U105
+      pad: '2'
+    loads:
+    - ref: J44
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U206_1
+      endpoints:
+      - ref: U105
+        pad: '2'
+      - ref: U206
+        pad: '1'
+    - net: LOAD_U206_1
+      endpoints:
+      - ref: U206
+        pad: '16'
+      - ref: J44
+        pad: '2'
+    through:
+    - ref: U206
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_044
+    source:
+      ref: U105
+      pad: '3'
+    loads:
+    - ref: J45
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U206_2
+      endpoints:
+      - ref: U105
+        pad: '3'
+      - ref: U206
+        pad: '2'
+    - net: LOAD_U206_2
+      endpoints:
+      - ref: U206
+        pad: '15'
+      - ref: J45
+        pad: '2'
+    through:
+    - ref: U206
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_045
+    source:
+      ref: U105
+      pad: '4'
+    loads:
+    - ref: J46
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U206_3
+      endpoints:
+      - ref: U105
+        pad: '4'
+      - ref: U206
+        pad: '3'
+    - net: LOAD_U206_3
+      endpoints:
+      - ref: U206
+        pad: '14'
+      - ref: J46
+        pad: '2'
+    through:
+    - ref: U206
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_046
+    source:
+      ref: U105
+      pad: '5'
+    loads:
+    - ref: J47
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U206_4
+      endpoints:
+      - ref: U105
+        pad: '5'
+      - ref: U206
+        pad: '4'
+    - net: LOAD_U206_4
+      endpoints:
+      - ref: U206
+        pad: '13'
+      - ref: J47
+        pad: '2'
+    through:
+    - ref: U206
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_047
+    source:
+      ref: U105
+      pad: '6'
+    loads:
+    - ref: J48
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U206_5
+      endpoints:
+      - ref: U105
+        pad: '6'
+      - ref: U206
+        pad: '5'
+    - net: LOAD_U206_5
+      endpoints:
+      - ref: U206
+        pad: '12'
+      - ref: J48
+        pad: '2'
+    through:
+    - ref: U206
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_048
+    source:
+      ref: U105
+      pad: '7'
+    loads:
+    - ref: J49
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U206_6
+      endpoints:
+      - ref: U105
+        pad: '7'
+      - ref: U206
+        pad: '6'
+    - net: LOAD_U206_6
+      endpoints:
+      - ref: U206
+        pad: '11'
+      - ref: J49
+        pad: '2'
+    through:
+    - ref: U206
+      input_pad: '6'
+      output_pad: '11'
+  - id: relay_output_049
+    source:
+      ref: U106
+      pad: '15'
+    loads:
+    - ref: J50
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U206_7
+      endpoints:
+      - ref: U106
+        pad: '15'
+      - ref: U206
+        pad: '7'
+    - net: LOAD_U206_7
+      endpoints:
+      - ref: U206
+        pad: '10'
+      - ref: J50
+        pad: '2'
+    through:
+    - ref: U206
+      input_pad: '7'
+      output_pad: '10'
+  - id: relay_output_050
+    source:
+      ref: U106
+      pad: '1'
+    loads:
+    - ref: J51
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U207_1
+      endpoints:
+      - ref: U106
+        pad: '1'
+      - ref: U207
+        pad: '1'
+    - net: LOAD_U207_1
+      endpoints:
+      - ref: U207
+        pad: '16'
+      - ref: J51
+        pad: '2'
+    through:
+    - ref: U207
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_051
+    source:
+      ref: U106
+      pad: '2'
+    loads:
+    - ref: J52
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U207_2
+      endpoints:
+      - ref: U106
+        pad: '2'
+      - ref: U207
+        pad: '2'
+    - net: LOAD_U207_2
+      endpoints:
+      - ref: U207
+        pad: '15'
+      - ref: J52
+        pad: '2'
+    through:
+    - ref: U207
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_052
+    source:
+      ref: U106
+      pad: '3'
+    loads:
+    - ref: J53
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U207_3
+      endpoints:
+      - ref: U106
+        pad: '3'
+      - ref: U207
+        pad: '3'
+    - net: LOAD_U207_3
+      endpoints:
+      - ref: U207
+        pad: '14'
+      - ref: J53
+        pad: '2'
+    through:
+    - ref: U207
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_053
+    source:
+      ref: U106
+      pad: '4'
+    loads:
+    - ref: J54
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U207_4
+      endpoints:
+      - ref: U106
+        pad: '4'
+      - ref: U207
+        pad: '4'
+    - net: LOAD_U207_4
+      endpoints:
+      - ref: U207
+        pad: '13'
+      - ref: J54
+        pad: '2'
+    through:
+    - ref: U207
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_054
+    source:
+      ref: U106
+      pad: '5'
+    loads:
+    - ref: J55
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U207_5
+      endpoints:
+      - ref: U106
+        pad: '5'
+      - ref: U207
+        pad: '5'
+    - net: LOAD_U207_5
+      endpoints:
+      - ref: U207
+        pad: '12'
+      - ref: J55
+        pad: '2'
+    through:
+    - ref: U207
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_055
+    source:
+      ref: U106
+      pad: '6'
+    loads:
+    - ref: J56
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U207_6
+      endpoints:
+      - ref: U106
+        pad: '6'
+      - ref: U207
+        pad: '6'
+    - net: LOAD_U207_6
+      endpoints:
+      - ref: U207
+        pad: '11'
+      - ref: J56
+        pad: '2'
+    through:
+    - ref: U207
+      input_pad: '6'
+      output_pad: '11'
+  - id: relay_output_056
+    source:
+      ref: U106
+      pad: '7'
+    loads:
+    - ref: J57
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U207_7
+      endpoints:
+      - ref: U106
+        pad: '7'
+      - ref: U207
+        pad: '7'
+    - net: LOAD_U207_7
+      endpoints:
+      - ref: U207
+        pad: '10'
+      - ref: J57
+        pad: '2'
+    through:
+    - ref: U207
+      input_pad: '7'
+      output_pad: '10'
+  - id: relay_output_057
+    source:
+      ref: U107
+      pad: '15'
+    loads:
+    - ref: J58
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U208_1
+      endpoints:
+      - ref: U107
+        pad: '15'
+      - ref: U208
+        pad: '1'
+    - net: LOAD_U208_1
+      endpoints:
+      - ref: U208
+        pad: '16'
+      - ref: J58
+        pad: '2'
+    through:
+    - ref: U208
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_058
+    source:
+      ref: U107
+      pad: '1'
+    loads:
+    - ref: J59
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U208_2
+      endpoints:
+      - ref: U107
+        pad: '1'
+      - ref: U208
+        pad: '2'
+    - net: LOAD_U208_2
+      endpoints:
+      - ref: U208
+        pad: '15'
+      - ref: J59
+        pad: '2'
+    through:
+    - ref: U208
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_059
+    source:
+      ref: U107
+      pad: '2'
+    loads:
+    - ref: J60
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U208_3
+      endpoints:
+      - ref: U107
+        pad: '2'
+      - ref: U208
+        pad: '3'
+    - net: LOAD_U208_3
+      endpoints:
+      - ref: U208
+        pad: '14'
+      - ref: J60
+        pad: '2'
+    through:
+    - ref: U208
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_060
+    source:
+      ref: U107
+      pad: '3'
+    loads:
+    - ref: J61
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U208_4
+      endpoints:
+      - ref: U107
+        pad: '3'
+      - ref: U208
+        pad: '4'
+    - net: LOAD_U208_4
+      endpoints:
+      - ref: U208
+        pad: '13'
+      - ref: J61
+        pad: '2'
+    through:
+    - ref: U208
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_061
+    source:
+      ref: U107
+      pad: '4'
+    loads:
+    - ref: J62
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U208_5
+      endpoints:
+      - ref: U107
+        pad: '4'
+      - ref: U208
+        pad: '5'
+    - net: LOAD_U208_5
+      endpoints:
+      - ref: U208
+        pad: '12'
+      - ref: J62
+        pad: '2'
+    through:
+    - ref: U208
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_062
+    source:
+      ref: U107
+      pad: '5'
+    loads:
+    - ref: J63
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U208_6
+      endpoints:
+      - ref: U107
+        pad: '5'
+      - ref: U208
+        pad: '6'
+    - net: LOAD_U208_6
+      endpoints:
+      - ref: U208
+        pad: '11'
+      - ref: J63
+        pad: '2'
+    through:
+    - ref: U208
+      input_pad: '6'
+      output_pad: '11'
+  - id: relay_output_063
+    source:
+      ref: U107
+      pad: '6'
+    loads:
+    - ref: J64
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U208_7
+      endpoints:
+      - ref: U107
+        pad: '6'
+      - ref: U208
+        pad: '7'
+    - net: LOAD_U208_7
+      endpoints:
+      - ref: U208
+        pad: '10'
+      - ref: J64
+        pad: '2'
+    through:
+    - ref: U208
+      input_pad: '7'
+      output_pad: '10'
+  - id: relay_output_064
+    source:
+      ref: U107
+      pad: '7'
+    loads:
+    - ref: J65
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U209_1
+      endpoints:
+      - ref: U107
+        pad: '7'
+      - ref: U209
+        pad: '1'
+    - net: LOAD_U209_1
+      endpoints:
+      - ref: U209
+        pad: '16'
+      - ref: J65
+        pad: '2'
+    through:
+    - ref: U209
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_065
+    source:
+      ref: U108
+      pad: '15'
+    loads:
+    - ref: J66
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U209_2
+      endpoints:
+      - ref: U108
+        pad: '15'
+      - ref: U209
+        pad: '2'
+    - net: LOAD_U209_2
+      endpoints:
+      - ref: U209
+        pad: '15'
+      - ref: J66
+        pad: '2'
+    through:
+    - ref: U209
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_066
+    source:
+      ref: U108
+      pad: '1'
+    loads:
+    - ref: J67
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U209_3
+      endpoints:
+      - ref: U108
+        pad: '1'
+      - ref: U209
+        pad: '3'
+    - net: LOAD_U209_3
+      endpoints:
+      - ref: U209
+        pad: '14'
+      - ref: J67
+        pad: '2'
+    through:
+    - ref: U209
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_067
+    source:
+      ref: U108
+      pad: '2'
+    loads:
+    - ref: J68
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U209_4
+      endpoints:
+      - ref: U108
+        pad: '2'
+      - ref: U209
+        pad: '4'
+    - net: LOAD_U209_4
+      endpoints:
+      - ref: U209
+        pad: '13'
+      - ref: J68
+        pad: '2'
+    through:
+    - ref: U209
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_068
+    source:
+      ref: U108
+      pad: '3'
+    loads:
+    - ref: J69
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U209_5
+      endpoints:
+      - ref: U108
+        pad: '3'
+      - ref: U209
+        pad: '5'
+    - net: LOAD_U209_5
+      endpoints:
+      - ref: U209
+        pad: '12'
+      - ref: J69
+        pad: '2'
+    through:
+    - ref: U209
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_069
+    source:
+      ref: U108
+      pad: '4'
+    loads:
+    - ref: J70
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U209_6
+      endpoints:
+      - ref: U108
+        pad: '4'
+      - ref: U209
+        pad: '6'
+    - net: LOAD_U209_6
+      endpoints:
+      - ref: U209
+        pad: '11'
+      - ref: J70
+        pad: '2'
+    through:
+    - ref: U209
+      input_pad: '6'
+      output_pad: '11'
+  - id: relay_output_070
+    source:
+      ref: U108
+      pad: '5'
+    loads:
+    - ref: J71
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U209_7
+      endpoints:
+      - ref: U108
+        pad: '5'
+      - ref: U209
+        pad: '7'
+    - net: LOAD_U209_7
+      endpoints:
+      - ref: U209
+        pad: '10'
+      - ref: J71
+        pad: '2'
+    through:
+    - ref: U209
+      input_pad: '7'
+      output_pad: '10'
+  - id: relay_output_071
+    source:
+      ref: U108
+      pad: '6'
+    loads:
+    - ref: J72
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U210_1
+      endpoints:
+      - ref: U108
+        pad: '6'
+      - ref: U210
+        pad: '1'
+    - net: LOAD_U210_1
+      endpoints:
+      - ref: U210
+        pad: '16'
+      - ref: J72
+        pad: '2'
+    through:
+    - ref: U210
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_072
+    source:
+      ref: U108
+      pad: '7'
+    loads:
+    - ref: J73
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U210_2
+      endpoints:
+      - ref: U108
+        pad: '7'
+      - ref: U210
+        pad: '2'
+    - net: LOAD_U210_2
+      endpoints:
+      - ref: U210
+        pad: '15'
+      - ref: J73
+        pad: '2'
+    through:
+    - ref: U210
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_073
+    source:
+      ref: U109
+      pad: '15'
+    loads:
+    - ref: J74
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U210_3
+      endpoints:
+      - ref: U109
+        pad: '15'
+      - ref: U210
+        pad: '3'
+    - net: LOAD_U210_3
+      endpoints:
+      - ref: U210
+        pad: '14'
+      - ref: J74
+        pad: '2'
+    through:
+    - ref: U210
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_074
+    source:
+      ref: U109
+      pad: '1'
+    loads:
+    - ref: J75
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U210_4
+      endpoints:
+      - ref: U109
+        pad: '1'
+      - ref: U210
+        pad: '4'
+    - net: LOAD_U210_4
+      endpoints:
+      - ref: U210
+        pad: '13'
+      - ref: J75
+        pad: '2'
+    through:
+    - ref: U210
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_075
+    source:
+      ref: U109
+      pad: '2'
+    loads:
+    - ref: J76
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U210_5
+      endpoints:
+      - ref: U109
+        pad: '2'
+      - ref: U210
+        pad: '5'
+    - net: LOAD_U210_5
+      endpoints:
+      - ref: U210
+        pad: '12'
+      - ref: J76
+        pad: '2'
+    through:
+    - ref: U210
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_076
+    source:
+      ref: U109
+      pad: '3'
+    loads:
+    - ref: J77
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U210_6
+      endpoints:
+      - ref: U109
+        pad: '3'
+      - ref: U210
+        pad: '6'
+    - net: LOAD_U210_6
+      endpoints:
+      - ref: U210
+        pad: '11'
+      - ref: J77
+        pad: '2'
+    through:
+    - ref: U210
+      input_pad: '6'
+      output_pad: '11'
+  - id: relay_output_077
+    source:
+      ref: U109
+      pad: '4'
+    loads:
+    - ref: J78
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U210_7
+      endpoints:
+      - ref: U109
+        pad: '4'
+      - ref: U210
+        pad: '7'
+    - net: LOAD_U210_7
+      endpoints:
+      - ref: U210
+        pad: '10'
+      - ref: J78
+        pad: '2'
+    through:
+    - ref: U210
+      input_pad: '7'
+      output_pad: '10'
+  - id: relay_output_078
+    source:
+      ref: U109
+      pad: '5'
+    loads:
+    - ref: J79
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U211_1
+      endpoints:
+      - ref: U109
+        pad: '5'
+      - ref: U211
+        pad: '1'
+    - net: LOAD_U211_1
+      endpoints:
+      - ref: U211
+        pad: '16'
+      - ref: J79
+        pad: '2'
+    through:
+    - ref: U211
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_079
+    source:
+      ref: U109
+      pad: '6'
+    loads:
+    - ref: J80
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U211_2
+      endpoints:
+      - ref: U109
+        pad: '6'
+      - ref: U211
+        pad: '2'
+    - net: LOAD_U211_2
+      endpoints:
+      - ref: U211
+        pad: '15'
+      - ref: J80
+        pad: '2'
+    through:
+    - ref: U211
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_080
+    source:
+      ref: U109
+      pad: '7'
+    loads:
+    - ref: J81
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U211_3
+      endpoints:
+      - ref: U109
+        pad: '7'
+      - ref: U211
+        pad: '3'
+    - net: LOAD_U211_3
+      endpoints:
+      - ref: U211
+        pad: '14'
+      - ref: J81
+        pad: '2'
+    through:
+    - ref: U211
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_081
+    source:
+      ref: U110
+      pad: '15'
+    loads:
+    - ref: J82
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U211_4
+      endpoints:
+      - ref: U110
+        pad: '15'
+      - ref: U211
+        pad: '4'
+    - net: LOAD_U211_4
+      endpoints:
+      - ref: U211
+        pad: '13'
+      - ref: J82
+        pad: '2'
+    through:
+    - ref: U211
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_082
+    source:
+      ref: U110
+      pad: '1'
+    loads:
+    - ref: J83
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U211_5
+      endpoints:
+      - ref: U110
+        pad: '1'
+      - ref: U211
+        pad: '5'
+    - net: LOAD_U211_5
+      endpoints:
+      - ref: U211
+        pad: '12'
+      - ref: J83
+        pad: '2'
+    through:
+    - ref: U211
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_083
+    source:
+      ref: U110
+      pad: '2'
+    loads:
+    - ref: J84
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U211_6
+      endpoints:
+      - ref: U110
+        pad: '2'
+      - ref: U211
+        pad: '6'
+    - net: LOAD_U211_6
+      endpoints:
+      - ref: U211
+        pad: '11'
+      - ref: J84
+        pad: '2'
+    through:
+    - ref: U211
+      input_pad: '6'
+      output_pad: '11'
+  - id: relay_output_084
+    source:
+      ref: U110
+      pad: '3'
+    loads:
+    - ref: J85
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U211_7
+      endpoints:
+      - ref: U110
+        pad: '3'
+      - ref: U211
+        pad: '7'
+    - net: LOAD_U211_7
+      endpoints:
+      - ref: U211
+        pad: '10'
+      - ref: J85
+        pad: '2'
+    through:
+    - ref: U211
+      input_pad: '7'
+      output_pad: '10'
+  - id: relay_output_085
+    source:
+      ref: U110
+      pad: '4'
+    loads:
+    - ref: J86
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U212_1
+      endpoints:
+      - ref: U110
+        pad: '4'
+      - ref: U212
+        pad: '1'
+    - net: LOAD_U212_1
+      endpoints:
+      - ref: U212
+        pad: '16'
+      - ref: J86
+        pad: '2'
+    through:
+    - ref: U212
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_086
+    source:
+      ref: U110
+      pad: '5'
+    loads:
+    - ref: J87
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U212_2
+      endpoints:
+      - ref: U110
+        pad: '5'
+      - ref: U212
+        pad: '2'
+    - net: LOAD_U212_2
+      endpoints:
+      - ref: U212
+        pad: '15'
+      - ref: J87
+        pad: '2'
+    through:
+    - ref: U212
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_087
+    source:
+      ref: U110
+      pad: '6'
+    loads:
+    - ref: J88
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U212_3
+      endpoints:
+      - ref: U110
+        pad: '6'
+      - ref: U212
+        pad: '3'
+    - net: LOAD_U212_3
+      endpoints:
+      - ref: U212
+        pad: '14'
+      - ref: J88
+        pad: '2'
+    through:
+    - ref: U212
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_088
+    source:
+      ref: U110
+      pad: '7'
+    loads:
+    - ref: J89
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U212_4
+      endpoints:
+      - ref: U110
+        pad: '7'
+      - ref: U212
+        pad: '4'
+    - net: LOAD_U212_4
+      endpoints:
+      - ref: U212
+        pad: '13'
+      - ref: J89
+        pad: '2'
+    through:
+    - ref: U212
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_089
+    source:
+      ref: U111
+      pad: '15'
+    loads:
+    - ref: J90
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U212_5
+      endpoints:
+      - ref: U111
+        pad: '15'
+      - ref: U212
+        pad: '5'
+    - net: LOAD_U212_5
+      endpoints:
+      - ref: U212
+        pad: '12'
+      - ref: J90
+        pad: '2'
+    through:
+    - ref: U212
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_090
+    source:
+      ref: U111
+      pad: '1'
+    loads:
+    - ref: J91
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U212_6
+      endpoints:
+      - ref: U111
+        pad: '1'
+      - ref: U212
+        pad: '6'
+    - net: LOAD_U212_6
+      endpoints:
+      - ref: U212
+        pad: '11'
+      - ref: J91
+        pad: '2'
+    through:
+    - ref: U212
+      input_pad: '6'
+      output_pad: '11'
+  - id: relay_output_091
+    source:
+      ref: U111
+      pad: '2'
+    loads:
+    - ref: J92
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U212_7
+      endpoints:
+      - ref: U111
+        pad: '2'
+      - ref: U212
+        pad: '7'
+    - net: LOAD_U212_7
+      endpoints:
+      - ref: U212
+        pad: '10'
+      - ref: J92
+        pad: '2'
+    through:
+    - ref: U212
+      input_pad: '7'
+      output_pad: '10'
+  - id: relay_output_092
+    source:
+      ref: U111
+      pad: '3'
+    loads:
+    - ref: J93
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U213_1
+      endpoints:
+      - ref: U111
+        pad: '3'
+      - ref: U213
+        pad: '1'
+    - net: LOAD_U213_1
+      endpoints:
+      - ref: U213
+        pad: '16'
+      - ref: J93
+        pad: '2'
+    through:
+    - ref: U213
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_093
+    source:
+      ref: U111
+      pad: '4'
+    loads:
+    - ref: J94
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U213_2
+      endpoints:
+      - ref: U111
+        pad: '4'
+      - ref: U213
+        pad: '2'
+    - net: LOAD_U213_2
+      endpoints:
+      - ref: U213
+        pad: '15'
+      - ref: J94
+        pad: '2'
+    through:
+    - ref: U213
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_094
+    source:
+      ref: U111
+      pad: '5'
+    loads:
+    - ref: J95
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U213_3
+      endpoints:
+      - ref: U111
+        pad: '5'
+      - ref: U213
+        pad: '3'
+    - net: LOAD_U213_3
+      endpoints:
+      - ref: U213
+        pad: '14'
+      - ref: J95
+        pad: '2'
+    through:
+    - ref: U213
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_095
+    source:
+      ref: U111
+      pad: '6'
+    loads:
+    - ref: J96
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U213_4
+      endpoints:
+      - ref: U111
+        pad: '6'
+      - ref: U213
+        pad: '4'
+    - net: LOAD_U213_4
+      endpoints:
+      - ref: U213
+        pad: '13'
+      - ref: J96
+        pad: '2'
+    through:
+    - ref: U213
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_096
+    source:
+      ref: U111
+      pad: '7'
+    loads:
+    - ref: J97
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U213_5
+      endpoints:
+      - ref: U111
+        pad: '7'
+      - ref: U213
+        pad: '5'
+    - net: LOAD_U213_5
+      endpoints:
+      - ref: U213
+        pad: '12'
+      - ref: J97
+        pad: '2'
+    through:
+    - ref: U213
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_097
+    source:
+      ref: U112
+      pad: '15'
+    loads:
+    - ref: J98
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U213_6
+      endpoints:
+      - ref: U112
+        pad: '15'
+      - ref: U213
+        pad: '6'
+    - net: LOAD_U213_6
+      endpoints:
+      - ref: U213
+        pad: '11'
+      - ref: J98
+        pad: '2'
+    through:
+    - ref: U213
+      input_pad: '6'
+      output_pad: '11'
+  - id: relay_output_098
+    source:
+      ref: U112
+      pad: '1'
+    loads:
+    - ref: J99
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U213_7
+      endpoints:
+      - ref: U112
+        pad: '1'
+      - ref: U213
+        pad: '7'
+    - net: LOAD_U213_7
+      endpoints:
+      - ref: U213
+        pad: '10'
+      - ref: J99
+        pad: '2'
+    through:
+    - ref: U213
+      input_pad: '7'
+      output_pad: '10'
+  - id: relay_output_099
+    source:
+      ref: U112
+      pad: '2'
+    loads:
+    - ref: J100
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U214_1
+      endpoints:
+      - ref: U112
+        pad: '2'
+      - ref: U214
+        pad: '1'
+    - net: LOAD_U214_1
+      endpoints:
+      - ref: U214
+        pad: '16'
+      - ref: J100
+        pad: '2'
+    through:
+    - ref: U214
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_100
+    source:
+      ref: U112
+      pad: '3'
+    loads:
+    - ref: J101
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U214_2
+      endpoints:
+      - ref: U112
+        pad: '3'
+      - ref: U214
+        pad: '2'
+    - net: LOAD_U214_2
+      endpoints:
+      - ref: U214
+        pad: '15'
+      - ref: J101
+        pad: '2'
+    through:
+    - ref: U214
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_101
+    source:
+      ref: U112
+      pad: '4'
+    loads:
+    - ref: J102
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U214_3
+      endpoints:
+      - ref: U112
+        pad: '4'
+      - ref: U214
+        pad: '3'
+    - net: LOAD_U214_3
+      endpoints:
+      - ref: U214
+        pad: '14'
+      - ref: J102
+        pad: '2'
+    through:
+    - ref: U214
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_102
+    source:
+      ref: U112
+      pad: '5'
+    loads:
+    - ref: J103
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U214_4
+      endpoints:
+      - ref: U112
+        pad: '5'
+      - ref: U214
+        pad: '4'
+    - net: LOAD_U214_4
+      endpoints:
+      - ref: U214
+        pad: '13'
+      - ref: J103
+        pad: '2'
+    through:
+    - ref: U214
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_103
+    source:
+      ref: U112
+      pad: '6'
+    loads:
+    - ref: J104
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U214_5
+      endpoints:
+      - ref: U112
+        pad: '6'
+      - ref: U214
+        pad: '5'
+    - net: LOAD_U214_5
+      endpoints:
+      - ref: U214
+        pad: '12'
+      - ref: J104
+        pad: '2'
+    through:
+    - ref: U214
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_104
+    source:
+      ref: U112
+      pad: '7'
+    loads:
+    - ref: J105
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U214_6
+      endpoints:
+      - ref: U112
+        pad: '7'
+      - ref: U214
+        pad: '6'
+    - net: LOAD_U214_6
+      endpoints:
+      - ref: U214
+        pad: '11'
+      - ref: J105
+        pad: '2'
+    through:
+    - ref: U214
+      input_pad: '6'
+      output_pad: '11'
+  - id: relay_output_105
+    source:
+      ref: U113
+      pad: '15'
+    loads:
+    - ref: J106
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U214_7
+      endpoints:
+      - ref: U113
+        pad: '15'
+      - ref: U214
+        pad: '7'
+    - net: LOAD_U214_7
+      endpoints:
+      - ref: U214
+        pad: '10'
+      - ref: J106
+        pad: '2'
+    through:
+    - ref: U214
+      input_pad: '7'
+      output_pad: '10'
+  - id: relay_output_106
+    source:
+      ref: U113
+      pad: '1'
+    loads:
+    - ref: J107
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U215_1
+      endpoints:
+      - ref: U113
+        pad: '1'
+      - ref: U215
+        pad: '1'
+    - net: LOAD_U215_1
+      endpoints:
+      - ref: U215
+        pad: '16'
+      - ref: J107
+        pad: '2'
+    through:
+    - ref: U215
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_107
+    source:
+      ref: U113
+      pad: '2'
+    loads:
+    - ref: J108
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U215_2
+      endpoints:
+      - ref: U113
+        pad: '2'
+      - ref: U215
+        pad: '2'
+    - net: LOAD_U215_2
+      endpoints:
+      - ref: U215
+        pad: '15'
+      - ref: J108
+        pad: '2'
+    through:
+    - ref: U215
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_108
+    source:
+      ref: U113
+      pad: '3'
+    loads:
+    - ref: J109
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U215_3
+      endpoints:
+      - ref: U113
+        pad: '3'
+      - ref: U215
+        pad: '3'
+    - net: LOAD_U215_3
+      endpoints:
+      - ref: U215
+        pad: '14'
+      - ref: J109
+        pad: '2'
+    through:
+    - ref: U215
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_109
+    source:
+      ref: U113
+      pad: '4'
+    loads:
+    - ref: J110
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U215_4
+      endpoints:
+      - ref: U113
+        pad: '4'
+      - ref: U215
+        pad: '4'
+    - net: LOAD_U215_4
+      endpoints:
+      - ref: U215
+        pad: '13'
+      - ref: J110
+        pad: '2'
+    through:
+    - ref: U215
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_110
+    source:
+      ref: U113
+      pad: '5'
+    loads:
+    - ref: J111
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U215_5
+      endpoints:
+      - ref: U113
+        pad: '5'
+      - ref: U215
+        pad: '5'
+    - net: LOAD_U215_5
+      endpoints:
+      - ref: U215
+        pad: '12'
+      - ref: J111
+        pad: '2'
+    through:
+    - ref: U215
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_111
+    source:
+      ref: U113
+      pad: '6'
+    loads:
+    - ref: J112
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U215_6
+      endpoints:
+      - ref: U113
+        pad: '6'
+      - ref: U215
+        pad: '6'
+    - net: LOAD_U215_6
+      endpoints:
+      - ref: U215
+        pad: '11'
+      - ref: J112
+        pad: '2'
+    through:
+    - ref: U215
+      input_pad: '6'
+      output_pad: '11'
+  - id: relay_output_112
+    source:
+      ref: U113
+      pad: '7'
+    loads:
+    - ref: J113
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U215_7
+      endpoints:
+      - ref: U113
+        pad: '7'
+      - ref: U215
+        pad: '7'
+    - net: LOAD_U215_7
+      endpoints:
+      - ref: U215
+        pad: '10'
+      - ref: J113
+        pad: '2'
+    through:
+    - ref: U215
+      input_pad: '7'
+      output_pad: '10'
+  - id: relay_output_113
+    source:
+      ref: U114
+      pad: '15'
+    loads:
+    - ref: J114
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U216_1
+      endpoints:
+      - ref: U114
+        pad: '15'
+      - ref: U216
+        pad: '1'
+    - net: LOAD_U216_1
+      endpoints:
+      - ref: U216
+        pad: '16'
+      - ref: J114
+        pad: '2'
+    through:
+    - ref: U216
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_114
+    source:
+      ref: U114
+      pad: '1'
+    loads:
+    - ref: J115
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U216_2
+      endpoints:
+      - ref: U114
+        pad: '1'
+      - ref: U216
+        pad: '2'
+    - net: LOAD_U216_2
+      endpoints:
+      - ref: U216
+        pad: '15'
+      - ref: J115
+        pad: '2'
+    through:
+    - ref: U216
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_115
+    source:
+      ref: U114
+      pad: '2'
+    loads:
+    - ref: J116
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U216_3
+      endpoints:
+      - ref: U114
+        pad: '2'
+      - ref: U216
+        pad: '3'
+    - net: LOAD_U216_3
+      endpoints:
+      - ref: U216
+        pad: '14'
+      - ref: J116
+        pad: '2'
+    through:
+    - ref: U216
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_116
+    source:
+      ref: U114
+      pad: '3'
+    loads:
+    - ref: J117
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U216_4
+      endpoints:
+      - ref: U114
+        pad: '3'
+      - ref: U216
+        pad: '4'
+    - net: LOAD_U216_4
+      endpoints:
+      - ref: U216
+        pad: '13'
+      - ref: J117
+        pad: '2'
+    through:
+    - ref: U216
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_117
+    source:
+      ref: U114
+      pad: '4'
+    loads:
+    - ref: J118
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U216_5
+      endpoints:
+      - ref: U114
+        pad: '4'
+      - ref: U216
+        pad: '5'
+    - net: LOAD_U216_5
+      endpoints:
+      - ref: U216
+        pad: '12'
+      - ref: J118
+        pad: '2'
+    through:
+    - ref: U216
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_118
+    source:
+      ref: U114
+      pad: '5'
+    loads:
+    - ref: J119
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U216_6
+      endpoints:
+      - ref: U114
+        pad: '5'
+      - ref: U216
+        pad: '6'
+    - net: LOAD_U216_6
+      endpoints:
+      - ref: U216
+        pad: '11'
+      - ref: J119
+        pad: '2'
+    through:
+    - ref: U216
+      input_pad: '6'
+      output_pad: '11'
+  - id: relay_output_119
+    source:
+      ref: U114
+      pad: '6'
+    loads:
+    - ref: J120
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U216_7
+      endpoints:
+      - ref: U114
+        pad: '6'
+      - ref: U216
+        pad: '7'
+    - net: LOAD_U216_7
+      endpoints:
+      - ref: U216
+        pad: '10'
+      - ref: J120
+        pad: '2'
+    through:
+    - ref: U216
+      input_pad: '7'
+      output_pad: '10'
+  - id: relay_output_120
+    source:
+      ref: U114
+      pad: '7'
+    loads:
+    - ref: J121
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U217_1
+      endpoints:
+      - ref: U114
+        pad: '7'
+      - ref: U217
+        pad: '1'
+    - net: LOAD_U217_1
+      endpoints:
+      - ref: U217
+        pad: '16'
+      - ref: J121
+        pad: '2'
+    through:
+    - ref: U217
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_121
+    source:
+      ref: U115
+      pad: '15'
+    loads:
+    - ref: J122
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U217_2
+      endpoints:
+      - ref: U115
+        pad: '15'
+      - ref: U217
+        pad: '2'
+    - net: LOAD_U217_2
+      endpoints:
+      - ref: U217
+        pad: '15'
+      - ref: J122
+        pad: '2'
+    through:
+    - ref: U217
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_122
+    source:
+      ref: U115
+      pad: '1'
+    loads:
+    - ref: J123
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U217_3
+      endpoints:
+      - ref: U115
+        pad: '1'
+      - ref: U217
+        pad: '3'
+    - net: LOAD_U217_3
+      endpoints:
+      - ref: U217
+        pad: '14'
+      - ref: J123
+        pad: '2'
+    through:
+    - ref: U217
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_123
+    source:
+      ref: U115
+      pad: '2'
+    loads:
+    - ref: J124
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U217_4
+      endpoints:
+      - ref: U115
+        pad: '2'
+      - ref: U217
+        pad: '4'
+    - net: LOAD_U217_4
+      endpoints:
+      - ref: U217
+        pad: '13'
+      - ref: J124
+        pad: '2'
+    through:
+    - ref: U217
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_124
+    source:
+      ref: U115
+      pad: '3'
+    loads:
+    - ref: J125
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U217_5
+      endpoints:
+      - ref: U115
+        pad: '3'
+      - ref: U217
+        pad: '5'
+    - net: LOAD_U217_5
+      endpoints:
+      - ref: U217
+        pad: '12'
+      - ref: J125
+        pad: '2'
+    through:
+    - ref: U217
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_125
+    source:
+      ref: U115
+      pad: '4'
+    loads:
+    - ref: J126
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U217_6
+      endpoints:
+      - ref: U115
+        pad: '4'
+      - ref: U217
+        pad: '6'
+    - net: LOAD_U217_6
+      endpoints:
+      - ref: U217
+        pad: '11'
+      - ref: J126
+        pad: '2'
+    through:
+    - ref: U217
+      input_pad: '6'
+      output_pad: '11'
+  - id: relay_output_126
+    source:
+      ref: U115
+      pad: '5'
+    loads:
+    - ref: J127
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U217_7
+      endpoints:
+      - ref: U115
+        pad: '5'
+      - ref: U217
+        pad: '7'
+    - net: LOAD_U217_7
+      endpoints:
+      - ref: U217
+        pad: '10'
+      - ref: J127
+        pad: '2'
+    through:
+    - ref: U217
+      input_pad: '7'
+      output_pad: '10'
+  - id: relay_output_127
+    source:
+      ref: U115
+      pad: '6'
+    loads:
+    - ref: J128
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U218_1
+      endpoints:
+      - ref: U115
+        pad: '6'
+      - ref: U218
+        pad: '1'
+    - net: LOAD_U218_1
+      endpoints:
+      - ref: U218
+        pad: '16'
+      - ref: J128
+        pad: '2'
+    through:
+    - ref: U218
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_128
+    source:
+      ref: U115
+      pad: '7'
+    loads:
+    - ref: J129
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U218_2
+      endpoints:
+      - ref: U115
+        pad: '7'
+      - ref: U218
+        pad: '2'
+    - net: LOAD_U218_2
+      endpoints:
+      - ref: U218
+        pad: '15'
+      - ref: J129
+        pad: '2'
+    through:
+    - ref: U218
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_129
+    source:
+      ref: U116
+      pad: '15'
+    loads:
+    - ref: J130
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U218_3
+      endpoints:
+      - ref: U116
+        pad: '15'
+      - ref: U218
+        pad: '3'
+    - net: LOAD_U218_3
+      endpoints:
+      - ref: U218
+        pad: '14'
+      - ref: J130
+        pad: '2'
+    through:
+    - ref: U218
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_130
+    source:
+      ref: U116
+      pad: '1'
+    loads:
+    - ref: J131
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U218_4
+      endpoints:
+      - ref: U116
+        pad: '1'
+      - ref: U218
+        pad: '4'
+    - net: LOAD_U218_4
+      endpoints:
+      - ref: U218
+        pad: '13'
+      - ref: J131
+        pad: '2'
+    through:
+    - ref: U218
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_131
+    source:
+      ref: U116
+      pad: '2'
+    loads:
+    - ref: J132
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U218_5
+      endpoints:
+      - ref: U116
+        pad: '2'
+      - ref: U218
+        pad: '5'
+    - net: LOAD_U218_5
+      endpoints:
+      - ref: U218
+        pad: '12'
+      - ref: J132
+        pad: '2'
+    through:
+    - ref: U218
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_132
+    source:
+      ref: U116
+      pad: '3'
+    loads:
+    - ref: J133
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U218_6
+      endpoints:
+      - ref: U116
+        pad: '3'
+      - ref: U218
+        pad: '6'
+    - net: LOAD_U218_6
+      endpoints:
+      - ref: U218
+        pad: '11'
+      - ref: J133
+        pad: '2'
+    through:
+    - ref: U218
+      input_pad: '6'
+      output_pad: '11'
+  - id: relay_output_133
+    source:
+      ref: U116
+      pad: '4'
+    loads:
+    - ref: J134
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U218_7
+      endpoints:
+      - ref: U116
+        pad: '4'
+      - ref: U218
+        pad: '7'
+    - net: LOAD_U218_7
+      endpoints:
+      - ref: U218
+        pad: '10'
+      - ref: J134
+        pad: '2'
+    through:
+    - ref: U218
+      input_pad: '7'
+      output_pad: '10'
+  - id: relay_output_134
+    source:
+      ref: U116
+      pad: '5'
+    loads:
+    - ref: J135
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U219_1
+      endpoints:
+      - ref: U116
+        pad: '5'
+      - ref: U219
+        pad: '1'
+    - net: LOAD_U219_1
+      endpoints:
+      - ref: U219
+        pad: '16'
+      - ref: J135
+        pad: '2'
+    through:
+    - ref: U219
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_135
+    source:
+      ref: U116
+      pad: '6'
+    loads:
+    - ref: J136
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U219_2
+      endpoints:
+      - ref: U116
+        pad: '6'
+      - ref: U219
+        pad: '2'
+    - net: LOAD_U219_2
+      endpoints:
+      - ref: U219
+        pad: '15'
+      - ref: J136
+        pad: '2'
+    through:
+    - ref: U219
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_136
+    source:
+      ref: U116
+      pad: '7'
+    loads:
+    - ref: J137
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U219_3
+      endpoints:
+      - ref: U116
+        pad: '7'
+      - ref: U219
+        pad: '3'
+    - net: LOAD_U219_3
+      endpoints:
+      - ref: U219
+        pad: '14'
+      - ref: J137
+        pad: '2'
+    through:
+    - ref: U219
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_137
+    source:
+      ref: U117
+      pad: '15'
+    loads:
+    - ref: J138
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U219_4
+      endpoints:
+      - ref: U117
+        pad: '15'
+      - ref: U219
+        pad: '4'
+    - net: LOAD_U219_4
+      endpoints:
+      - ref: U219
+        pad: '13'
+      - ref: J138
+        pad: '2'
+    through:
+    - ref: U219
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_138
+    source:
+      ref: U117
+      pad: '1'
+    loads:
+    - ref: J139
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U219_5
+      endpoints:
+      - ref: U117
+        pad: '1'
+      - ref: U219
+        pad: '5'
+    - net: LOAD_U219_5
+      endpoints:
+      - ref: U219
+        pad: '12'
+      - ref: J139
+        pad: '2'
+    through:
+    - ref: U219
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_139
+    source:
+      ref: U117
+      pad: '2'
+    loads:
+    - ref: J140
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U219_6
+      endpoints:
+      - ref: U117
+        pad: '2'
+      - ref: U219
+        pad: '6'
+    - net: LOAD_U219_6
+      endpoints:
+      - ref: U219
+        pad: '11'
+      - ref: J140
+        pad: '2'
+    through:
+    - ref: U219
+      input_pad: '6'
+      output_pad: '11'
+  - id: relay_output_140
+    source:
+      ref: U117
+      pad: '3'
+    loads:
+    - ref: J141
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U219_7
+      endpoints:
+      - ref: U117
+        pad: '3'
+      - ref: U219
+        pad: '7'
+    - net: LOAD_U219_7
+      endpoints:
+      - ref: U219
+        pad: '10'
+      - ref: J141
+        pad: '2'
+    through:
+    - ref: U219
+      input_pad: '7'
+      output_pad: '10'
+  - id: relay_output_141
+    source:
+      ref: U117
+      pad: '4'
+    loads:
+    - ref: J142
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U220_1
+      endpoints:
+      - ref: U117
+        pad: '4'
+      - ref: U220
+        pad: '1'
+    - net: LOAD_U220_1
+      endpoints:
+      - ref: U220
+        pad: '16'
+      - ref: J142
+        pad: '2'
+    through:
+    - ref: U220
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_142
+    source:
+      ref: U117
+      pad: '5'
+    loads:
+    - ref: J143
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U220_2
+      endpoints:
+      - ref: U117
+        pad: '5'
+      - ref: U220
+        pad: '2'
+    - net: LOAD_U220_2
+      endpoints:
+      - ref: U220
+        pad: '15'
+      - ref: J143
+        pad: '2'
+    through:
+    - ref: U220
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_143
+    source:
+      ref: U117
+      pad: '6'
+    loads:
+    - ref: J144
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U220_3
+      endpoints:
+      - ref: U117
+        pad: '6'
+      - ref: U220
+        pad: '3'
+    - net: LOAD_U220_3
+      endpoints:
+      - ref: U220
+        pad: '14'
+      - ref: J144
+        pad: '2'
+    through:
+    - ref: U220
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_144
+    source:
+      ref: U117
+      pad: '7'
+    loads:
+    - ref: J145
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U220_4
+      endpoints:
+      - ref: U117
+        pad: '7'
+      - ref: U220
+        pad: '4'
+    - net: LOAD_U220_4
+      endpoints:
+      - ref: U220
+        pad: '13'
+      - ref: J145
+        pad: '2'
+    through:
+    - ref: U220
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_145
+    source:
+      ref: U118
+      pad: '15'
+    loads:
+    - ref: J146
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U220_5
+      endpoints:
+      - ref: U118
+        pad: '15'
+      - ref: U220
+        pad: '5'
+    - net: LOAD_U220_5
+      endpoints:
+      - ref: U220
+        pad: '12'
+      - ref: J146
+        pad: '2'
+    through:
+    - ref: U220
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_146
+    source:
+      ref: U118
+      pad: '1'
+    loads:
+    - ref: J147
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U220_6
+      endpoints:
+      - ref: U118
+        pad: '1'
+      - ref: U220
+        pad: '6'
+    - net: LOAD_U220_6
+      endpoints:
+      - ref: U220
+        pad: '11'
+      - ref: J147
+        pad: '2'
+    through:
+    - ref: U220
+      input_pad: '6'
+      output_pad: '11'
+  - id: relay_output_147
+    source:
+      ref: U118
+      pad: '2'
+    loads:
+    - ref: J148
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U220_7
+      endpoints:
+      - ref: U118
+        pad: '2'
+      - ref: U220
+        pad: '7'
+    - net: LOAD_U220_7
+      endpoints:
+      - ref: U220
+        pad: '10'
+      - ref: J148
+        pad: '2'
+    through:
+    - ref: U220
+      input_pad: '7'
+      output_pad: '10'
+  - id: relay_output_148
+    source:
+      ref: U118
+      pad: '3'
+    loads:
+    - ref: J149
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U221_1
+      endpoints:
+      - ref: U118
+        pad: '3'
+      - ref: U221
+        pad: '1'
+    - net: LOAD_U221_1
+      endpoints:
+      - ref: U221
+        pad: '16'
+      - ref: J149
+        pad: '2'
+    through:
+    - ref: U221
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_149
+    source:
+      ref: U118
+      pad: '4'
+    loads:
+    - ref: J150
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U221_2
+      endpoints:
+      - ref: U118
+        pad: '4'
+      - ref: U221
+        pad: '2'
+    - net: LOAD_U221_2
+      endpoints:
+      - ref: U221
+        pad: '15'
+      - ref: J150
+        pad: '2'
+    through:
+    - ref: U221
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_150
+    source:
+      ref: U118
+      pad: '5'
+    loads:
+    - ref: J151
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U221_3
+      endpoints:
+      - ref: U118
+        pad: '5'
+      - ref: U221
+        pad: '3'
+    - net: LOAD_U221_3
+      endpoints:
+      - ref: U221
+        pad: '14'
+      - ref: J151
+        pad: '2'
+    through:
+    - ref: U221
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_151
+    source:
+      ref: U118
+      pad: '6'
+    loads:
+    - ref: J152
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U221_4
+      endpoints:
+      - ref: U118
+        pad: '6'
+      - ref: U221
+        pad: '4'
+    - net: LOAD_U221_4
+      endpoints:
+      - ref: U221
+        pad: '13'
+      - ref: J152
+        pad: '2'
+    through:
+    - ref: U221
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_152
+    source:
+      ref: U118
+      pad: '7'
+    loads:
+    - ref: J153
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U221_5
+      endpoints:
+      - ref: U118
+        pad: '7'
+      - ref: U221
+        pad: '5'
+    - net: LOAD_U221_5
+      endpoints:
+      - ref: U221
+        pad: '12'
+      - ref: J153
+        pad: '2'
+    through:
+    - ref: U221
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_153
+    source:
+      ref: U119
+      pad: '15'
+    loads:
+    - ref: J154
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U221_6
+      endpoints:
+      - ref: U119
+        pad: '15'
+      - ref: U221
+        pad: '6'
+    - net: LOAD_U221_6
+      endpoints:
+      - ref: U221
+        pad: '11'
+      - ref: J154
+        pad: '2'
+    through:
+    - ref: U221
+      input_pad: '6'
+      output_pad: '11'
+  - id: relay_output_154
+    source:
+      ref: U119
+      pad: '1'
+    loads:
+    - ref: J155
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U221_7
+      endpoints:
+      - ref: U119
+        pad: '1'
+      - ref: U221
+        pad: '7'
+    - net: LOAD_U221_7
+      endpoints:
+      - ref: U221
+        pad: '10'
+      - ref: J155
+        pad: '2'
+    through:
+    - ref: U221
+      input_pad: '7'
+      output_pad: '10'
+  - id: relay_output_155
+    source:
+      ref: U119
+      pad: '2'
+    loads:
+    - ref: J156
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U222_1
+      endpoints:
+      - ref: U119
+        pad: '2'
+      - ref: U222
+        pad: '1'
+    - net: LOAD_U222_1
+      endpoints:
+      - ref: U222
+        pad: '16'
+      - ref: J156
+        pad: '2'
+    through:
+    - ref: U222
+      input_pad: '1'
+      output_pad: '16'
+  - id: relay_output_156
+    source:
+      ref: U119
+      pad: '3'
+    loads:
+    - ref: J157
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U222_2
+      endpoints:
+      - ref: U119
+        pad: '3'
+      - ref: U222
+        pad: '2'
+    - net: LOAD_U222_2
+      endpoints:
+      - ref: U222
+        pad: '15'
+      - ref: J157
+        pad: '2'
+    through:
+    - ref: U222
+      input_pad: '2'
+      output_pad: '15'
+  - id: relay_output_157
+    source:
+      ref: U119
+      pad: '4'
+    loads:
+    - ref: J158
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U222_3
+      endpoints:
+      - ref: U119
+        pad: '4'
+      - ref: U222
+        pad: '3'
+    - net: LOAD_U222_3
+      endpoints:
+      - ref: U222
+        pad: '14'
+      - ref: J158
+        pad: '2'
+    through:
+    - ref: U222
+      input_pad: '3'
+      output_pad: '14'
+  - id: relay_output_158
+    source:
+      ref: U119
+      pad: '5'
+    loads:
+    - ref: J159
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U222_4
+      endpoints:
+      - ref: U119
+        pad: '5'
+      - ref: U222
+        pad: '4'
+    - net: LOAD_U222_4
+      endpoints:
+      - ref: U222
+        pad: '13'
+      - ref: J159
+        pad: '2'
+    through:
+    - ref: U222
+      input_pad: '4'
+      output_pad: '13'
+  - id: relay_output_159
+    source:
+      ref: U119
+      pad: '6'
+    loads:
+    - ref: J160
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U222_5
+      endpoints:
+      - ref: U119
+        pad: '6'
+      - ref: U222
+        pad: '5'
+    - net: LOAD_U222_5
+      endpoints:
+      - ref: U222
+        pad: '12'
+      - ref: J160
+        pad: '2'
+    through:
+    - ref: U222
+      input_pad: '5'
+      output_pad: '12'
+  - id: relay_output_160
+    source:
+      ref: U119
+      pad: '7'
+    loads:
+    - ref: J161
+      pad: '2'
+    segments:
+    - net: COIL_DRV_U222_6
+      endpoints:
+      - ref: U119
+        pad: '7'
+      - ref: U222
+        pad: '6'
+    - net: LOAD_U222_6
+      endpoints:
+      - ref: U222
+        pad: '11'
+      - ref: J161
+        pad: '2'
+    through:
+    - ref: U222
+      input_pad: '6'
+      output_pad: '11'
+- id: multichannel_analog_setpoint_card
+  spec: cases/multichannel_analog_setpoint_card.yaml
+  family: precision_analog_setpoint_output
+  minimum_physical_parts: 350
+  required_sections:
+  - power
+  - digital
+  - analog
+  - connectors
+  board_mm:
+  - 300
+  - 220
+  required_paths:
+  - id: analog_spi_data
+    source:
+      ref: U10
+      pad: '28'
+    loads:
+    - ref: U30
+      pad: '7'
+    - ref: U31
+      pad: '7'
+    - ref: U32
+      pad: '7'
+    - ref: U33
+      pad: '7'
+    - ref: U34
+      pad: '7'
+    - ref: U35
+      pad: '7'
+    - ref: U36
+      pad: '7'
+    - ref: U37
+      pad: '7'
+    - ref: U38
+      pad: '7'
+    - ref: U39
+      pad: '7'
+    - ref: U40
+      pad: '7'
+    - ref: U41
+      pad: '7'
+    - ref: U42
+      pad: '7'
+    - ref: U43
+      pad: '7'
+    - ref: U44
+      pad: '7'
+    - ref: U45
+      pad: '7'
+    - ref: U46
+      pad: '7'
+    - ref: U47
+      pad: '7'
+    - ref: U48
+      pad: '7'
+    - ref: U49
+      pad: '7'
+    - ref: U50
+      pad: '7'
+    - ref: U51
+      pad: '7'
+    - ref: U52
+      pad: '7'
+    - ref: U53
+      pad: '7'
+    - ref: U54
+      pad: '7'
+    - ref: U55
+      pad: '7'
+    - ref: U56
+      pad: '7'
+    - ref: U57
+      pad: '7'
+    - ref: U58
+      pad: '7'
+    - ref: U59
+      pad: '7'
+    - ref: U60
+      pad: '7'
+    - ref: U61
+      pad: '7'
+    - ref: U62
+      pad: '7'
+    - ref: U63
+      pad: '7'
+    - ref: U64
+      pad: '7'
+    - ref: U65
+      pad: '7'
+    segments:
+    - net: SPI_MOSI
+      endpoints:
+      - ref: U10
+        pad: '28'
+      - ref: U30
+        pad: '7'
+      - ref: U31
+        pad: '7'
+      - ref: U32
+        pad: '7'
+      - ref: U33
+        pad: '7'
+      - ref: U34
+        pad: '7'
+      - ref: U35
+        pad: '7'
+      - ref: U36
+        pad: '7'
+      - ref: U37
+        pad: '7'
+      - ref: U38
+        pad: '7'
+      - ref: U39
+        pad: '7'
+      - ref: U40
+        pad: '7'
+      - ref: U41
+        pad: '7'
+      - ref: U42
+        pad: '7'
+      - ref: U43
+        pad: '7'
+      - ref: U44
+        pad: '7'
+      - ref: U45
+        pad: '7'
+      - ref: U46
+        pad: '7'
+      - ref: U47
+        pad: '7'
+      - ref: U48
+        pad: '7'
+      - ref: U49
+        pad: '7'
+      - ref: U50
+        pad: '7'
+      - ref: U51
+        pad: '7'
+      - ref: U52
+        pad: '7'
+      - ref: U53
+        pad: '7'
+      - ref: U54
+        pad: '7'
+      - ref: U55
+        pad: '7'
+      - ref: U56
+        pad: '7'
+      - ref: U57
+        pad: '7'
+      - ref: U58
+        pad: '7'
+      - ref: U59
+        pad: '7'
+      - ref: U60
+        pad: '7'
+      - ref: U61
+        pad: '7'
+      - ref: U62
+        pad: '7'
+      - ref: U63
+        pad: '7'
+      - ref: U64
+        pad: '7'
+      - ref: U65
+        pad: '7'
+    through: []
+  - id: analog_spi_clock
+    source:
+      ref: U10
+      pad: '26'
+    loads:
+    - ref: U30
+      pad: '6'
+    - ref: U31
+      pad: '6'
+    - ref: U32
+      pad: '6'
+    - ref: U33
+      pad: '6'
+    - ref: U34
+      pad: '6'
+    - ref: U35
+      pad: '6'
+    - ref: U36
+      pad: '6'
+    - ref: U37
+      pad: '6'
+    - ref: U38
+      pad: '6'
+    - ref: U39
+      pad: '6'
+    - ref: U40
+      pad: '6'
+    - ref: U41
+      pad: '6'
+    - ref: U42
+      pad: '6'
+    - ref: U43
+      pad: '6'
+    - ref: U44
+      pad: '6'
+    - ref: U45
+      pad: '6'
+    - ref: U46
+      pad: '6'
+    - ref: U47
+      pad: '6'
+    - ref: U48
+      pad: '6'
+    - ref: U49
+      pad: '6'
+    - ref: U50
+      pad: '6'
+    - ref: U51
+      pad: '6'
+    - ref: U52
+      pad: '6'
+    - ref: U53
+      pad: '6'
+    - ref: U54
+      pad: '6'
+    - ref: U55
+      pad: '6'
+    - ref: U56
+      pad: '6'
+    - ref: U57
+      pad: '6'
+    - ref: U58
+      pad: '6'
+    - ref: U59
+      pad: '6'
+    - ref: U60
+      pad: '6'
+    - ref: U61
+      pad: '6'
+    - ref: U62
+      pad: '6'
+    - ref: U63
+      pad: '6'
+    - ref: U64
+      pad: '6'
+    - ref: U65
+      pad: '6'
+    segments:
+    - net: SPI_SCK
+      endpoints:
+      - ref: U10
+        pad: '26'
+      - ref: U30
+        pad: '6'
+      - ref: U31
+        pad: '6'
+      - ref: U32
+        pad: '6'
+      - ref: U33
+        pad: '6'
+      - ref: U34
+        pad: '6'
+      - ref: U35
+        pad: '6'
+      - ref: U36
+        pad: '6'
+      - ref: U37
+        pad: '6'
+      - ref: U38
+        pad: '6'
+      - ref: U39
+        pad: '6'
+      - ref: U40
+        pad: '6'
+      - ref: U41
+        pad: '6'
+      - ref: U42
+        pad: '6'
+      - ref: U43
+        pad: '6'
+      - ref: U44
+        pad: '6'
+      - ref: U45
+        pad: '6'
+      - ref: U46
+        pad: '6'
+      - ref: U47
+        pad: '6'
+      - ref: U48
+        pad: '6'
+      - ref: U49
+        pad: '6'
+      - ref: U50
+        pad: '6'
+      - ref: U51
+        pad: '6'
+      - ref: U52
+        pad: '6'
+      - ref: U53
+        pad: '6'
+      - ref: U54
+        pad: '6'
+      - ref: U55
+        pad: '6'
+      - ref: U56
+        pad: '6'
+      - ref: U57
+        pad: '6'
+      - ref: U58
+        pad: '6'
+      - ref: U59
+        pad: '6'
+      - ref: U60
+        pad: '6'
+      - ref: U61
+        pad: '6'
+      - ref: U62
+        pad: '6'
+      - ref: U63
+        pad: '6'
+      - ref: U64
+        pad: '6'
+      - ref: U65
+        pad: '6'
+    through: []
+  - id: dac_sync_01
+    source:
+      ref: U14
+      pad: '15'
+    loads:
+    - ref: U30
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_01
+      endpoints:
+      - ref: U14
+        pad: '15'
+      - ref: U30
+        pad: '5'
+    through: []
+  - id: dac_sync_02
+    source:
+      ref: U14
+      pad: '1'
+    loads:
+    - ref: U31
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_02
+      endpoints:
+      - ref: U14
+        pad: '1'
+      - ref: U31
+        pad: '5'
+    through: []
+  - id: dac_sync_03
+    source:
+      ref: U14
+      pad: '2'
+    loads:
+    - ref: U32
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_03
+      endpoints:
+      - ref: U14
+        pad: '2'
+      - ref: U32
+        pad: '5'
+    through: []
+  - id: dac_sync_04
+    source:
+      ref: U14
+      pad: '3'
+    loads:
+    - ref: U33
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_04
+      endpoints:
+      - ref: U14
+        pad: '3'
+      - ref: U33
+        pad: '5'
+    through: []
+  - id: dac_sync_05
+    source:
+      ref: U14
+      pad: '4'
+    loads:
+    - ref: U34
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_05
+      endpoints:
+      - ref: U14
+        pad: '4'
+      - ref: U34
+        pad: '5'
+    through: []
+  - id: dac_sync_06
+    source:
+      ref: U14
+      pad: '5'
+    loads:
+    - ref: U35
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_06
+      endpoints:
+      - ref: U14
+        pad: '5'
+      - ref: U35
+        pad: '5'
+    through: []
+  - id: dac_sync_07
+    source:
+      ref: U14
+      pad: '6'
+    loads:
+    - ref: U36
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_07
+      endpoints:
+      - ref: U14
+        pad: '6'
+      - ref: U36
+        pad: '5'
+    through: []
+  - id: dac_sync_08
+    source:
+      ref: U14
+      pad: '7'
+    loads:
+    - ref: U37
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_08
+      endpoints:
+      - ref: U14
+        pad: '7'
+      - ref: U37
+        pad: '5'
+    through: []
+  - id: dac_sync_09
+    source:
+      ref: U15
+      pad: '15'
+    loads:
+    - ref: U38
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_09
+      endpoints:
+      - ref: U15
+        pad: '15'
+      - ref: U38
+        pad: '5'
+    through: []
+  - id: dac_sync_10
+    source:
+      ref: U15
+      pad: '1'
+    loads:
+    - ref: U39
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_10
+      endpoints:
+      - ref: U15
+        pad: '1'
+      - ref: U39
+        pad: '5'
+    through: []
+  - id: dac_sync_11
+    source:
+      ref: U15
+      pad: '2'
+    loads:
+    - ref: U40
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_11
+      endpoints:
+      - ref: U15
+        pad: '2'
+      - ref: U40
+        pad: '5'
+    through: []
+  - id: dac_sync_12
+    source:
+      ref: U15
+      pad: '3'
+    loads:
+    - ref: U41
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_12
+      endpoints:
+      - ref: U15
+        pad: '3'
+      - ref: U41
+        pad: '5'
+    through: []
+  - id: dac_sync_13
+    source:
+      ref: U15
+      pad: '4'
+    loads:
+    - ref: U42
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_13
+      endpoints:
+      - ref: U15
+        pad: '4'
+      - ref: U42
+        pad: '5'
+    through: []
+  - id: dac_sync_14
+    source:
+      ref: U15
+      pad: '5'
+    loads:
+    - ref: U43
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_14
+      endpoints:
+      - ref: U15
+        pad: '5'
+      - ref: U43
+        pad: '5'
+    through: []
+  - id: dac_sync_15
+    source:
+      ref: U15
+      pad: '6'
+    loads:
+    - ref: U44
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_15
+      endpoints:
+      - ref: U15
+        pad: '6'
+      - ref: U44
+        pad: '5'
+    through: []
+  - id: dac_sync_16
+    source:
+      ref: U15
+      pad: '7'
+    loads:
+    - ref: U45
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_16
+      endpoints:
+      - ref: U15
+        pad: '7'
+      - ref: U45
+        pad: '5'
+    through: []
+  - id: dac_sync_17
+    source:
+      ref: U16
+      pad: '15'
+    loads:
+    - ref: U46
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_17
+      endpoints:
+      - ref: U16
+        pad: '15'
+      - ref: U46
+        pad: '5'
+    through: []
+  - id: dac_sync_18
+    source:
+      ref: U16
+      pad: '1'
+    loads:
+    - ref: U47
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_18
+      endpoints:
+      - ref: U16
+        pad: '1'
+      - ref: U47
+        pad: '5'
+    through: []
+  - id: dac_sync_19
+    source:
+      ref: U16
+      pad: '2'
+    loads:
+    - ref: U48
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_19
+      endpoints:
+      - ref: U16
+        pad: '2'
+      - ref: U48
+        pad: '5'
+    through: []
+  - id: dac_sync_20
+    source:
+      ref: U16
+      pad: '3'
+    loads:
+    - ref: U49
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_20
+      endpoints:
+      - ref: U16
+        pad: '3'
+      - ref: U49
+        pad: '5'
+    through: []
+  - id: dac_sync_21
+    source:
+      ref: U16
+      pad: '4'
+    loads:
+    - ref: U50
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_21
+      endpoints:
+      - ref: U16
+        pad: '4'
+      - ref: U50
+        pad: '5'
+    through: []
+  - id: dac_sync_22
+    source:
+      ref: U16
+      pad: '5'
+    loads:
+    - ref: U51
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_22
+      endpoints:
+      - ref: U16
+        pad: '5'
+      - ref: U51
+        pad: '5'
+    through: []
+  - id: dac_sync_23
+    source:
+      ref: U16
+      pad: '6'
+    loads:
+    - ref: U52
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_23
+      endpoints:
+      - ref: U16
+        pad: '6'
+      - ref: U52
+        pad: '5'
+    through: []
+  - id: dac_sync_24
+    source:
+      ref: U16
+      pad: '7'
+    loads:
+    - ref: U53
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_24
+      endpoints:
+      - ref: U16
+        pad: '7'
+      - ref: U53
+        pad: '5'
+    through: []
+  - id: dac_sync_25
+    source:
+      ref: U17
+      pad: '15'
+    loads:
+    - ref: U54
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_25
+      endpoints:
+      - ref: U17
+        pad: '15'
+      - ref: U54
+        pad: '5'
+    through: []
+  - id: dac_sync_26
+    source:
+      ref: U17
+      pad: '1'
+    loads:
+    - ref: U55
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_26
+      endpoints:
+      - ref: U17
+        pad: '1'
+      - ref: U55
+        pad: '5'
+    through: []
+  - id: dac_sync_27
+    source:
+      ref: U17
+      pad: '2'
+    loads:
+    - ref: U56
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_27
+      endpoints:
+      - ref: U17
+        pad: '2'
+      - ref: U56
+        pad: '5'
+    through: []
+  - id: dac_sync_28
+    source:
+      ref: U17
+      pad: '3'
+    loads:
+    - ref: U57
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_28
+      endpoints:
+      - ref: U17
+        pad: '3'
+      - ref: U57
+        pad: '5'
+    through: []
+  - id: dac_sync_29
+    source:
+      ref: U17
+      pad: '4'
+    loads:
+    - ref: U58
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_29
+      endpoints:
+      - ref: U17
+        pad: '4'
+      - ref: U58
+        pad: '5'
+    through: []
+  - id: dac_sync_30
+    source:
+      ref: U17
+      pad: '5'
+    loads:
+    - ref: U59
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_30
+      endpoints:
+      - ref: U17
+        pad: '5'
+      - ref: U59
+        pad: '5'
+    through: []
+  - id: dac_sync_31
+    source:
+      ref: U17
+      pad: '6'
+    loads:
+    - ref: U60
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_31
+      endpoints:
+      - ref: U17
+        pad: '6'
+      - ref: U60
+        pad: '5'
+    through: []
+  - id: dac_sync_32
+    source:
+      ref: U17
+      pad: '7'
+    loads:
+    - ref: U61
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_32
+      endpoints:
+      - ref: U17
+        pad: '7'
+      - ref: U61
+        pad: '5'
+    through: []
+  - id: dac_sync_33
+    source:
+      ref: U18
+      pad: '15'
+    loads:
+    - ref: U62
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_33
+      endpoints:
+      - ref: U18
+        pad: '15'
+      - ref: U62
+        pad: '5'
+    through: []
+  - id: dac_sync_34
+    source:
+      ref: U18
+      pad: '1'
+    loads:
+    - ref: U63
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_34
+      endpoints:
+      - ref: U18
+        pad: '1'
+      - ref: U63
+        pad: '5'
+    through: []
+  - id: dac_sync_35
+    source:
+      ref: U18
+      pad: '2'
+    loads:
+    - ref: U64
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_35
+      endpoints:
+      - ref: U18
+        pad: '2'
+      - ref: U64
+        pad: '5'
+    through: []
+  - id: dac_sync_36
+    source:
+      ref: U18
+      pad: '3'
+    loads:
+    - ref: U65
+      pad: '5'
+    segments:
+    - net: DAC_SYNC_36
+      endpoints:
+      - ref: U18
+        pad: '3'
+      - ref: U65
+        pad: '5'
+    through: []
+  - id: setpoint_output_01
+    source:
+      ref: U30
+      pad: '4'
+    loads:
+    - ref: J2
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U30
+      endpoints:
+      - ref: U30
+        pad: '4'
+      - ref: R7
+        pad: '1'
+    - net: SETPOINT_01
+      endpoints:
+      - ref: R7
+        pad: '2'
+      - ref: C28
+        pad: '1'
+      - ref: J2
+        pad: '1'
+    through:
+    - ref: R7
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_02
+    source:
+      ref: U30
+      pad: '3'
+    loads:
+    - ref: J3
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U30
+      endpoints:
+      - ref: U30
+        pad: '3'
+      - ref: R8
+        pad: '1'
+    - net: SETPOINT_02
+      endpoints:
+      - ref: R8
+        pad: '2'
+      - ref: C29
+        pad: '1'
+      - ref: J3
+        pad: '1'
+    through:
+    - ref: R8
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_03
+    source:
+      ref: U31
+      pad: '4'
+    loads:
+    - ref: J4
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U31
+      endpoints:
+      - ref: U31
+        pad: '4'
+      - ref: R9
+        pad: '1'
+    - net: SETPOINT_03
+      endpoints:
+      - ref: R9
+        pad: '2'
+      - ref: C34
+        pad: '1'
+      - ref: J4
+        pad: '1'
+    through:
+    - ref: R9
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_04
+    source:
+      ref: U31
+      pad: '3'
+    loads:
+    - ref: J5
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U31
+      endpoints:
+      - ref: U31
+        pad: '3'
+      - ref: R10
+        pad: '1'
+    - net: SETPOINT_04
+      endpoints:
+      - ref: R10
+        pad: '2'
+      - ref: C35
+        pad: '1'
+      - ref: J5
+        pad: '1'
+    through:
+    - ref: R10
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_05
+    source:
+      ref: U32
+      pad: '4'
+    loads:
+    - ref: J6
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U32
+      endpoints:
+      - ref: U32
+        pad: '4'
+      - ref: R11
+        pad: '1'
+    - net: SETPOINT_05
+      endpoints:
+      - ref: R11
+        pad: '2'
+      - ref: C40
+        pad: '1'
+      - ref: J6
+        pad: '1'
+    through:
+    - ref: R11
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_06
+    source:
+      ref: U32
+      pad: '3'
+    loads:
+    - ref: J7
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U32
+      endpoints:
+      - ref: U32
+        pad: '3'
+      - ref: R12
+        pad: '1'
+    - net: SETPOINT_06
+      endpoints:
+      - ref: R12
+        pad: '2'
+      - ref: C41
+        pad: '1'
+      - ref: J7
+        pad: '1'
+    through:
+    - ref: R12
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_07
+    source:
+      ref: U33
+      pad: '4'
+    loads:
+    - ref: J8
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U33
+      endpoints:
+      - ref: U33
+        pad: '4'
+      - ref: R13
+        pad: '1'
+    - net: SETPOINT_07
+      endpoints:
+      - ref: R13
+        pad: '2'
+      - ref: C46
+        pad: '1'
+      - ref: J8
+        pad: '1'
+    through:
+    - ref: R13
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_08
+    source:
+      ref: U33
+      pad: '3'
+    loads:
+    - ref: J9
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U33
+      endpoints:
+      - ref: U33
+        pad: '3'
+      - ref: R14
+        pad: '1'
+    - net: SETPOINT_08
+      endpoints:
+      - ref: R14
+        pad: '2'
+      - ref: C47
+        pad: '1'
+      - ref: J9
+        pad: '1'
+    through:
+    - ref: R14
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_09
+    source:
+      ref: U34
+      pad: '4'
+    loads:
+    - ref: J10
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U34
+      endpoints:
+      - ref: U34
+        pad: '4'
+      - ref: R15
+        pad: '1'
+    - net: SETPOINT_09
+      endpoints:
+      - ref: R15
+        pad: '2'
+      - ref: C52
+        pad: '1'
+      - ref: J10
+        pad: '1'
+    through:
+    - ref: R15
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_10
+    source:
+      ref: U34
+      pad: '3'
+    loads:
+    - ref: J11
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U34
+      endpoints:
+      - ref: U34
+        pad: '3'
+      - ref: R16
+        pad: '1'
+    - net: SETPOINT_10
+      endpoints:
+      - ref: R16
+        pad: '2'
+      - ref: C53
+        pad: '1'
+      - ref: J11
+        pad: '1'
+    through:
+    - ref: R16
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_11
+    source:
+      ref: U35
+      pad: '4'
+    loads:
+    - ref: J12
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U35
+      endpoints:
+      - ref: U35
+        pad: '4'
+      - ref: R17
+        pad: '1'
+    - net: SETPOINT_11
+      endpoints:
+      - ref: R17
+        pad: '2'
+      - ref: C58
+        pad: '1'
+      - ref: J12
+        pad: '1'
+    through:
+    - ref: R17
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_12
+    source:
+      ref: U35
+      pad: '3'
+    loads:
+    - ref: J13
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U35
+      endpoints:
+      - ref: U35
+        pad: '3'
+      - ref: R18
+        pad: '1'
+    - net: SETPOINT_12
+      endpoints:
+      - ref: R18
+        pad: '2'
+      - ref: C59
+        pad: '1'
+      - ref: J13
+        pad: '1'
+    through:
+    - ref: R18
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_13
+    source:
+      ref: U36
+      pad: '4'
+    loads:
+    - ref: J14
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U36
+      endpoints:
+      - ref: U36
+        pad: '4'
+      - ref: R19
+        pad: '1'
+    - net: SETPOINT_13
+      endpoints:
+      - ref: R19
+        pad: '2'
+      - ref: C64
+        pad: '1'
+      - ref: J14
+        pad: '1'
+    through:
+    - ref: R19
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_14
+    source:
+      ref: U36
+      pad: '3'
+    loads:
+    - ref: J15
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U36
+      endpoints:
+      - ref: U36
+        pad: '3'
+      - ref: R20
+        pad: '1'
+    - net: SETPOINT_14
+      endpoints:
+      - ref: R20
+        pad: '2'
+      - ref: C65
+        pad: '1'
+      - ref: J15
+        pad: '1'
+    through:
+    - ref: R20
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_15
+    source:
+      ref: U37
+      pad: '4'
+    loads:
+    - ref: J16
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U37
+      endpoints:
+      - ref: U37
+        pad: '4'
+      - ref: R21
+        pad: '1'
+    - net: SETPOINT_15
+      endpoints:
+      - ref: R21
+        pad: '2'
+      - ref: C70
+        pad: '1'
+      - ref: J16
+        pad: '1'
+    through:
+    - ref: R21
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_16
+    source:
+      ref: U37
+      pad: '3'
+    loads:
+    - ref: J17
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U37
+      endpoints:
+      - ref: U37
+        pad: '3'
+      - ref: R22
+        pad: '1'
+    - net: SETPOINT_16
+      endpoints:
+      - ref: R22
+        pad: '2'
+      - ref: C71
+        pad: '1'
+      - ref: J17
+        pad: '1'
+    through:
+    - ref: R22
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_17
+    source:
+      ref: U38
+      pad: '4'
+    loads:
+    - ref: J18
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U38
+      endpoints:
+      - ref: U38
+        pad: '4'
+      - ref: R23
+        pad: '1'
+    - net: SETPOINT_17
+      endpoints:
+      - ref: R23
+        pad: '2'
+      - ref: C76
+        pad: '1'
+      - ref: J18
+        pad: '1'
+    through:
+    - ref: R23
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_18
+    source:
+      ref: U38
+      pad: '3'
+    loads:
+    - ref: J19
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U38
+      endpoints:
+      - ref: U38
+        pad: '3'
+      - ref: R24
+        pad: '1'
+    - net: SETPOINT_18
+      endpoints:
+      - ref: R24
+        pad: '2'
+      - ref: C77
+        pad: '1'
+      - ref: J19
+        pad: '1'
+    through:
+    - ref: R24
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_19
+    source:
+      ref: U39
+      pad: '4'
+    loads:
+    - ref: J20
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U39
+      endpoints:
+      - ref: U39
+        pad: '4'
+      - ref: R25
+        pad: '1'
+    - net: SETPOINT_19
+      endpoints:
+      - ref: R25
+        pad: '2'
+      - ref: C82
+        pad: '1'
+      - ref: J20
+        pad: '1'
+    through:
+    - ref: R25
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_20
+    source:
+      ref: U39
+      pad: '3'
+    loads:
+    - ref: J21
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U39
+      endpoints:
+      - ref: U39
+        pad: '3'
+      - ref: R26
+        pad: '1'
+    - net: SETPOINT_20
+      endpoints:
+      - ref: R26
+        pad: '2'
+      - ref: C83
+        pad: '1'
+      - ref: J21
+        pad: '1'
+    through:
+    - ref: R26
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_21
+    source:
+      ref: U40
+      pad: '4'
+    loads:
+    - ref: J22
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U40
+      endpoints:
+      - ref: U40
+        pad: '4'
+      - ref: R27
+        pad: '1'
+    - net: SETPOINT_21
+      endpoints:
+      - ref: R27
+        pad: '2'
+      - ref: C88
+        pad: '1'
+      - ref: J22
+        pad: '1'
+    through:
+    - ref: R27
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_22
+    source:
+      ref: U40
+      pad: '3'
+    loads:
+    - ref: J23
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U40
+      endpoints:
+      - ref: U40
+        pad: '3'
+      - ref: R28
+        pad: '1'
+    - net: SETPOINT_22
+      endpoints:
+      - ref: R28
+        pad: '2'
+      - ref: C89
+        pad: '1'
+      - ref: J23
+        pad: '1'
+    through:
+    - ref: R28
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_23
+    source:
+      ref: U41
+      pad: '4'
+    loads:
+    - ref: J24
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U41
+      endpoints:
+      - ref: U41
+        pad: '4'
+      - ref: R29
+        pad: '1'
+    - net: SETPOINT_23
+      endpoints:
+      - ref: R29
+        pad: '2'
+      - ref: C94
+        pad: '1'
+      - ref: J24
+        pad: '1'
+    through:
+    - ref: R29
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_24
+    source:
+      ref: U41
+      pad: '3'
+    loads:
+    - ref: J25
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U41
+      endpoints:
+      - ref: U41
+        pad: '3'
+      - ref: R30
+        pad: '1'
+    - net: SETPOINT_24
+      endpoints:
+      - ref: R30
+        pad: '2'
+      - ref: C95
+        pad: '1'
+      - ref: J25
+        pad: '1'
+    through:
+    - ref: R30
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_25
+    source:
+      ref: U42
+      pad: '4'
+    loads:
+    - ref: J26
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U42
+      endpoints:
+      - ref: U42
+        pad: '4'
+      - ref: R31
+        pad: '1'
+    - net: SETPOINT_25
+      endpoints:
+      - ref: R31
+        pad: '2'
+      - ref: C100
+        pad: '1'
+      - ref: J26
+        pad: '1'
+    through:
+    - ref: R31
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_26
+    source:
+      ref: U42
+      pad: '3'
+    loads:
+    - ref: J27
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U42
+      endpoints:
+      - ref: U42
+        pad: '3'
+      - ref: R32
+        pad: '1'
+    - net: SETPOINT_26
+      endpoints:
+      - ref: R32
+        pad: '2'
+      - ref: C101
+        pad: '1'
+      - ref: J27
+        pad: '1'
+    through:
+    - ref: R32
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_27
+    source:
+      ref: U43
+      pad: '4'
+    loads:
+    - ref: J28
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U43
+      endpoints:
+      - ref: U43
+        pad: '4'
+      - ref: R33
+        pad: '1'
+    - net: SETPOINT_27
+      endpoints:
+      - ref: R33
+        pad: '2'
+      - ref: C106
+        pad: '1'
+      - ref: J28
+        pad: '1'
+    through:
+    - ref: R33
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_28
+    source:
+      ref: U43
+      pad: '3'
+    loads:
+    - ref: J29
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U43
+      endpoints:
+      - ref: U43
+        pad: '3'
+      - ref: R34
+        pad: '1'
+    - net: SETPOINT_28
+      endpoints:
+      - ref: R34
+        pad: '2'
+      - ref: C107
+        pad: '1'
+      - ref: J29
+        pad: '1'
+    through:
+    - ref: R34
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_29
+    source:
+      ref: U44
+      pad: '4'
+    loads:
+    - ref: J30
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U44
+      endpoints:
+      - ref: U44
+        pad: '4'
+      - ref: R35
+        pad: '1'
+    - net: SETPOINT_29
+      endpoints:
+      - ref: R35
+        pad: '2'
+      - ref: C112
+        pad: '1'
+      - ref: J30
+        pad: '1'
+    through:
+    - ref: R35
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_30
+    source:
+      ref: U44
+      pad: '3'
+    loads:
+    - ref: J31
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U44
+      endpoints:
+      - ref: U44
+        pad: '3'
+      - ref: R36
+        pad: '1'
+    - net: SETPOINT_30
+      endpoints:
+      - ref: R36
+        pad: '2'
+      - ref: C113
+        pad: '1'
+      - ref: J31
+        pad: '1'
+    through:
+    - ref: R36
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_31
+    source:
+      ref: U45
+      pad: '4'
+    loads:
+    - ref: J32
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U45
+      endpoints:
+      - ref: U45
+        pad: '4'
+      - ref: R37
+        pad: '1'
+    - net: SETPOINT_31
+      endpoints:
+      - ref: R37
+        pad: '2'
+      - ref: C118
+        pad: '1'
+      - ref: J32
+        pad: '1'
+    through:
+    - ref: R37
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_32
+    source:
+      ref: U45
+      pad: '3'
+    loads:
+    - ref: J33
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U45
+      endpoints:
+      - ref: U45
+        pad: '3'
+      - ref: R38
+        pad: '1'
+    - net: SETPOINT_32
+      endpoints:
+      - ref: R38
+        pad: '2'
+      - ref: C119
+        pad: '1'
+      - ref: J33
+        pad: '1'
+    through:
+    - ref: R38
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_33
+    source:
+      ref: U46
+      pad: '4'
+    loads:
+    - ref: J34
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U46
+      endpoints:
+      - ref: U46
+        pad: '4'
+      - ref: R39
+        pad: '1'
+    - net: SETPOINT_33
+      endpoints:
+      - ref: R39
+        pad: '2'
+      - ref: C124
+        pad: '1'
+      - ref: J34
+        pad: '1'
+    through:
+    - ref: R39
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_34
+    source:
+      ref: U46
+      pad: '3'
+    loads:
+    - ref: J35
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U46
+      endpoints:
+      - ref: U46
+        pad: '3'
+      - ref: R40
+        pad: '1'
+    - net: SETPOINT_34
+      endpoints:
+      - ref: R40
+        pad: '2'
+      - ref: C125
+        pad: '1'
+      - ref: J35
+        pad: '1'
+    through:
+    - ref: R40
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_35
+    source:
+      ref: U47
+      pad: '4'
+    loads:
+    - ref: J36
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U47
+      endpoints:
+      - ref: U47
+        pad: '4'
+      - ref: R41
+        pad: '1'
+    - net: SETPOINT_35
+      endpoints:
+      - ref: R41
+        pad: '2'
+      - ref: C130
+        pad: '1'
+      - ref: J36
+        pad: '1'
+    through:
+    - ref: R41
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_36
+    source:
+      ref: U47
+      pad: '3'
+    loads:
+    - ref: J37
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U47
+      endpoints:
+      - ref: U47
+        pad: '3'
+      - ref: R42
+        pad: '1'
+    - net: SETPOINT_36
+      endpoints:
+      - ref: R42
+        pad: '2'
+      - ref: C131
+        pad: '1'
+      - ref: J37
+        pad: '1'
+    through:
+    - ref: R42
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_37
+    source:
+      ref: U48
+      pad: '4'
+    loads:
+    - ref: J38
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U48
+      endpoints:
+      - ref: U48
+        pad: '4'
+      - ref: R43
+        pad: '1'
+    - net: SETPOINT_37
+      endpoints:
+      - ref: R43
+        pad: '2'
+      - ref: C136
+        pad: '1'
+      - ref: J38
+        pad: '1'
+    through:
+    - ref: R43
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_38
+    source:
+      ref: U48
+      pad: '3'
+    loads:
+    - ref: J39
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U48
+      endpoints:
+      - ref: U48
+        pad: '3'
+      - ref: R44
+        pad: '1'
+    - net: SETPOINT_38
+      endpoints:
+      - ref: R44
+        pad: '2'
+      - ref: C137
+        pad: '1'
+      - ref: J39
+        pad: '1'
+    through:
+    - ref: R44
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_39
+    source:
+      ref: U49
+      pad: '4'
+    loads:
+    - ref: J40
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U49
+      endpoints:
+      - ref: U49
+        pad: '4'
+      - ref: R45
+        pad: '1'
+    - net: SETPOINT_39
+      endpoints:
+      - ref: R45
+        pad: '2'
+      - ref: C142
+        pad: '1'
+      - ref: J40
+        pad: '1'
+    through:
+    - ref: R45
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_40
+    source:
+      ref: U49
+      pad: '3'
+    loads:
+    - ref: J41
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U49
+      endpoints:
+      - ref: U49
+        pad: '3'
+      - ref: R46
+        pad: '1'
+    - net: SETPOINT_40
+      endpoints:
+      - ref: R46
+        pad: '2'
+      - ref: C143
+        pad: '1'
+      - ref: J41
+        pad: '1'
+    through:
+    - ref: R46
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_41
+    source:
+      ref: U50
+      pad: '4'
+    loads:
+    - ref: J42
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U50
+      endpoints:
+      - ref: U50
+        pad: '4'
+      - ref: R47
+        pad: '1'
+    - net: SETPOINT_41
+      endpoints:
+      - ref: R47
+        pad: '2'
+      - ref: C148
+        pad: '1'
+      - ref: J42
+        pad: '1'
+    through:
+    - ref: R47
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_42
+    source:
+      ref: U50
+      pad: '3'
+    loads:
+    - ref: J43
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U50
+      endpoints:
+      - ref: U50
+        pad: '3'
+      - ref: R48
+        pad: '1'
+    - net: SETPOINT_42
+      endpoints:
+      - ref: R48
+        pad: '2'
+      - ref: C149
+        pad: '1'
+      - ref: J43
+        pad: '1'
+    through:
+    - ref: R48
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_43
+    source:
+      ref: U51
+      pad: '4'
+    loads:
+    - ref: J44
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U51
+      endpoints:
+      - ref: U51
+        pad: '4'
+      - ref: R49
+        pad: '1'
+    - net: SETPOINT_43
+      endpoints:
+      - ref: R49
+        pad: '2'
+      - ref: C154
+        pad: '1'
+      - ref: J44
+        pad: '1'
+    through:
+    - ref: R49
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_44
+    source:
+      ref: U51
+      pad: '3'
+    loads:
+    - ref: J45
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U51
+      endpoints:
+      - ref: U51
+        pad: '3'
+      - ref: R50
+        pad: '1'
+    - net: SETPOINT_44
+      endpoints:
+      - ref: R50
+        pad: '2'
+      - ref: C155
+        pad: '1'
+      - ref: J45
+        pad: '1'
+    through:
+    - ref: R50
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_45
+    source:
+      ref: U52
+      pad: '4'
+    loads:
+    - ref: J46
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U52
+      endpoints:
+      - ref: U52
+        pad: '4'
+      - ref: R51
+        pad: '1'
+    - net: SETPOINT_45
+      endpoints:
+      - ref: R51
+        pad: '2'
+      - ref: C160
+        pad: '1'
+      - ref: J46
+        pad: '1'
+    through:
+    - ref: R51
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_46
+    source:
+      ref: U52
+      pad: '3'
+    loads:
+    - ref: J47
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U52
+      endpoints:
+      - ref: U52
+        pad: '3'
+      - ref: R52
+        pad: '1'
+    - net: SETPOINT_46
+      endpoints:
+      - ref: R52
+        pad: '2'
+      - ref: C161
+        pad: '1'
+      - ref: J47
+        pad: '1'
+    through:
+    - ref: R52
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_47
+    source:
+      ref: U53
+      pad: '4'
+    loads:
+    - ref: J48
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U53
+      endpoints:
+      - ref: U53
+        pad: '4'
+      - ref: R53
+        pad: '1'
+    - net: SETPOINT_47
+      endpoints:
+      - ref: R53
+        pad: '2'
+      - ref: C166
+        pad: '1'
+      - ref: J48
+        pad: '1'
+    through:
+    - ref: R53
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_48
+    source:
+      ref: U53
+      pad: '3'
+    loads:
+    - ref: J49
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U53
+      endpoints:
+      - ref: U53
+        pad: '3'
+      - ref: R54
+        pad: '1'
+    - net: SETPOINT_48
+      endpoints:
+      - ref: R54
+        pad: '2'
+      - ref: C167
+        pad: '1'
+      - ref: J49
+        pad: '1'
+    through:
+    - ref: R54
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_49
+    source:
+      ref: U54
+      pad: '4'
+    loads:
+    - ref: J50
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U54
+      endpoints:
+      - ref: U54
+        pad: '4'
+      - ref: R55
+        pad: '1'
+    - net: SETPOINT_49
+      endpoints:
+      - ref: R55
+        pad: '2'
+      - ref: C172
+        pad: '1'
+      - ref: J50
+        pad: '1'
+    through:
+    - ref: R55
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_50
+    source:
+      ref: U54
+      pad: '3'
+    loads:
+    - ref: J51
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U54
+      endpoints:
+      - ref: U54
+        pad: '3'
+      - ref: R56
+        pad: '1'
+    - net: SETPOINT_50
+      endpoints:
+      - ref: R56
+        pad: '2'
+      - ref: C173
+        pad: '1'
+      - ref: J51
+        pad: '1'
+    through:
+    - ref: R56
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_51
+    source:
+      ref: U55
+      pad: '4'
+    loads:
+    - ref: J52
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U55
+      endpoints:
+      - ref: U55
+        pad: '4'
+      - ref: R57
+        pad: '1'
+    - net: SETPOINT_51
+      endpoints:
+      - ref: R57
+        pad: '2'
+      - ref: C178
+        pad: '1'
+      - ref: J52
+        pad: '1'
+    through:
+    - ref: R57
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_52
+    source:
+      ref: U55
+      pad: '3'
+    loads:
+    - ref: J53
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U55
+      endpoints:
+      - ref: U55
+        pad: '3'
+      - ref: R58
+        pad: '1'
+    - net: SETPOINT_52
+      endpoints:
+      - ref: R58
+        pad: '2'
+      - ref: C179
+        pad: '1'
+      - ref: J53
+        pad: '1'
+    through:
+    - ref: R58
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_53
+    source:
+      ref: U56
+      pad: '4'
+    loads:
+    - ref: J54
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U56
+      endpoints:
+      - ref: U56
+        pad: '4'
+      - ref: R59
+        pad: '1'
+    - net: SETPOINT_53
+      endpoints:
+      - ref: R59
+        pad: '2'
+      - ref: C184
+        pad: '1'
+      - ref: J54
+        pad: '1'
+    through:
+    - ref: R59
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_54
+    source:
+      ref: U56
+      pad: '3'
+    loads:
+    - ref: J55
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U56
+      endpoints:
+      - ref: U56
+        pad: '3'
+      - ref: R60
+        pad: '1'
+    - net: SETPOINT_54
+      endpoints:
+      - ref: R60
+        pad: '2'
+      - ref: C185
+        pad: '1'
+      - ref: J55
+        pad: '1'
+    through:
+    - ref: R60
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_55
+    source:
+      ref: U57
+      pad: '4'
+    loads:
+    - ref: J56
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U57
+      endpoints:
+      - ref: U57
+        pad: '4'
+      - ref: R61
+        pad: '1'
+    - net: SETPOINT_55
+      endpoints:
+      - ref: R61
+        pad: '2'
+      - ref: C190
+        pad: '1'
+      - ref: J56
+        pad: '1'
+    through:
+    - ref: R61
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_56
+    source:
+      ref: U57
+      pad: '3'
+    loads:
+    - ref: J57
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U57
+      endpoints:
+      - ref: U57
+        pad: '3'
+      - ref: R62
+        pad: '1'
+    - net: SETPOINT_56
+      endpoints:
+      - ref: R62
+        pad: '2'
+      - ref: C191
+        pad: '1'
+      - ref: J57
+        pad: '1'
+    through:
+    - ref: R62
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_57
+    source:
+      ref: U58
+      pad: '4'
+    loads:
+    - ref: J58
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U58
+      endpoints:
+      - ref: U58
+        pad: '4'
+      - ref: R63
+        pad: '1'
+    - net: SETPOINT_57
+      endpoints:
+      - ref: R63
+        pad: '2'
+      - ref: C196
+        pad: '1'
+      - ref: J58
+        pad: '1'
+    through:
+    - ref: R63
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_58
+    source:
+      ref: U58
+      pad: '3'
+    loads:
+    - ref: J59
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U58
+      endpoints:
+      - ref: U58
+        pad: '3'
+      - ref: R64
+        pad: '1'
+    - net: SETPOINT_58
+      endpoints:
+      - ref: R64
+        pad: '2'
+      - ref: C197
+        pad: '1'
+      - ref: J59
+        pad: '1'
+    through:
+    - ref: R64
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_59
+    source:
+      ref: U59
+      pad: '4'
+    loads:
+    - ref: J60
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U59
+      endpoints:
+      - ref: U59
+        pad: '4'
+      - ref: R65
+        pad: '1'
+    - net: SETPOINT_59
+      endpoints:
+      - ref: R65
+        pad: '2'
+      - ref: C202
+        pad: '1'
+      - ref: J60
+        pad: '1'
+    through:
+    - ref: R65
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_60
+    source:
+      ref: U59
+      pad: '3'
+    loads:
+    - ref: J61
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U59
+      endpoints:
+      - ref: U59
+        pad: '3'
+      - ref: R66
+        pad: '1'
+    - net: SETPOINT_60
+      endpoints:
+      - ref: R66
+        pad: '2'
+      - ref: C203
+        pad: '1'
+      - ref: J61
+        pad: '1'
+    through:
+    - ref: R66
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_61
+    source:
+      ref: U60
+      pad: '4'
+    loads:
+    - ref: J62
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U60
+      endpoints:
+      - ref: U60
+        pad: '4'
+      - ref: R67
+        pad: '1'
+    - net: SETPOINT_61
+      endpoints:
+      - ref: R67
+        pad: '2'
+      - ref: C208
+        pad: '1'
+      - ref: J62
+        pad: '1'
+    through:
+    - ref: R67
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_62
+    source:
+      ref: U60
+      pad: '3'
+    loads:
+    - ref: J63
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U60
+      endpoints:
+      - ref: U60
+        pad: '3'
+      - ref: R68
+        pad: '1'
+    - net: SETPOINT_62
+      endpoints:
+      - ref: R68
+        pad: '2'
+      - ref: C209
+        pad: '1'
+      - ref: J63
+        pad: '1'
+    through:
+    - ref: R68
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_63
+    source:
+      ref: U61
+      pad: '4'
+    loads:
+    - ref: J64
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U61
+      endpoints:
+      - ref: U61
+        pad: '4'
+      - ref: R69
+        pad: '1'
+    - net: SETPOINT_63
+      endpoints:
+      - ref: R69
+        pad: '2'
+      - ref: C214
+        pad: '1'
+      - ref: J64
+        pad: '1'
+    through:
+    - ref: R69
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_64
+    source:
+      ref: U61
+      pad: '3'
+    loads:
+    - ref: J65
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U61
+      endpoints:
+      - ref: U61
+        pad: '3'
+      - ref: R70
+        pad: '1'
+    - net: SETPOINT_64
+      endpoints:
+      - ref: R70
+        pad: '2'
+      - ref: C215
+        pad: '1'
+      - ref: J65
+        pad: '1'
+    through:
+    - ref: R70
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_65
+    source:
+      ref: U62
+      pad: '4'
+    loads:
+    - ref: J66
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U62
+      endpoints:
+      - ref: U62
+        pad: '4'
+      - ref: R71
+        pad: '1'
+    - net: SETPOINT_65
+      endpoints:
+      - ref: R71
+        pad: '2'
+      - ref: C220
+        pad: '1'
+      - ref: J66
+        pad: '1'
+    through:
+    - ref: R71
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_66
+    source:
+      ref: U62
+      pad: '3'
+    loads:
+    - ref: J67
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U62
+      endpoints:
+      - ref: U62
+        pad: '3'
+      - ref: R72
+        pad: '1'
+    - net: SETPOINT_66
+      endpoints:
+      - ref: R72
+        pad: '2'
+      - ref: C221
+        pad: '1'
+      - ref: J67
+        pad: '1'
+    through:
+    - ref: R72
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_67
+    source:
+      ref: U63
+      pad: '4'
+    loads:
+    - ref: J68
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U63
+      endpoints:
+      - ref: U63
+        pad: '4'
+      - ref: R73
+        pad: '1'
+    - net: SETPOINT_67
+      endpoints:
+      - ref: R73
+        pad: '2'
+      - ref: C226
+        pad: '1'
+      - ref: J68
+        pad: '1'
+    through:
+    - ref: R73
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_68
+    source:
+      ref: U63
+      pad: '3'
+    loads:
+    - ref: J69
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U63
+      endpoints:
+      - ref: U63
+        pad: '3'
+      - ref: R74
+        pad: '1'
+    - net: SETPOINT_68
+      endpoints:
+      - ref: R74
+        pad: '2'
+      - ref: C227
+        pad: '1'
+      - ref: J69
+        pad: '1'
+    through:
+    - ref: R74
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_69
+    source:
+      ref: U64
+      pad: '4'
+    loads:
+    - ref: J70
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U64
+      endpoints:
+      - ref: U64
+        pad: '4'
+      - ref: R75
+        pad: '1'
+    - net: SETPOINT_69
+      endpoints:
+      - ref: R75
+        pad: '2'
+      - ref: C232
+        pad: '1'
+      - ref: J70
+        pad: '1'
+    through:
+    - ref: R75
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_70
+    source:
+      ref: U64
+      pad: '3'
+    loads:
+    - ref: J71
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U64
+      endpoints:
+      - ref: U64
+        pad: '3'
+      - ref: R76
+        pad: '1'
+    - net: SETPOINT_70
+      endpoints:
+      - ref: R76
+        pad: '2'
+      - ref: C233
+        pad: '1'
+      - ref: J71
+        pad: '1'
+    through:
+    - ref: R76
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_71
+    source:
+      ref: U65
+      pad: '4'
+    loads:
+    - ref: J72
+      pad: '1'
+    segments:
+    - net: VOUTA_RAW_U65
+      endpoints:
+      - ref: U65
+        pad: '4'
+      - ref: R77
+        pad: '1'
+    - net: SETPOINT_71
+      endpoints:
+      - ref: R77
+        pad: '2'
+      - ref: C238
+        pad: '1'
+      - ref: J72
+        pad: '1'
+    through:
+    - ref: R77
+      input_pad: '1'
+      output_pad: '2'
+  - id: setpoint_output_72
+    source:
+      ref: U65
+      pad: '3'
+    loads:
+    - ref: J73
+      pad: '1'
+    segments:
+    - net: VOUTB_RAW_U65
+      endpoints:
+      - ref: U65
+        pad: '3'
+      - ref: R78
+        pad: '1'
+    - net: SETPOINT_72
+      endpoints:
+      - ref: R78
+        pad: '2'
+      - ref: C239
+        pad: '1'
+      - ref: J73
+        pad: '1'
+    through:
+    - ref: R78
+      input_pad: '1'
+      output_pad: '2'

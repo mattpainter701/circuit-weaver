@@ -127,6 +127,9 @@ def _load_suite(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if isinstance(minimum, bool) or not isinstance(minimum, int) or minimum < floor:
         raise ValueError(f"{suite_kind} suite minimum_physical_parts must be an integer of at least {floor}")
     for case in cases:
+        case_minimum = case.get("minimum_physical_parts", minimum)
+        if isinstance(case_minimum, bool) or not isinstance(case_minimum, int) or case_minimum < minimum:
+            raise ValueError(f"case {case['id']} minimum_physical_parts must be an integer of at least {minimum}")
         spec_path = (path.parent / case["spec"]).resolve()
         if not spec_path.is_file() or not spec_path.is_relative_to(REPO.resolve()):
             raise ValueError(f"case {case['id']} has a missing or out-of-repository spec")
@@ -306,15 +309,24 @@ def _inspect_and_verify_connectivity(
     """Read actual routed PCB pad nets with the selected Circuit Weaver runtime."""
     before = sha256(board_path)
     contracts_path = log_dir / f"{case['id']}.connectivity-contracts.json"
-    contracts_path.write_text(json.dumps(case["required_channels"], indent=2) + "\n", encoding="utf-8")
+    channels = case.get("required_channels", [])
+    paths = case.get("required_paths", [])
+    contracts = {"required_channels": channels, "required_paths": paths} if paths else channels
+    contracts_path.write_text(json.dumps(contracts, indent=2) + "\n", encoding="utf-8")
     helper_dir = Path(__file__).resolve().parent
     script = (
         "import json,sys; sys.path.insert(0,sys.argv[3]); "
         "from circuit_weaver.kicad_bridge import run_kicad; "
         "from connectivity import verify_native_connectivity; "
+        "from signal_connectivity import verify_native_signal_paths; "
         "inventory=run_kicad('inspect',board=sys.argv[1],timeout=float(sys.argv[2])); "
         "contracts=json.load(open(sys.argv[4],encoding='utf-8')); "
-        "print(json.dumps({'inventory':inventory,'connectivity':verify_native_connectivity(inventory,contracts)}))"
+        "channels=contracts.get('required_channels',[]) if isinstance(contracts,dict) else contracts; "
+        "paths=contracts.get('required_paths',[]) if isinstance(contracts,dict) else []; "
+        "proof={'inventory':inventory}; "
+        "proof.update({'connectivity':verify_native_connectivity(inventory,channels)} if channels else {}); "
+        "proof.update({'signal_connectivity':verify_native_signal_paths(inventory,paths)} if paths else {}); "
+        "print(json.dumps(proof))"
     )
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
@@ -342,15 +354,29 @@ def _inspect_and_verify_connectivity(
     after = sha256(board_path)
     if before != after:
         raise RuntimeError("native PCB inspection changed routed board bytes")
-    if not isinstance(inventory, dict) or inventory.get("status") != "ok" \
-            or not isinstance(connectivity, dict) or connectivity.get("status") != "pass":
+    if not isinstance(inventory, dict) or inventory.get("status") != "ok":
         raise RuntimeError(f"native PCB connectivity verification did not pass for {case['id']}")
+    details = {}
+    if channels or not paths:
+        if not isinstance(connectivity, dict) or connectivity.get("status") != "pass":
+            raise RuntimeError(f"native PCB channel verification did not pass for {case['id']}")
+        (run_dir / "native-connectivity-verification.json").write_text(
+            json.dumps(connectivity, indent=2) + "\n", encoding="utf-8"
+        )
+        details.update(verified_native_channels=connectivity["verified_channels"],
+                       native_connectivity_status=connectivity["status"])
+    if paths:
+        signal_proof = proof.get("signal_connectivity")
+        if not isinstance(signal_proof, dict) or signal_proof.get("status") != "pass" \
+                or signal_proof.get("verified_paths") != len(paths):
+            raise RuntimeError(f"native PCB signal path verification did not pass for {case['id']}")
+        (run_dir / "native-signal-path-verification.json").write_text(
+            json.dumps(signal_proof, indent=2) + "\n", encoding="utf-8"
+        )
+        details.update(verified_native_signal_paths=signal_proof["verified_paths"],
+                       native_signal_path_status=signal_proof["status"])
     (run_dir / "native-pcb-inventory.json").write_text(json.dumps(inventory, indent=2) + "\n", encoding="utf-8")
-    (run_dir / "native-connectivity-verification.json").write_text(
-        json.dumps(connectivity, indent=2) + "\n", encoding="utf-8"
-    )
-    return {"verified_native_channels": connectivity["verified_channels"],
-            "native_connectivity_status": connectivity["status"], "native_inventory_sha256":
+    return {**details, "native_inventory_sha256":
             hashlib.sha256(json.dumps(inventory, sort_keys=True).encode("utf-8")).hexdigest()}
 
 
@@ -386,6 +412,7 @@ def _run_case(case: dict[str, Any], args: argparse.Namespace, output: Path) -> d
         "case_id": case["id"], "family": case["family"], "spec": str(spec_path),
         "spec_sha256": case["_spec_sha256"], "command": command,
         "minimum_drill_mm": case.get("minimum_drill_mm"),
+        "minimum_physical_parts": max(args.minimum_physical_parts, case.get("minimum_physical_parts", 0)),
         "timeout_seconds": args.timeout, "python": str(python),
     }, indent=2) + "\n", encoding="utf-8")
     started = time.monotonic()
@@ -400,13 +427,14 @@ def _run_case(case: dict[str, Any], args: argparse.Namespace, output: Path) -> d
         if result.returncode != 0:
             raise RuntimeError(f"workflow validator exited {result.returncode}; inspect runner logs and evidence")
         details = _validate_evidence(
-            run_dir, args.minimum_physical_parts, expected_spec_hash=case["_spec_sha256"],
+            run_dir, max(args.minimum_physical_parts, case.get("minimum_physical_parts", 0)),
+            expected_spec_hash=case["_spec_sha256"],
             expected_board_mm=case["board_mm"],
             expected_wheel_hash=sha256(args.expected_wheel) if args.expected_wheel else None,
             expected_package_hash=getattr(args, "package_source_sha256", None),
             expected_runner_hash=getattr(args, "workflow_sha256", None),
         )
-        if case.get("required_channels"):
+        if case.get("required_channels") or case.get("required_paths"):
             board_path = Path(json.loads((run_dir / "evidence.json").read_text(encoding="utf-8"))["drc"]["board"])
             details.update(_inspect_and_verify_connectivity(case, args, run_dir, log_dir, board_path))
         if sha256(spec_path) != case["_spec_sha256"] or sha256(case["_source_spec_path"]) != case["_spec_sha256"]:

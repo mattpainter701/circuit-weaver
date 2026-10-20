@@ -852,6 +852,82 @@ def load_plane_cleanup_plan_in_runtime(path: Path, *, cwd: Path, env: dict[str, 
     return payload
 
 
+def validation_digest(value) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+
+
+async def collect_mcp_validation_pages(session, spec_json: str) -> tuple[dict, list[dict]]:
+    """Retrieve every finding and provenance ID, then verify the complete report."""
+    transcript = []
+    collected = {}
+    header = None
+    expected_digest = ""
+    descriptors = None
+    header_fields = None
+    for collection, limit in (("findings", 10), ("evidence_ids", 100)):
+        items = []
+        offset = 0
+        while True:
+            arguments = {"spec_json": spec_json, "detail_level": "page", "collection": collection,
+                         "offset": offset, "limit": limit, "expected_report_sha256": expected_digest}
+            response = await session.call_tool("validate_design", arguments)
+            require(not response.isError, f"MCP validation page failed: {response.content}")
+            text = "\n".join(block.text for block in response.content if hasattr(block, "text"))
+            require(len(text.encode("utf-8")) <= 20000, "MCP validation page exceeds the agent-output budget")
+            page = json.loads(text)
+            require(page.get("detail_level") == "page" and page.get("collection") == collection
+                    and page.get("offset") == offset and page.get("limit") == limit,
+                    "MCP validation page does not match the request")
+            fixed_fields = {key: value for key, value in page.items()
+                            if key not in {"collection", "offset", "limit", "items", "next_offset"}}
+            if header is None:
+                expected_digest = page.get("report_sha256")
+                require(isinstance(expected_digest, str) and re.fullmatch(r"[0-9a-f]{64}", expected_digest),
+                        "MCP validation page omits the report digest")
+                descriptors = page.get("collections")
+                require(isinstance(descriptors, dict) and set(descriptors) == {"findings", "evidence_ids"},
+                        "MCP validation page omits collection descriptors")
+                header = page
+                header_fields = fixed_fields
+            require(page.get("report_sha256") == expected_digest and page.get("collections") == descriptors,
+                    "MCP validation report changed between pages")
+            require(fixed_fields == header_fields, "MCP validation report header changed between pages")
+            descriptor = descriptors[collection]
+            total = descriptor.get("total")
+            require(isinstance(total, int) and not isinstance(total, bool) and total >= 0,
+                    "MCP validation collection has an invalid count")
+            chunk = page.get("items")
+            require(isinstance(chunk, list) and len(chunk) <= limit and offset + len(chunk) <= total,
+                    "MCP validation page has an invalid item count")
+            items.extend(chunk)
+            next_offset = offset + len(chunk) if len(items) < total else None
+            require(page.get("next_offset") == next_offset and (next_offset is None or next_offset > offset),
+                    "MCP validation page skipped items or made no progress")
+            transcript.append({"tool": "validate_design", "arguments": {key: value for key, value in arguments.items()
+                                                                          if key != "spec_json"}, "result": page})
+            if next_offset is None:
+                break
+            offset = next_offset
+        require(len(items) == total and validation_digest(items) == descriptor.get("sha256"),
+                "MCP validation collection is incomplete or has a mismatched digest")
+        collected[collection] = items
+    order = header.get("category_order")
+    require(isinstance(order, list) and all(isinstance(name, str) for name in order)
+            and len(set(order)) == len(order), "MCP validation category order is invalid")
+    categories = {name: [] for name in order}
+    for entry in collected["findings"]:
+        require(isinstance(entry, dict) and set(entry) == {"category", "finding"}
+                and entry["category"] in categories and isinstance(entry["finding"], dict),
+                "MCP validation page contains a malformed finding")
+        categories[entry["category"]].append(entry["finding"])
+    paging_fields = {"detail_level", "report_sha256", "category_order", "collection", "offset", "limit",
+                     "items", "next_offset", "collections"}
+    report = {key: value for key, value in header.items() if key not in paging_fields}
+    report.update(detail_level="summary", categories=categories, evidence_ids=collected["evidence_ids"])
+    require(validation_digest(report) == expected_digest, "MCP reconstructed validation report has a mismatched digest")
+    return report, transcript
+
+
 async def mcp_smoke(spec: Path, output: Path, env: dict) -> dict:
     """Exercise the real JSON-RPC stdio server, including error propagation."""
     import yaml
@@ -870,18 +946,25 @@ async def mcp_smoke(spec: Path, output: Path, env: dict) -> dict:
                 require(set(names) == {"generate_artifacts", "validate_design", "discover_projects",
                                        "research_component", "manufacturing_readiness"}, "MCP inventory mismatch")
                 spec_json = json.dumps(yaml.safe_load(spec.read_text(encoding="utf-8")))
+                validation_tool = next(tool for tool in inventory.tools if tool.name == "validate_design")
+                paged_validation = "page" in validation_tool.inputSchema.get("properties", {}).get(
+                    "detail_level", {}).get("enum", [])
                 for name, arguments in (
                     ("validate_design", {"spec_json": spec_json}),
                     ("generate_artifacts", {"spec_json": spec_json, "output_dir": str(output / "mcp-generated")}),
                     ("discover_projects", {"root_dir": str(output), "depth": 2}),
                 ):
-                    response = await session.call_tool(name, arguments)
-                    require(not response.isError, f"MCP {name} failed: {response.content}")
-                    payload = json.loads("\n".join(b.text for b in response.content if hasattr(b, "text")))
-                    transcript.append({"tool": name, "result": payload})
+                    if name == "validate_design" and paged_validation:
+                        payload, pages = await collect_mcp_validation_pages(session, spec_json)
+                        transcript.extend(pages)
+                    else:
+                        response = await session.call_tool(name, arguments)
+                        require(not response.isError, f"MCP {name} failed: {response.content}")
+                        payload = json.loads("\n".join(b.text for b in response.content if hasattr(b, "text")))
+                        transcript.append({"tool": name, "result": payload})
                     if name in {"validate_design", "generate_artifacts"}:
                         require(payload.get("valid") is True, f"MCP {name} returned invalid design")
-                    if name == "validate_design":
+                    if name == "validate_design" and not paged_validation:
                         require(len(json.dumps(payload).encode("utf-8")) <= 20000,
                                 "MCP validation response exceeds the workflow's tested agent-output budget")
                     if name == "generate_artifacts":
@@ -895,6 +978,7 @@ async def mcp_smoke(spec: Path, output: Path, env: dict) -> dict:
                 })
                 require(readiness.isError is True, "MCP missing readiness was treated as manufacturing approval")
     result = {"tools": names, "calls": transcript, "invalid_input_is_error": True,
+              "validation_paging_verified": paged_validation,
               "empty_research_is_error": True, "missing_readiness_is_error": True}
     (output / "mcp-transcript.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return result
@@ -1181,7 +1265,7 @@ def main() -> int:
             step = {"name": "mcp", "passed": False}
             demo.steps.append(step)
             started = time.monotonic()
-            result = asyncio.run(asyncio.wait_for(mcp_smoke(spec, output, demo.env), timeout=120))
+            result = asyncio.run(asyncio.wait_for(mcp_smoke(spec, output, demo.env), timeout=300))
             step.update(passed=True, seconds=round(time.monotonic() - started, 2))
             (output / "mcp.stdout.log").write_text(json.dumps(result, indent=2), encoding="utf-8")
         require(digest(source_spec) == original, "Workflow modified the input design")

@@ -293,3 +293,74 @@ jobs:
           name: native-pcb-kicad-${{ matrix.kicad-major }}
           path: .ci-kicad/native-pcb
           if-no-files-found: warn
+
+  unseen-scale-validation:
+    name: Unseen native scale / ${{ matrix.case }}
+    needs: distribution
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: ghcr.io/kicad/kicad:10.0.6-full@sha256:e36e29b5f4a638a1a7238eba3d2fcbc8e061ffed1e99a8f39cb722706c94a58e
+      options: --user 0
+    strategy:
+      fail-fast: false
+      matrix:
+        case: [distributed_facility_gateway, serial_relay_output_card, multichannel_analog_setpoint_card]
+    steps:
+      - name: Install checkout and native prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update -o Acquire::Retries=3 -o APT::Update::Error-Mode=any
+          DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends -o Acquire::Retries=3 \
+            python3-venv curl git ca-certificates
+
+      - name: Checkout benchmark and validation scripts
+        uses: actions/checkout@v7
+
+      - name: Prepare official KiCad runtime
+        shell: bash
+        run: bash scripts/prepare_kicad_ci_container.sh 10
+
+      - name: Download exact tested distribution artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: ci-distributions
+          path: dist
+
+      - name: Install exact wheel with MCP runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel=$(find dist -maxdepth 1 -name 'circuit_weaver-*.whl' -print -quit)
+          test -n "$wheel"
+          python -m pip install "${wheel}[mcp]"
+
+      - name: Set up routing runtime
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Verify pinned router and run every prototype stage
+        shell: bash
+        env:
+          CIRCUIT_WEAVER_KICAD_PYTHON: /usr/bin/python3
+          CIRCUIT_WEAVER_FREEROUTING: /tmp/freerouting-2.4.1.jar
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 https://github.com/freerouting/freerouting/releases/download/v2.4.1/freerouting-2.4.1.jar -o /tmp/freerouting-2.4.1.jar
+          echo '251101c3eeac22d7e7dfcf6796603279e5d1000283eb82d8f093780f7afc6aa9  /tmp/freerouting-2.4.1.jar' | sha256sum --check
+          wheel=$(find dist -maxdepth 1 -name 'circuit_weaver-*.whl' -print -quit)
+          python benchmarks/general_scale/run_general_scale.py \
+            --suite benchmarks/unseen_scale/cases.yaml --case '${{ matrix.case }}' \
+            --output .ci-kicad/unseen-scale --installed --expected-wheel "$wheel" \
+            --require-clean --workers 1 --iterations 6000 --attempts 3 --route-timeout 1800 --timeout 7200
+
+      - name: Preserve full workflow, connectivity, and assembled preview evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unseen-native-${{ matrix.case }}
+          path: .ci-kicad/unseen-scale
+          if-no-files-found: warn

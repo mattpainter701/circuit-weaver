@@ -79,6 +79,76 @@ omissions. Request `detail_level="full"` for the complete report; that larger
 payload can exceed an agent client's tool-output limit. Neither view changes
 validation or manufacturing approval.
 
+For reports that exceed a client's output limit, request `detail_level="page"`
+with `collection="findings"` or `collection="evidence_ids"`. Retrieve **both**
+collections. Start at `offset=0`, then follow `next_offset` until it is null;
+pass the first page's `report_sha256` as `expected_report_sha256` on subsequent
+requests. Each collection supplies its total count and SHA-256 digest, and the
+page header preserves validity, category counts, metadata and the manifest
+reference. Finding records retain every audit field and their evidence IDs.
+The provenance collection also includes IDs not attached to any finding.
+
+`limit` is an upper bound of 1–100 items. The server reduces the returned count
+when necessary to keep serialized pages at or below 16 KB; `next_offset`
+reflects the actual item count. It returns an explicit error if a single item
+or header cannot fit, rather than cutting its text or provenance. A changed
+report also fails with an error so the client can restart retrieval. Summary
+and full-detail responses retain their existing behavior; paging covers the
+summary's complete findings and provenance, while full detail includes the
+embedded ledger and per-reference index.
+
+## OpenCode with an isolated package installation
+
+Use a fresh environment and bind both the shell and MCP server to its Python.
+Activating a different shell or installing a package does not change an already
+running agent's PATH. A global `circuit-weaver` executable can otherwise run an
+older package even while the MCP server uses the new environment.
+
+For example, in PowerShell:
+
+```powershell
+py -3.13 -m venv .venv
+$cwPython = (Resolve-Path .venv/Scripts/python.exe).Path
+& $cwPython -m pip install "circuit-weaver[mcp]"
+$env:VIRTUAL_ENV = (Resolve-Path .venv).Path
+$env:PATH = "$env:VIRTUAL_ENV\Scripts;$env:PATH"
+& $cwPython -m circuit_weaver --version
+```
+
+Configure OpenCode's optional local MCP entry with that same absolute Python
+path (replace the example path below). Provider credentials remain managed by
+OpenCode, outside this configuration:
+
+```json
+{
+  "mcp": {
+    "circuit-weaver": {
+      "type": "local",
+      "command": ["C:/absolute/path/.venv/Scripts/python.exe", "-m", "circuit_weaver.mcp_server"],
+      "environment": {"CIRCUIT_WEAVER_MCP_PORT": "0"},
+      "enabled": true
+    }
+  }
+}
+```
+
+For an isolated skill/config test, set `OPENCODE_CONFIG_DIR` to a new directory
+before `install-skills --platform opencode --skills circuit-weaver` and before
+starting OpenCode. Use `opencode --pure run --format json` to retain inspectable
+tool events. Verify that OpenCode actually executes the commands and reads the
+saved result; a successful agent exit alone does not establish workflow success.
+
+The full native workflow additionally needs KiCad and its libraries, Java, and
+Freerouting. From a matching source checkout, have the agent run the
+[workflow validator](automation-validation.md) using the environment's absolute
+Python, `--installed`, `--expected-wheel`, `--render-3d`, and `--mcp-smoke`.
+The checkout supplies the benchmark scripts; the application runs from the
+installed wheel. Save a new output directory for every attempt and require all
+16 stages to pass, including native DRC and model coverage. For the ESP32 IoT
+sample, retain the suite's explicit 0.20 mm minimum-drill assumption; the default
+0.30 mm rule correctly rejects its smaller thermal holes. This prototype
+assumption does not authorize manufacturing export.
+
 ## Upgrade and Conflict Policy
 
 Each installed skill contains `.circuit-weaver-install.json`, recording the

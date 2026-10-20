@@ -1,0 +1,11 @@
+# Unseen high-count circuit fixtures
+
+This suite measures three connected control and signal-processing boards above the 155-part baseline. Physical counts include expanded bypass and strap components. Each case records pad-level functional paths, and the general-scale runner checks those paths against native KiCad pad nets in addition to its ERC, DRC, model, layout, routing, and analog checks.
+
+`distributed_facility_gateway` is an explicitly disclosed scale derivative of the existing `field_io_gateway`, not a wholly new architecture. It retains eight differential input channels, the three original RS-485 links, CAN, and adds four independently wired RS-485 trunks with dedicated protected field connectors. Its expanded count is 187 physical parts. The extra trunks use GPIO pins whose firmware operation assumes JTAG is disabled while SWD remains available. Each added software UART is intended for sequential polling at 9600 baud; throughput and simultaneous-channel timing are not claimed or measured.
+
+`serial_relay_output_card` uses a different topology: a 20-register serial output chain drives 160 ULN2003A low-side coil channels, each with a dedicated two-pin relay header. The 160 required-path contracts trace every register output through its driver input/output to its matching connector. The expanded count is 268 physical parts. The logic assumes the active-low output-enable control is pulled high during reset. Relay-coil load behavior is represented for workflow testing, not characterized as a finished product.
+
+`multichannel_analog_setpoint_card` is a controller/DAC topology with 36 dual SPI DACs, a cascaded chip-select bank, a shared reference, and 72 independent outputs. Each output uses the DAC block's generated series filter resistor and shunt capacitor before its own two-pin setpoint connector. Its 110 required paths cover shared SPI buses, every DAC select, and every DAC-to-filter-to-connector output. The expanded count is 438 physical parts after passive expansion. Firmware updates one DAC at a time. Output accuracy and load-drive capability are not claimed.
+
+The fixtures are generated deterministically by `build_stress_fixtures.py`; the generated YAML specs and `cases.yaml` are committed as static inputs so benchmark runs use stable snapshots. `cases.yaml` sets a separate minimum physical-part floor for each case.

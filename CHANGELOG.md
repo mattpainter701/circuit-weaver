@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Split port-heavy schematic hierarchies before their top-level symbols exceed standard pages. Partition connector annotations without duplicating or dropping notes, and fail closed when a hierarchy cannot fit.
+- Page large MCP validation reports without losing findings, audit fields, or provenance IDs. Bind pages to a report digest, verify complete collection counts and hashes, and reject oversized individual records explicitly.
+- Add native signal-path contracts and higher-count fieldbus, relay-output, and analog-setpoint workflow fixtures, with individual physical-part floors and retained routing, model-coverage, label, and delivery gates.
+- Document fresh OpenCode environment binding so shell commands and stdio MCP use the same installed package, and preserve explicit prototype drill assumptions.
+
 ## [0.37.0] - 2026-10-20
 
 ### Physical sample inventory and workflow scale

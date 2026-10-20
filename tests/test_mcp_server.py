@@ -161,7 +161,7 @@ def test_validate_tool_rejects_invalid_detail_level(detail_level) -> None:
         "status": "error",
         "error": {
             "code": "invalid_detail_level",
-            "message": "detail_level must be 'summary' or 'full'",
+            "message": "detail_level must be 'summary', 'full', or 'page'",
         },
     }
 
