@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep generation staging and rollback paths short enough for native Windows tools when the published project path fits the Windows file-path limit.
+- Scale the bounded native placement-worker timeout with footprint count so larger boards can complete the existing DRC and reference-label checks.
 - Split port-heavy schematic hierarchies before their top-level symbols exceed standard pages. Partition connector annotations without duplicating or dropping notes, and fail closed when a hierarchy cannot fit.
 - Page large MCP validation reports without losing findings, audit fields, or provenance IDs. Bind pages to a report digest, verify complete collection counts and hashes, and reject oversized individual records explicitly.
 - Add native signal-path contracts and higher-count fieldbus, relay-output, and analog-setpoint workflow fixtures, with individual physical-part floors and retained routing, model-coverage, label, and delivery gates.

@@ -19,6 +19,10 @@ from .kicad_bridge import run_kicad
 from .pcb_handoff import _pcb_output_lock, _publish_staged_transaction
 from .placement_optimizer import PlacementConfig, _position_values, optimize_placement
 
+_NATIVE_PLACE_BASE_TIMEOUT_SECONDS = 120
+_NATIVE_PLACE_SECONDS_PER_FOOTPRINT = 2
+_NATIVE_PLACE_MAX_TIMEOUT_SECONDS = 20 * 60
+
 
 def _rotated_offset(x: float, y: float, rotation: float) -> tuple[float, float]:
     """Rotate local KiCad coordinates, whose Y axis points down."""
@@ -235,6 +239,16 @@ def _native_reference_gap_floor(footprints: list[dict[str, Any]]) -> float:
     return max(heights, default=0.1) + 0.4
 
 
+def _native_place_timeout_seconds(footprint_count: int) -> int:
+    """Bound KiCad's native placement/silkscreen pass according to board size."""
+    if isinstance(footprint_count, bool) or not isinstance(footprint_count, int) or footprint_count < 0:
+        raise ValueError("footprint_count must be a non-negative integer")
+    return min(
+        _NATIVE_PLACE_MAX_TIMEOUT_SECONDS,
+        _NATIVE_PLACE_BASE_TIMEOUT_SECONDS + footprint_count * _NATIVE_PLACE_SECONDS_PER_FOOTPRINT,
+    )
+
+
 def _place_pcb_once(
     board_path: str | Path, output_path: str | Path, *, iterations: int = 5000, seed: int = 0,
     overwrite: bool = False, kicad_python_path: str | Path | None = None,
@@ -362,7 +376,8 @@ def _place_pcb_once(
             snapshots.update(original_snapshots)
             applied = run_kicad("place", board=str(source), output=str(staged), placements=placements,
                                 tidy_references=tidy_references,
-                                python_path=kicad_python_path)
+                                python_path=kicad_python_path,
+                                timeout=_native_place_timeout_seconds(len(placements)))
             if applied["status"] != "ok":
                 return applied
             if tidy_references:

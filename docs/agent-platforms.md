@@ -138,6 +138,16 @@ starting OpenCode. Use `opencode --pure run --format json` to retain inspectable
 tool events. Verify that OpenCode actually executes the commands and reads the
 saved result; a successful agent exit alone does not establish workflow success.
 
+Large inline circuit specifications also consume the model's tool-call output
+budget. In the OpenCode 1.17.15 / DeepSeek Flash stress test, an 8192-token cap
+produced malformed tool arguments for the 438-part fixture. Setting
+`OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=32768` before starting the client allowed
+the exact complete specification to reach `validate_design` directly. Verify
+your provider supports the requested budget and check the actual tool events;
+report paging bounds the response, but does not shorten the input specification.
+Keep the same `OPENCODE_CONFIG_DIR` for continued sessions and confirm the server
+is connected with `opencode --pure mcp list`.
+
 The full native workflow additionally needs KiCad and its libraries, Java, and
 Freerouting. From a matching source checkout, have the agent run the
 [workflow validator](automation-validation.md) using the environment's absolute

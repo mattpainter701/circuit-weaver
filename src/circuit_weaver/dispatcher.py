@@ -3094,7 +3094,9 @@ def _publish_staged_generation(
     }
     backup_dir = Path(
         tempfile.mkdtemp(
-            prefix=f".{output_dir.name}.circuit-weaver-backup-",
+            # Keep internal paths short: native KiCad tools can still enforce
+            # MAX_PATH even when the final user-selected path fits.
+            prefix=".cw-b-",
             dir=output_dir.parent,
         )
     )
@@ -3275,7 +3277,7 @@ def _generate_artifacts_transaction_locked(
 
     staging_path = Path(
         tempfile.mkdtemp(
-            prefix=f".{output_path.name}.circuit-weaver-staging-",
+            prefix=".cw-s-",
             dir=output_path.parent,
         )
     )
