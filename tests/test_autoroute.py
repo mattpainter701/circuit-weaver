@@ -36,6 +36,32 @@ from circuit_weaver.autoroute import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _adapt_legacy_router_mocks_to_disk_backed_streams(monkeypatch):
+    """Keep old subprocess.run mocks meaningful after stdout/stderr file redirection."""
+    def run(command, *, timeout_seconds, cwd, stdout_path, stderr_path):
+        try:
+            with stdout_path.open("wb") as stdout_stream, stderr_path.open("wb") as stderr_stream:
+                result = subprocess.run(
+                    command,
+                    stdout=stdout_stream,
+                    stderr=stderr_stream,
+                    timeout=timeout_seconds,
+                    cwd=cwd,
+                )
+        except subprocess.TimeoutExpired as exc:
+            for path, value in ((stdout_path, exc.stdout), (stderr_path, exc.stderr)):
+                if value is not None and path.stat().st_size == 0:
+                    path.write_bytes(value.encode("utf-8") if isinstance(value, str) else value)
+            raise
+        for path, value in ((stdout_path, result.stdout), (stderr_path, result.stderr)):
+            if value is not None and path.stat().st_size == 0:
+                path.write_bytes(value.encode("utf-8") if isinstance(value, str) else value)
+        return result
+
+    monkeypatch.setattr(autoroute_module, "_run_router_to_logs", run)
+
+
 @pytest.mark.parametrize(
     ("suffix", "routed", "attempts", "requested", "expected"),
     [

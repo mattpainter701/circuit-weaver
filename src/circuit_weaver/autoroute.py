@@ -1488,6 +1488,98 @@ def _effective_optimization_threads(
     return 1 if attempts > 1 else None
 
 
+_ROUTER_LOG_HEAD_BYTES = 64 * 1024
+_ROUTER_LOG_PARSE_TAIL_BYTES = 4 * 1024 * 1024
+_ROUTER_LOG_DIAGNOSTIC_TAIL_BYTES = 64 * 1024
+
+
+def _router_log_window(path: Path, *, head_bytes: int, tail_bytes: int) -> tuple[str, str]:
+    """Read bounded parser windows and discard an uncertain leading tail fragment."""
+    size = path.stat().st_size
+    with path.open("rb") as stream:
+        if size <= head_bytes + tail_bytes:
+            raw = stream.read(size)
+            split = min(size, head_bytes)
+            # Do not decode a multi-byte code point in two independent windows.
+            while split > 0 and split < size and raw[split] & 0xC0 == 0x80:
+                split -= 1
+            return (
+                raw[:split].decode("utf-8", errors="replace"),
+                raw[split:].decode("utf-8", errors="replace"),
+            )
+
+        head = stream.read(head_bytes)
+        tail_start = size - tail_bytes
+        stream.seek(tail_start - 1)
+        previous_byte = stream.read(1)
+        stream.seek(tail_start)
+        raw_tail = stream.read(tail_bytes)
+        if previous_byte != b"\n":
+            newline = raw_tail.find(b"\n")
+            raw_tail = raw_tail[newline + 1 :] if newline >= 0 else b""
+    return head.decode("utf-8", errors="replace"), raw_tail.decode("utf-8", errors="replace")
+
+
+def _router_log_metadata(path: Path, *, parse_tail_bytes: int) -> dict[str, Any]:
+    """Hash a full on-disk router log without reading it into memory."""
+    try:
+        digest = hashlib.sha256()
+        size = 0
+        with path.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                size += len(chunk)
+                digest.update(chunk)
+    except OSError as exc:
+        return {"path": str(path), "available": False, "error": f"{type(exc).__name__}: {exc}"}
+    return {
+        "path": str(path),
+        "available": True,
+        "sha256": digest.hexdigest(),
+        "bytes": size,
+        "preserved_full_log": True,
+        "parse_head_limit_bytes": _ROUTER_LOG_HEAD_BYTES,
+        "parse_tail_limit_bytes": parse_tail_bytes,
+        "parse_window_truncated": size > _ROUTER_LOG_HEAD_BYTES + parse_tail_bytes,
+        "diagnostic_tail_bytes": min(size, _ROUTER_LOG_DIAGNOSTIC_TAIL_BYTES),
+        "diagnostic_tail_truncated": size > _ROUTER_LOG_DIAGNOSTIC_TAIL_BYTES,
+    }
+
+
+def _router_log_bundle(stdout_path: Path, stderr_path: Path) -> dict[str, Any]:
+    return {
+        "stdout": _router_log_metadata(stdout_path, parse_tail_bytes=_ROUTER_LOG_PARSE_TAIL_BYTES),
+        "stderr": _router_log_metadata(stderr_path, parse_tail_bytes=_ROUTER_LOG_PARSE_TAIL_BYTES),
+        "parse_window": {
+            "head_bytes_per_stream": _ROUTER_LOG_HEAD_BYTES,
+            "tail_bytes_per_stream": _ROUTER_LOG_PARSE_TAIL_BYTES,
+            "diagnostic_tail_bytes_per_stream": _ROUTER_LOG_DIAGNOSTIC_TAIL_BYTES,
+            "statistics_are_fail_closed": True,
+        },
+    }
+
+
+def _read_router_diagnostic(path: Path) -> str:
+    """Return only a bounded UTF-8-safe tail for returned error diagnostics."""
+    size = path.stat().st_size
+    with path.open("rb") as stream:
+        stream.seek(max(0, size - _ROUTER_LOG_DIAGNOSTIC_TAIL_BYTES))
+        return stream.read(_ROUTER_LOG_DIAGNOSTIC_TAIL_BYTES).decode("utf-8", errors="replace")
+
+
+def _run_router_to_logs(
+    command: list[str], *, timeout_seconds: float, cwd: Path, stdout_path: Path, stderr_path: Path
+) -> subprocess.CompletedProcess[bytes]:
+    """Run the router with disk-backed pipes; subprocess.run still owns timeout cleanup."""
+    with stdout_path.open("wb") as stdout_stream, stderr_path.open("wb") as stderr_stream:
+        return subprocess.run(
+            command,
+            stdout=stdout_stream,
+            stderr=stderr_stream,
+            timeout=timeout_seconds,
+            cwd=cwd,
+        )
+
+
 def _route_specctra(
     dsn_path: Path,
     ses_path: Path,
@@ -1505,6 +1597,7 @@ def _route_specctra(
     seed: int | None,
     capability_probe: dict[str, Any] | None,
     clearance_baseline: dict[str, Any] | None = None,
+    logs_root: Path | None = None,
 ) -> dict[str, Any]:
     prepare_error = _prepare_destination(ses_path, overwrite=overwrite)
     if prepare_error:
@@ -1560,39 +1653,116 @@ def _route_specctra(
     if seed is not None:
         routing_command.extend(["-random_seed", str(seed)])
     try:
+        stable_logs_root = Path(logs_root) if logs_root is not None else ses_path.parent / ".circuit-weaver-router-logs"
+        stable_logs_root.mkdir(parents=True, exist_ok=True)
+        log_dir = Path(tempfile.mkdtemp(prefix="attempt-", dir=stable_logs_root))
+        stdout_path = log_dir / "stdout.log"
+        stderr_path = log_dir / "stderr.log"
+        stdout_path.touch()
+        stderr_path.touch()
+    except OSError as exc:
+        _remove_staging_file(staging)
+        return _result_error(f"Could not prepare persistent Freerouting logs: {exc}")
+    try:
         with tempfile.TemporaryDirectory(prefix=".cw-router-", dir=ses_path.parent) as user_data:
             routing_command.append(f"--user_data_path={Path(user_data).resolve()}")
-            result = subprocess.run(
+            result = _run_router_to_logs(
                 routing_command,
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-                cwd=user_data,
+                timeout_seconds=timeout_seconds,
+                cwd=Path(user_data),
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
             )
-    except subprocess.TimeoutExpired as exc:
+    except subprocess.TimeoutExpired:
         _remove_staging_file(staging)
-        def diagnostic_text(value: Any) -> str:
-            if isinstance(value, bytes):
-                return value.decode("utf-8", errors="replace")
-            return value if isinstance(value, str) else ""
-
+        log_bundle = _router_log_bundle(stdout_path, stderr_path)
+        if not all(log_bundle[name].get("available") for name in ("stdout", "stderr")):
+            return _result_error(
+                f"Freerouting timed out after {timeout_seconds:.0f} seconds; could not verify complete raw logs",
+                router_logs=log_bundle,
+            )
+        try:
+            diagnostic_stdout = _read_router_diagnostic(stdout_path)
+            diagnostic_stderr = _read_router_diagnostic(stderr_path)
+        except OSError as log_error:
+            _remove_staging_file(staging)
+            return _result_error(
+                f"Freerouting timed out after {timeout_seconds:.0f} seconds; "
+                f"could not read bounded diagnostics: {log_error}",
+                router_logs=log_bundle,
+            )
         return _result_error(
             f"Freerouting timed out after {timeout_seconds:.0f} seconds",
-            diagnostic_stdout=diagnostic_text(exc.stdout),
-            diagnostic_stderr=diagnostic_text(exc.stderr),
+            diagnostic_stdout=diagnostic_stdout,
+            diagnostic_stderr=diagnostic_stderr,
+            router_logs=log_bundle,
         )
     except OSError as exc:
         _remove_staging_file(staging)
-        return _result_error(f"Could not run Freerouting: {exc}")
-    try:
-        if result.returncode != 0:
-            detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
-            return _result_error(f"Freerouting failed: {detail}")
+        log_bundle = _router_log_bundle(stdout_path, stderr_path)
+        return _result_error(
+            f"Could not run Freerouting: {exc}",
+            router_logs=log_bundle,
+        )
 
+    log_bundle = _router_log_bundle(stdout_path, stderr_path)
+    if not all(log_bundle[name].get("available") for name in ("stdout", "stderr")):
+        _remove_staging_file(staging)
+        return _result_error(
+            "Could not verify complete persisted Freerouting logs; refusing route publication",
+            router_logs=log_bundle,
+        )
+    try:
+        stdout_head, stdout_tail = _router_log_window(
+            stdout_path, head_bytes=_ROUTER_LOG_HEAD_BYTES, tail_bytes=_ROUTER_LOG_PARSE_TAIL_BYTES
+        )
+        stderr_head, stderr_tail = _router_log_window(
+            stderr_path, head_bytes=_ROUTER_LOG_HEAD_BYTES, tail_bytes=_ROUTER_LOG_PARSE_TAIL_BYTES
+        )
+    except OSError as log_error:
+        _remove_staging_file(staging)
+        return _result_error(
+            f"Could not read persisted Freerouting logs: {log_error}; refusing route publication",
+            router_logs=log_bundle,
+        )
+    version_text = "\n".join((stdout_head, stderr_head, stdout_tail, stderr_tail))
+    stdout_parse_text = (
+        stdout_tail
+        if log_bundle["stdout"]["parse_window_truncated"]
+        else f"{stdout_head}{stdout_tail}"
+    )
+    stderr_parse_text = (
+        stderr_tail
+        if log_bundle["stderr"]["parse_window_truncated"]
+        else f"{stderr_head}{stderr_tail}"
+    )
+    output_text = f"{stdout_parse_text}\n{stderr_parse_text}"
+    if result.returncode != 0:
+        _remove_staging_file(staging)
+        try:
+            diagnostic_stdout = _read_router_diagnostic(stdout_path)
+            diagnostic_stderr = _read_router_diagnostic(stderr_path)
+        except OSError as log_error:
+            return _result_error(
+                f"Freerouting failed with exit code {result.returncode}; "
+                f"could not read bounded diagnostics: {log_error}",
+                router_logs=log_bundle,
+            )
+        detail = diagnostic_stderr.strip() or diagnostic_stdout.strip() or f"exit code {result.returncode}"
+        return _result_error(
+            f"Freerouting failed: {detail}",
+            diagnostic_stdout=diagnostic_stdout,
+            diagnostic_stderr=diagnostic_stderr,
+            router_logs=log_bundle,
+        )
+    try:
         validation = _validate_specctra_artifact(staging, "ses", source_dsn=dsn_path)
         if not validation["valid"]:
-            return _result_error(f"Freerouting produced an invalid SES: {validation['reason']}", artifact=validation)
-        output_text = f"{result.stdout}\n{result.stderr}"
+            return _result_error(
+                f"Freerouting produced an invalid SES: {validation['reason']}",
+                artifact=validation,
+                router_logs=log_bundle,
+            )
         stats = _parse_routing_stats(output_text)
         session_text = staging.read_text(encoding="utf-8")
         stats.update(_measure_session_trace_lengths(session_text))
@@ -1606,7 +1776,8 @@ def _route_specctra(
                 stats["traces"] = len(list(_iter_sexpr_blocks(routes, "wire")))
             stats["geometry_counts_source"] = "validated_session"
         router = {
-            "version": _parse_freerouting_version(output_text) or (capability_probe or {}).get("version"),
+            "version": _parse_freerouting_version(version_text) or (capability_probe or {}).get("version"),
+            "logs": log_bundle,
             "headless": headless,
             "max_passes": passes,
             "optimization_threads": optimization_threads,
@@ -1622,6 +1793,7 @@ def _route_specctra(
                 artifact=validation,
                 stats=stats,
                 router=router,
+                router_logs=log_bundle,
             )
         clearance_audit = None
         if clearance_baseline is not None:
@@ -1637,6 +1809,7 @@ def _route_specctra(
                     artifact=validation,
                     stats=stats,
                     router=router,
+                    router_logs=log_bundle,
                 )
             clearance_audit = _compare_clearance_reports(
                 clearance_baseline["report"],
@@ -1653,6 +1826,7 @@ def _route_specctra(
                     stats=stats,
                     router=router,
                     clearance_audit=clearance_audit,
+                    router_logs=log_bundle,
                 )
         elif stats["clearance_violations"] is not None and stats["clearance_violations"] > 0:
             return _result_error(
@@ -1660,10 +1834,11 @@ def _route_specctra(
                 artifact=validation,
                 stats=stats,
                 router=router,
+                router_logs=log_bundle,
             )
         publish_error = _publish_staged_file(staging, ses_path, overwrite=overwrite)
         if publish_error:
-            return _result_error(publish_error, stats=stats, router=router)
+            return _result_error(publish_error, stats=stats, router=router, router_logs=log_bundle)
         validation["path"] = str(ses_path)
         clearance_status = (
             "unchanged_preexisting_same_pad_overlaps_requires_native_drc"
@@ -1680,6 +1855,7 @@ def _route_specctra(
             "artifact": validation,
             "stats": stats,
             "router": router,
+            "router_logs": log_bundle,
             **({"clearance_audit": clearance_audit} if clearance_audit is not None else {}),
             "verification": {
                 "ses_semantics": "verified",
@@ -1793,9 +1969,11 @@ def _route_candidates(
     overwrite: bool,
     seed: int | None,
     native_placement_portfolio: bool = False,
+    logs_root: Path | None = None,
     **options: Any,
 ) -> dict[str, Any]:
     """Run an isolated portfolio and atomically publish its best valid session."""
+    stable_logs_root = Path(logs_root) if logs_root is not None else ses_path.parent / ".circuit-weaver-router-logs"
     if attempts == 1 and not native_placement_portfolio:
         return _route_specctra(
             dsn_path,
@@ -1804,6 +1982,7 @@ def _route_candidates(
             timeout_seconds=timeout_seconds,
             overwrite=overwrite,
             seed=seed,
+            logs_root=stable_logs_root,
             **options,
         )
     deadline = time.perf_counter() + timeout_seconds
@@ -1888,6 +2067,7 @@ def _route_candidates(
                     timeout_seconds=allowance,
                     overwrite=False,
                     seed=attempt_seed,
+                    logs_root=stable_logs_root,
                     **attempt_options,
                 )
                 row = {
@@ -1903,6 +2083,8 @@ def _route_candidates(
                     row["variant_sha256"] = candidate_hash
                 if "stats" in result:
                     row["stats"] = result["stats"]
+                if "router_logs" in result:
+                    row["router_logs"] = result["router_logs"]
                 if "message" in result:
                     row["message"] = result["message"]
                 for key in ("diagnostic_stdout", "diagnostic_stderr"):
@@ -2163,6 +2345,7 @@ def autoroute_pcb(
         optimizer_improvement_threshold=optimizer_improvement_threshold,
         seed=seed,
         native_placement_portfolio=source_suffix == ".kicad_pcb",
+        logs_root=ses_path.parent / ".circuit-weaver-router-logs",
         capability_probe=capability_probe,
         clearance_baseline=clearance_baseline,
     )

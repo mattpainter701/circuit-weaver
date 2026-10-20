@@ -393,6 +393,12 @@ locked footprints and board sides, uses real courtyards and rotated pad location
 and checks physical DRC. Routing publishes the final board only after KiCad DRC
 passes, preserving project rules. See [setup and limits](docs/routing-placement-search.md).
 
+Router stdout and stderr are retained under `.circuit-weaver-router-logs` beside
+the requested session output, with per-attempt hashes and byte counts in the
+result. Returned diagnostics and statistics parsing use bounded windows; missing
+final statistics remain unverified. Full log files can grow for the duration of
+a run and should be included when diagnosing a timeout.
+
 ### 6 — DFM check and panelization
 
 ```bash

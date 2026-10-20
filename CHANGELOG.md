@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Stream router stdout and stderr to persistent per-attempt log files instead of retaining unlimited output in memory. Keep full-log hashes and byte counts, bound returned diagnostics and parser windows, and reject uncertain routing statistics after truncation.
 - Repair remaining native reference-label conflicts with a bounded local assignment search before widening placement. Preserve other text, footprint and pad geometry, copper and locked fields; retain the native label and DRC gates.
 - Correct large analog benchmark filter-pad contracts from compiled ownership and native evidence. Check snapshotted channel and signal/return pad-net assertions on the built board before placement and routing, then verify them again on the final board.
 - Assign interchangeable native connector slots using their private-net support-family pad endpoints, preserving references, pad nets, occupied geometry and authored mechanical constraints. Accept only an improved placement rank and retain native label and DRC gates.
