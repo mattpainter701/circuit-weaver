@@ -239,6 +239,17 @@ def _native_reference_gap_floor(footprints: list[dict[str, Any]]) -> float:
     return max(heights, default=0.1) + 0.4
 
 
+def _effective_min_component_gap(
+    design_spec: dict[str, Any] | None, reference_gap_floor: float,
+    feedback_min_component_gap_mm: float | None = None,
+) -> float:
+    """Return the maximum authored, native-label, and retry spacing floor."""
+    candidates = [_design_min_component_gap(design_spec), reference_gap_floor]
+    if feedback_min_component_gap_mm is not None:
+        candidates.append(feedback_min_component_gap_mm)
+    return max(candidates)
+
+
 def _native_place_timeout_seconds(footprint_count: int) -> int:
     """Bound KiCad's native placement/silkscreen pass according to board size."""
     if isinstance(footprint_count, bool) or not isinstance(footprint_count, int) or footprint_count < 0:
@@ -297,9 +308,19 @@ def _place_pcb_once(
         intent, constraints = _design_intent(design_spec, inspection["footprints"], bounds)
         authored_constraints = constraints
         constraints = _center_constraints(constraints, inspection["footprints"], bounds)
-        if feedback_min_component_gap_mm is not None:
+        authored_gap = _design_min_component_gap(design_spec)
+        fallback_gap = max(authored_gap, feedback_min_component_gap_mm or 0.0)
+        preferred_gap = authored_gap
+        if tidy_references:
+            preferred_gap = _effective_min_component_gap(
+                design_spec, reference_gap_floor, feedback_min_component_gap_mm)
+            constraints.append({"kind": "placement", "target": "board",
+                                "min_component_gap_mm": preferred_gap})
+        elif feedback_min_component_gap_mm is not None:
             constraints.append({"kind": "placement", "target": "board",
                                 "min_component_gap_mm": feedback_min_component_gap_mm})
+        effective_gap = preferred_gap if tidy_references else (
+            feedback_min_component_gap_mm if feedback_min_component_gap_mm is not None else authored_gap)
         components = []
         center_offsets = {}
         # Native iteration order may depend on regenerated KiCad UUIDs. A seed
@@ -348,12 +369,37 @@ def _place_pcb_once(
                                     "x_mm": item["x"] + dx - bounds["x"],
                                     "y_mm": item["y"] + dy - bounds["y"],
                                     "rotation": item["rotation"], "layer": item["layer"]})
-        result = optimize_placement(
-            components, config=PlacementConfig(board_width_mm=bounds["width"], board_height_mm=bounds["height"],
-                                                iterations=iterations, seed=seed), constraints=constraints,
-        )
+        placement_config = PlacementConfig(board_width_mm=bounds["width"], board_height_mm=bounds["height"],
+                                           iterations=iterations, seed=seed)
+        gap_searches = []
+        result = optimize_placement(components, config=placement_config, constraints=constraints)
+        if tidy_references:
+            gap_searches.append({"min_component_gap_mm": effective_gap, "iterations": iterations, "seed": seed,
+                                 "review_required": bool(result.get("quality", {}).get("review_required")),
+                                 "reason": "native_reference_gap_preference"})
         if any(abs(result[f"board_{axis}_mm"] - bounds[axis]) > 0.1 for axis in ("width", "height")):
             raise ValueError("Design placement constraints cannot resize the native board outline")
+        if (tidy_references and result["quality"]["review_required"]
+                and preferred_gap > fallback_gap):
+            # The native-derived floor is a preferred seed constraint. If it
+            # makes optimizer geometry infeasible, retry once at the exact
+            # authored/feedback floor; every ordinary placement and native gate
+            # still has to pass before publication.
+            effective_gap = fallback_gap
+            constraints.append({"kind": "placement", "target": "board",
+                                "min_component_gap_mm": effective_gap})
+            fallback_result = optimize_placement(components, config=placement_config, constraints=constraints)
+            gap_searches.append({"min_component_gap_mm": effective_gap, "iterations": iterations, "seed": seed,
+                                 "review_required": bool(fallback_result.get("quality", {}).get("review_required")),
+                                 "reason": "native_floor_optimizer_review_required"})
+            result = fallback_result
+            if any(abs(result[f"board_{axis}_mm"] - bounds[axis]) > 0.1 for axis in ("width", "height")):
+                raise ValueError("Design placement constraints cannot resize the native board outline")
+        if tidy_references:
+            result["native_reference_gap_floor_mm"] = reference_gap_floor
+            result["preferred_min_component_gap_mm"] = preferred_gap
+            result["effective_min_component_gap_mm"] = effective_gap
+            result["gap_search_attempts"] = gap_searches
         if result["quality"]["review_required"]:
             return {"status": "error", "message": "No valid placement found within the board constraints",
                     "placement": result}
@@ -379,7 +425,7 @@ def _place_pcb_once(
                                 python_path=kicad_python_path,
                                 timeout=_native_place_timeout_seconds(len(placements)))
             if applied["status"] != "ok":
-                return applied
+                return {**applied, "placement": result} if tidy_references else applied
             if tidy_references:
                 result["silkscreen"] = applied.get("silkscreen", {})
             _restore_settings(source, staged, snapshots)
@@ -388,7 +434,8 @@ def _place_pcb_once(
             # DRC errors still prevent publication, including pad clearances.
             blockers = [f for f in drc.findings if f.severity == "blocker" and f.rule_id != "CW-DRC-002"]
             if drc.status != "ok" or blockers:
-                return {"status": "error", "message": "Placed board failed physical DRC", "drc": drc.to_dict()}
+                failure = {"status": "error", "message": "Placed board failed physical DRC", "drc": drc.to_dict()}
+                return {**failure, "placement": result} if tidy_references else failure
             _publish(staged, destination, snapshots, overwrite)
         return {"status": "ok", "output_path": str(destination), "output_kind": "placed_kicad_board",
                 "placement": result, "drc": {**drc.to_dict(), "board": str(destination)}, "fabrication_ready": False,
@@ -457,8 +504,14 @@ def place_pcb(
                 label_clear = (has_native_report and type(unresolved) is int and unresolved == 0
                                and type(remaining) is int and remaining == 0)
                 success = candidate.get("status") == "ok" and label_clear
+                placement = candidate.get("placement")
+                reported_gap = placement.get("effective_min_component_gap_mm") if isinstance(placement, dict) else None
+                applied_gap = (reported_gap if isinstance(reported_gap, (int, float))
+                               and not isinstance(reported_gap, bool) and math.isfinite(reported_gap)
+                               and reported_gap >= 0 else None)
                 attempts.append({"attempt": attempt_index, "seed": attempt_seed, "iterations": iterations,
-                                 "min_component_gap_mm": (feedback_gap if feedback_gap is not None else base_gap),
+                                 "min_component_gap_mm": (applied_gap if applied_gap is not None else
+                                                           feedback_gap if feedback_gap is not None else base_gap),
                                  "status": "accepted" if success else "rejected",
                                  "candidate_status": candidate.get("status", "error"),
                                  "unresolved_count": unresolved, "remaining_conflict_count": remaining})
@@ -479,8 +532,8 @@ def place_pcb(
                     if unresolved is None or remaining is None:
                         break
                     if not label_clear:
-                        current_gap = feedback_gap if feedback_gap is not None else base_gap
-                        placement = candidate.get("placement")
+                        current_gap = (applied_gap if applied_gap is not None else
+                                       feedback_gap if feedback_gap is not None else base_gap)
                         raw_floor = (placement.get("native_reference_gap_floor_mm")
                                      if isinstance(placement, dict) else None)
                         reference_floor = (raw_floor if isinstance(raw_floor, (int, float))

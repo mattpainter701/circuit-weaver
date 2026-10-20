@@ -59,7 +59,9 @@ layout remains available even when every annealed candidate is worse.
 Before annealing, a second starting layout tries four synchronous weighted
 relaxation passes over the existing connectivity graph. Movable primary blocks
 translate with their support families toward connected neighbors. Connector,
-USB, debug and RF anchors and authored fixed/edge placements stay in place.
+USB, debug and RF category anchors stay in place during relaxation. Ordinary
+legalization and annealing may move category-only anchors; authored fixed
+positions, edge-distance limits and rotation constraints remain enforced.
 The candidate is legalized and selected only if the same hard-defect-first rank
 improves on the original baseline; the report retains both ranks. This starting
 layout does not resize the board or alter nets, footprints, fonts or constraints.
@@ -70,6 +72,17 @@ is split between courtyard envelopes, and non-orthogonal rotations use a
 conservative enclosing rectangle. Fixed coordinates retain their supplied
 precision; movable coordinates are evaluated at their published precision.
 Unresolved or impossible constraints remain visible as review blockers.
+
+With native reference cleanup enabled, placement starts with a gap floor derived
+from the actual reference text heights, including silk clearance and additional
+room between labels and bodies. A larger authored minimum gap still applies.
+If this preferred spacing cannot produce an optimizer-valid layout, one additional
+search uses the authored or feedback gap with the same seed and iteration budget.
+Both searches and the effective gap are reported; the fallback must pass every
+ordinary placement and native check.
+Later attempts increase the effective gap when a complete native report proves
+that labels need more space. Font sizes, board dimensions and final native label
+and DRC checks remain unchanged.
 
 When native pad locations are available, support parts start beside their
 owner's shared non-ground pads, with the configured body clearance. Dedicated

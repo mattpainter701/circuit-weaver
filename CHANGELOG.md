@@ -2,7 +2,8 @@
 
 ## [Unreleased]
 
-- Bound deterministic placement refinement per restart and report its evaluation budgets. Try a topology-derived starting layout only when it improves the existing constraint rank, preserving mechanical anchors and support-family geometry.
+- Bound deterministic placement refinement per restart and report its evaluation budgets. Try a topology-derived starting layout only when it improves the existing constraint rank, preserving authored mechanical constraints and support-family geometry.
+- Start reference-aware native placement with spacing derived from actual text dimensions, retaining larger authored gaps and subsequent native label and DRC checks.
 - Keep generation staging and rollback paths short enough for native Windows tools when the published project path fits the Windows file-path limit.
 - Shorten schematic-to-board staging paths for deeply nested Windows projects, retaining complete copied hierarchies and native build verification.
 - Derive scaled gateway ADC filter contracts from their owning channels and verify generated filter pad nets before native workflow runs.
