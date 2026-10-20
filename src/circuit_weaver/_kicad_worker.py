@@ -136,6 +136,29 @@ def _ground_plane_source_geometry_state(board, pcbnew):
     return tuple(sorted(footprints, key=repr)), tuple(drawings)
 
 
+def _rectangular_outline_bounds_iu(edges, pcbnew):
+    """Use Edge.Cuts centerlines, never the stroke-inflated drawing box."""
+    if len(edges) == 1 and edges[0].GetShape() == pcbnew.SHAPE_T_RECT:
+        points = [(point.x, point.y) for point in (edges[0].GetStart(), edges[0].GetEnd())]
+    elif len(edges) == 4 and all(edge.GetShape() == pcbnew.SHAPE_T_SEGMENT for edge in edges):
+        points = [(point.x, point.y) for edge in edges for point in (edge.GetStart(), edge.GetEnd())]
+        unique = set(points)
+        if not (
+            len(unique) == 4 and len({p[0] for p in unique}) == 2 and len({p[1] for p in unique}) == 2
+            and all(points.count(p) == 2 for p in unique)
+            and len({tuple(sorted(((edge.GetStart().x, edge.GetStart().y),
+                                   (edge.GetEnd().x, edge.GetEnd().y)))) for edge in edges}) == 4
+            and all(edge.GetStart().x == edge.GetEnd().x or edge.GetStart().y == edge.GetEnd().y
+                    for edge in edges)
+        ):
+            return None
+    else:
+        return None
+    x0, x1 = min(p[0] for p in points), max(p[0] for p in points)
+    y0, y1 = min(p[1] for p in points), max(p[1] for p in points)
+    return (x0, y0, x1 - x0, y1 - y0) if x1 > x0 and y1 > y0 else None
+
+
 def _inspect(board, pcbnew):
     footprints = []
     for footprint in board.GetFootprints():
@@ -238,23 +261,15 @@ def _inspect(board, pcbnew):
         })
     box = board.GetBoardEdgesBoundingBox()
     edges = [d for d in board.GetDrawings() if d.GetLayer() == pcbnew.Edge_Cuts]
-    rectangular = len(edges) == 1 and edges[0].GetShape() == pcbnew.SHAPE_T_RECT
-    if len(edges) == 4 and all(d.GetShape() == pcbnew.SHAPE_T_SEGMENT for d in edges):
-        points = [(d.GetStart().x, d.GetStart().y) for d in edges]
-        points += [(d.GetEnd().x, d.GetEnd().y) for d in edges]
-        unique = set(points)
-        rectangular = (
-            len(unique) == 4 and len({p[0] for p in unique}) == 2 and len({p[1] for p in unique}) == 2
-            and all(points.count(p) == 2 for p in unique)
-            and len({tuple(sorted(((d.GetStart().x, d.GetStart().y), (d.GetEnd().x, d.GetEnd().y))))
-                     for d in edges}) == 4
-            and all(d.GetStart().x == d.GetEnd().x or d.GetStart().y == d.GetEnd().y for d in edges)
-        )
+    outline_bounds = _rectangular_outline_bounds_iu(edges, pcbnew)
+    # Nonrectangular inputs retain their diagnostic box, but placement rejects
+    # them through rectangular_outline. Verified rectangles use the actual
+    # cut boundary independent of line width and direction.
+    bounds = outline_bounds or (box.GetX(), box.GetY(), box.GetWidth(), box.GetHeight())
     return {"footprints": footprints, "track_count": len(list(board.GetTracks())),
             "zone_count": len(list(board.Zones())),
-            "rectangular_outline": rectangular,
-            "bounds": {"x": pcbnew.ToMM(box.GetX()), "y": pcbnew.ToMM(box.GetY()),
-                       "width": pcbnew.ToMM(box.GetWidth()), "height": pcbnew.ToMM(box.GetHeight())}}
+            "rectangular_outline": outline_bounds is not None,
+            "bounds": dict(zip(("x", "y", "width", "height"), (pcbnew.ToMM(value) for value in bounds)))}
 
 
 def _box(item, pcbnew, margin_mm=0.0):

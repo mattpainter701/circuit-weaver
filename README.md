@@ -393,6 +393,11 @@ locked footprints and board sides, uses real courtyards and rotated pad location
 and checks physical DRC. Routing publishes the final board only after KiCad DRC
 passes, preserving project rules. See [setup and limits](docs/routing-placement-search.md).
 
+For imported boards with a legacy `.pro` project, convert and verify the project
+rules in KiCad before placement, routing, or copper edits. These operations
+require a sibling `.kicad_pro` when `.pro` exists; upgrading the PCB format alone
+does not migrate those rules. Read-only inspection and previews remain available.
+
 Router stdout and stderr are retained under `.circuit-weaver-router-logs` beside
 the requested session output, with per-attempt hashes and byte counts in the
 result. Returned diagnostics and statistics parsing use bounded windows; missing

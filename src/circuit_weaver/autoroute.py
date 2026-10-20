@@ -867,6 +867,16 @@ def export_dsn(
     routing_clearance_margin_mm: float = 0.0,
 ) -> dict[str, Any]:
     """Export and validate Specctra DSN through native KiCad or a capable CLI."""
+    try:
+        source = Path(pcb_path)
+        if source.suffix.lower() == ".kicad_pcb":
+            # DSN rule classes come from project settings; never export routing
+            # input using silent defaults when only a legacy .pro is available.
+            from .pcb_layout import _require_modern_project_settings
+
+            _require_modern_project_settings(source)
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        return _result_error(str(exc))
     timeout_error = _validate_timeout(timeout_seconds, "Specctra export")
     if timeout_error:
         return _result_error(timeout_error)
@@ -2214,6 +2224,15 @@ def autoroute_pcb(
         return _result_error("overwrite must be a boolean")
 
     source_suffix = source.suffix.lower()
+    if source_suffix == ".kicad_pcb":
+        try:
+            # Keep DSN-only routing available, but do not route from a native
+            # board whose legacy project rules cannot be carried into DRC.
+            from .pcb_layout import _require_modern_project_settings
+
+            _require_modern_project_settings(source)
+        except (OSError, ValueError) as exc:
+            return _result_error(str(exc))
     source_hashes = {}
     if routed_board_path is not None:
         if source_suffix != ".kicad_pcb":

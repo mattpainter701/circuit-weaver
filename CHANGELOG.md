@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Refuse automatic board mutations and routing exports when only a legacy `.pro` project exists, requiring project-rule conversion rather than silently staging without those authored settings. Keep read-only inspection and previews available.
+- Use actual rectangular Edge.Cuts centerlines for native placement bounds, preserving board dimensions and offsets regardless of outline drawing thickness.
 - Initialize the Windows native helpers' wx application before loading boards, preventing crashes or hangs reproduced on a 459-footprint motherboard reference. Preserve hidden operation and the existing geometry, identity and DRC checks.
 - Distinguish declared DDR generations from generic or conflicting data-net names. Retain unverified device-specific DDR requirements through compilation and PCB handoff instead of guessing impedance and flat length-matching limits. Report which requested constraints produced KiCad rules and which remain unrendered.
 - Read KiCad trace and via geometry in millimetres, including arc track widths, and measure via copper clearance from actual rectangular Edge.Cuts. Report malformed inputs and unsupported geometry as unknown instead of assuming zero widths or invented board bounds.

@@ -144,7 +144,20 @@ def _hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _require_modern_project_settings(source: Path) -> None:
+    """Reject mutating workflows that would silently ignore legacy KiCad rules."""
+    source = source.expanduser().resolve()
+    legacy_project = source.with_suffix(".pro")
+    modern_project = source.with_suffix(".kicad_pro")
+    if legacy_project.is_file() and not modern_project.is_file():
+        raise ValueError(
+            "Legacy KiCad project settings (.pro) are present without a modern .kicad_pro file; "
+            "convert the project rules in KiCad before routing or modifying this board"
+        )
+
+
 def _prepare_settings(source: Path, staged: Path) -> dict[Path, str | None]:
+    _require_modern_project_settings(source)
     snapshots = {source: _hash(source)}
     for suffix in (".kicad_pro", ".kicad_dru"):
         origin = source.with_suffix(suffix)
@@ -282,6 +295,7 @@ def _place_pcb_once(
             raise ValueError("Placement output must be a .kicad_pcb file")
         if source == destination:
             raise ValueError("Choose a separate output board to preserve the original PCB")
+        _require_modern_project_settings(source)
         if expected_snapshots is not None:
             _check_snapshots(expected_snapshots)
         preflight = preflight_pcb(source)
