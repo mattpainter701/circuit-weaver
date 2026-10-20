@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Repair remaining native reference-label conflicts with a bounded local assignment search before widening placement. Preserve other text, footprint and pad geometry, copper and locked fields; retain the native label and DRC gates.
+- Correct large analog benchmark filter-pad contracts from compiled ownership and native evidence. Check snapshotted channel and signal/return pad-net assertions on the built board before placement and routing, then verify them again on the final board.
 - Assign interchangeable native connector slots using their private-net support-family pad endpoints, preserving references, pad nets, occupied geometry and authored mechanical constraints. Accept only an improved placement rank and retain native label and DRC gates.
 - Explicitly disable the optimizer for zero-thread native routing on Freerouting 2.4+, honor modern optimizer thread caps, and map or reject changed optimizer modes on Freerouting 2.5+.
 - Bound deterministic placement refinement per restart and report its evaluation budgets. Try a topology-derived starting layout only when it improves the existing constraint rank, preserving authored mechanical constraints and support-family geometry.

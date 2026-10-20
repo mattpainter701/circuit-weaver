@@ -162,7 +162,20 @@ def _stage_inputs(suite_path: Path, suite: dict[str, Any], cases: list[dict[str,
         destination = inputs / f"{case['id']}.yaml"
         destination.write_bytes(case["_spec_path"].read_bytes())
         case["_spec_path"] = destination
-        staged.append({"case_id": case["id"], "path": str(destination), "sha256": sha256(destination)})
+        row = {"case_id": case["id"], "path": str(destination), "sha256": sha256(destination)}
+        channels = case.get("required_channels", [])
+        paths = case.get("required_paths", [])
+        if channels or paths:
+            contract_path = inputs / f"{case['id']}.native-contracts.json"
+            contract_path.write_text(
+                json.dumps({"required_channels": channels, "required_paths": paths}, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            case["_contracts_path"] = contract_path
+            case["_contracts_sha256"] = sha256(contract_path)
+            row["native_contracts_path"] = str(contract_path)
+            row["native_contracts_sha256"] = case["_contracts_sha256"]
+        staged.append(row)
     return {"suite_path": str(suite_copy), "suite_sha256": sha256(suite_copy), "case_specs": staged}
 
 
@@ -308,11 +321,15 @@ def _inspect_and_verify_connectivity(
 ) -> dict[str, Any]:
     """Read actual routed PCB pad nets with the selected Circuit Weaver runtime."""
     before = sha256(board_path)
-    contracts_path = log_dir / f"{case['id']}.connectivity-contracts.json"
+    contracts_path = Path(case.get("_contracts_path") or (log_dir / f"{case['id']}.connectivity-contracts.json"))
     channels = case.get("required_channels", [])
     paths = case.get("required_paths", [])
     contracts = {"required_channels": channels, "required_paths": paths} if paths else channels
-    contracts_path.write_text(json.dumps(contracts, indent=2) + "\n", encoding="utf-8")
+    if "_contracts_path" not in case:
+        contracts_path.write_text(json.dumps(contracts, indent=2) + "\n", encoding="utf-8")
+    expected_contract_hash = case.get("_contracts_sha256", sha256(contracts_path))
+    if sha256(contracts_path) != expected_contract_hash:
+        raise RuntimeError("snapshotted native contract changed before final-board verification")
     helper_dir = Path(__file__).resolve().parent
     script = (
         "import json,sys; sys.path.insert(0,sys.argv[3]); "
@@ -354,6 +371,8 @@ def _inspect_and_verify_connectivity(
     after = sha256(board_path)
     if before != after:
         raise RuntimeError("native PCB inspection changed routed board bytes")
+    if sha256(contracts_path) != expected_contract_hash:
+        raise RuntimeError("native contract changed during final-board verification")
     if not isinstance(inventory, dict) or inventory.get("status") != "ok":
         raise RuntimeError(f"native PCB connectivity verification did not pass for {case['id']}")
     details = {}
@@ -396,6 +415,18 @@ def _run_case(case: dict[str, Any], args: argparse.Namespace, output: Path) -> d
         "--route-timeout", str(args.route_timeout),
         "--mcp-smoke", "--render-3d",
     ]
+    contracts_path = case.get("_contracts_path")
+    contracts_hash = case.get("_contracts_sha256")
+    if contracts_path is not None:
+        contracts_path = Path(contracts_path)
+        if not contracts_path.is_file() or sha256(contracts_path) != contracts_hash:
+            raise RuntimeError("snapshotted native contract is missing or changed before workflow launch")
+        command.extend([
+            "--native-contracts",
+            str(contracts_path.resolve()),
+            "--native-contracts-sha256",
+            str(contracts_hash),
+        ])
     if args.installed:
         command.append("--installed")
         if args.expected_wheel:
@@ -412,6 +443,7 @@ def _run_case(case: dict[str, Any], args: argparse.Namespace, output: Path) -> d
         "case_id": case["id"], "family": case["family"], "spec": str(spec_path),
         "spec_sha256": case["_spec_sha256"], "command": command,
         "minimum_drill_mm": case.get("minimum_drill_mm"),
+        "native_contracts_sha256": contracts_hash,
         "minimum_physical_parts": max(args.minimum_physical_parts, case.get("minimum_physical_parts", 0)),
         "timeout_seconds": args.timeout, "python": str(python),
     }, indent=2) + "\n", encoding="utf-8")

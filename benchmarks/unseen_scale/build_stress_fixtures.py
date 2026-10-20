@@ -357,13 +357,26 @@ def _relay_paths(channels: int = 160) -> list[dict[str, Any]]:
     return paths
 
 
-def _analog_paths(channels: int = 72) -> list[dict[str, Any]]:
-    dac_count = (channels + 1) // 2
-    paths = [
-        _path("analog_spi_data", "SPI_MOSI", ("U10", "28"), *((f"U{30 + n}", "7") for n in range(dac_count))),
-        _path("analog_spi_clock", "SPI_SCK", ("U10", "26"), *((f"U{30 + n}", "6") for n in range(dac_count))),
+def _analog_paths(spec: dict[str, Any], channels: int = 72) -> list[dict[str, Any]]:
+    """Build analog paths from compiled references and generated ownership."""
+    compiled = compile_design_ir(spec)
+    manifest = build_assembly_manifest(compiled.components)
+    primary = {component.source_ref: component for component in compiled.components}
+    supports = [item for item in manifest.items if item.source_kind in {"bypass", "strap"}]
+    straps = [item for item in supports if item.source_kind == "strap" and item.role == "output_filter"]
+    output_nets = {item.net2 for item in straps}
+    caps = [
+        item
+        for item in supports
+        if item.source_kind == "bypass" and item.role == "output_filter" and item.net1 in output_nets
     ]
-    for dac_idx in range(dac_count):
+    connectors = [component for component in compiled.components if component.ref_prefix == "J"]
+    dac_refs = sorted({item.owner_ref for item in straps})
+    paths = [
+        _path("analog_spi_data", "SPI_MOSI", ("U10", "28"), *((ref, "7") for ref in dac_refs)),
+        _path("analog_spi_clock", "SPI_SCK", ("U10", "26"), *((ref, "6") for ref in dac_refs)),
+    ]
+    for dac_idx, dac_ref in enumerate(dac_refs):
         register_idx, bit = divmod(dac_idx, 8)
         output_pad = ["15", "1", "2", "3", "4", "5", "6", "7"][bit]
         paths.append(
@@ -371,38 +384,61 @@ def _analog_paths(channels: int = 72) -> list[dict[str, Any]]:
                 f"dac_sync_{dac_idx + 1:02d}",
                 f"DAC_SYNC_{dac_idx + 1:02d}",
                 (f"U{14 + register_idx}", output_pad),
-                (f"U{30 + dac_idx}", "5"),
+                (dac_ref, "5"),
             )
         )
-    for output_idx in range(channels):
-        dac_idx, output = divmod(output_idx, 2)
-        dac_ref = f"U{30 + dac_idx}"
-        resistor_ref = f"R{7 + output_idx}"
-        capacitor_ref = f"C{28 + 6 * dac_idx + output}"
-        connector_ref = f"J{2 + output_idx}"
-        raw_net = f"VOUT{'A' if output == 0 else 'B'}_RAW_{dac_ref}"
-        setpoint_net = f"SETPOINT_{output_idx + 1:02d}"
-        dac_pad = "4" if output == 0 else "3"
+    if channels != len(straps) or channels != len(caps):
+        raise ValueError("compiled DAC inventory lacks one output strap and shunt capacitor per channel")
+    for output_idx, strap in enumerate(straps):
+        dac_ref, raw_net, setpoint_net = strap.owner_ref, strap.net1, strap.net2
+        owner = primary.get(dac_ref)
+        if owner is None:
+            raise ValueError(f"output strap {strap.reference} has no compiled owner {dac_ref}")
+        dac_pads = [str(pad) for pad, net in owner.pin_nets.items() if net == raw_net]
+        cap_matches = [item for item in caps if item.owner_ref == dac_ref and item.net1 == setpoint_net]
+        connector_matches = [comp for comp in connectors if setpoint_net in comp.pin_nets.values()]
+        if len(dac_pads) != 1 or len(cap_matches) != 1 or len(connector_matches) != 1:
+            raise ValueError(f"output net {setpoint_net} does not have unique compiled endpoints")
+        cap, connector = cap_matches[0], connector_matches[0]
+        connector_pads = [str(pad) for pad, net in connector.pin_nets.items() if net == setpoint_net]
+        if len(connector_pads) != 1:
+            raise ValueError(f"output net {setpoint_net} has no unique connector pad")
+        return_pads = [str(pad) for pad, net in connector.pin_nets.items() if net == "GND"]
+        if len(return_pads) != 1 or cap.net2 != "GND":
+            raise ValueError(f"output net {setpoint_net} has no unique GND return endpoint")
+        # Device:C support symbols are emitted in the generated schematic with
+        # the named signal on symbol pin 2 and the return on pin 1. Keep this
+        # explicit; native preflight checks the actual KiCad pad nets.
+        signal_cap_pad = "2"
         paths.append(
             {
                 "id": f"setpoint_output_{output_idx + 1:02d}",
-                "source": {"ref": dac_ref, "pad": dac_pad},
-                "loads": [{"ref": connector_ref, "pad": "1"}],
+                "source": {"ref": dac_ref, "pad": dac_pads[0]},
+                "loads": [{"ref": connector.source_ref, "pad": connector_pads[0]}],
                 "segments": [
                     {
                         "net": raw_net,
-                        "endpoints": [{"ref": dac_ref, "pad": dac_pad}, {"ref": resistor_ref, "pad": "1"}],
+                        "endpoints": [{"ref": dac_ref, "pad": dac_pads[0]}, {"ref": strap.reference, "pad": "1"}],
                     },
                     {
                         "net": setpoint_net,
                         "endpoints": [
-                            {"ref": resistor_ref, "pad": "2"},
-                            {"ref": capacitor_ref, "pad": "1"},
-                            {"ref": connector_ref, "pad": "1"},
+                            {"ref": strap.reference, "pad": "2"},
+                            {"ref": cap.reference, "pad": signal_cap_pad},
+                            {"ref": connector.source_ref, "pad": connector_pads[0]},
                         ],
                     },
                 ],
-                "through": [{"ref": resistor_ref, "input_pad": "1", "output_pad": "2"}],
+                "through": [{"ref": strap.reference, "input_pad": "1", "output_pad": "2"}],
+                "return_assertions": [
+                    {
+                        "net": "GND",
+                        "endpoints": [
+                            {"ref": cap.reference, "pad": "1"},
+                            {"ref": connector.source_ref, "pad": return_pads[0]},
+                        ],
+                    }
+                ],
             }
         )
     return paths
@@ -464,7 +500,11 @@ def build_suite() -> dict[str, Any]:
                 "minimum_physical_parts": 350,
                 "required_sections": ["power", "digital", "analog", "connectors"],
                 "board_mm": [300, 220],
-                "required_paths": _analog_paths(),
+                "required_paths": _analog_paths(
+                    yaml.safe_load(
+                        (ROOT / "cases" / "multichannel_analog_setpoint_card.yaml").read_text(encoding="utf-8")
+                    )
+                ),
             },
         ],
     }

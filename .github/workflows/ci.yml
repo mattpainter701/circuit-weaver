@@ -355,7 +355,7 @@ jobs:
           python benchmarks/general_scale/run_general_scale.py \
             --suite benchmarks/unseen_scale/cases.yaml --case '${{ matrix.case }}' \
             --output .ci-kicad/unseen-scale --installed --expected-wheel "$wheel" \
-            --require-clean --workers 1 --iterations 6000 --attempts 3 --route-timeout 1800 --timeout 7200
+              --require-clean --workers 1 --iterations 6000 --attempts 1 --route-timeout 1800 --timeout 7200
 
       - name: Preserve full workflow, connectivity, and assembled preview evidence
         if: always()

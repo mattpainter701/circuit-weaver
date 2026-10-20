@@ -312,6 +312,15 @@ final cleaned board; measured protected paths remain trace-only.
 
 ## Real-board regression corpus
 
+When ordinary native reference cleanup leaves conflicts, a local assignment
+search tries alternative positions for only the conflicting reference fields.
+It considers at most eight labels per overlap neighborhood, 25,000 candidate
+centers and 50,000 search nodes, with movement limited to 8 mm. Native obstacle,
+association and board-edge checks remain active. The candidate is accepted only
+if it reduces conflicts without introducing new ones and preserves footprint,
+pad, copper and other text geometry. Failure leaves the ordinary cleanup result
+in place for the existing placement retry and final native gates.
+
 `tests/test_native_pcb_workflow.py` executes the public CLI against real KiCad and
 Freerouting for five circuits: LED, resistor divider, RC filter with custom width
 rules, back-side RC components, and a SOIC fanout network. The corpus starts with

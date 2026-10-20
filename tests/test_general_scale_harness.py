@@ -101,7 +101,23 @@ def test_input_snapshot_preserves_fixture_and_hashes(tmp_path: Path):
     assert cases[0]["_source_spec_path"] == original
     assert snapshot["case_specs"][0]["sha256"] == original_hash
     assert Path(snapshot["suite_path"]).is_file()
+    contract_rows = [row for row in snapshot["case_specs"] if row.get("native_contracts_sha256")]
+    assert contract_rows
+    for row in contract_rows:
+        contract_path = Path(row["native_contracts_path"])
+        assert contract_path.is_file()
+        assert HARNESS.sha256(contract_path) == row["native_contracts_sha256"]
 
+
+
+def test_samples_without_contracts_do_not_gain_preflight_inputs(tmp_path: Path):
+    suite, cases = HARNESS._load_suite(HARNESS.SAMPLE_SUITE)
+    output = tmp_path / "samples"
+    output.mkdir()
+    snapshot = HARNESS._stage_inputs(HARNESS.SAMPLE_SUITE, suite, cases, output)
+    assert len(snapshot["case_specs"]) == 13
+    assert all("native_contracts_path" not in row for row in snapshot["case_specs"])
+    assert all("_contracts_path" not in case for case in cases)
 
 def test_runner_leaves_output_directory_creation_to_workflow_validator(tmp_path: Path, monkeypatch):
     suite, cases = HARNESS._load_suite(HARNESS.DEFAULT_SUITE)
@@ -115,16 +131,19 @@ def test_runner_leaves_output_directory_creation_to_workflow_validator(tmp_path:
         minimum_physical_parts=100,
     )
 
+    workflow_commands = []
+
     def fake_workflow(command, **kwargs):
         if "-c" in command:
             contracts = json.loads(Path(command[-1]).read_text(encoding="utf-8"))
+            channels = contracts.get("required_channels", [])
             footprints = {}
 
             def connect(ref, pad, net):
                 row = footprints.setdefault(ref, {"ref": ref, "pads": []})
                 row["pads"].append({"number": str(pad), "net": net})
 
-            for channel in contracts:
+            for channel in channels:
                 for ref_key, pad_key, net_key in (
                     ("frontend_ref", "frontend_p_pad", "sensor_p_net"),
                     ("frontend_ref", "frontend_n_pad", "sensor_n_net"),
@@ -144,11 +163,12 @@ def test_runner_leaves_output_directory_creation_to_workflow_validator(tmp_path:
                     connect(channel["post_stage_ref"], channel["post_stage_output_pad"],
                             channel["post_stage_output_net"])
             inventory = {"status": "ok", "footprints": list(footprints.values())}
-            proof = CONNECTIVITY.verify_native_connectivity(inventory, contracts)
+            proof = CONNECTIVITY.verify_native_connectivity(inventory, channels)
             return subprocess.CompletedProcess(
                 command, 0, json.dumps({"inventory": inventory, "connectivity": proof}), ""
             )
         assert "--width" not in command and "--height" not in command
+        workflow_commands.append(command)
         run_dir = Path(command[command.index("--output") + 1])
         assert not run_dir.exists()
         run_dir.mkdir(parents=True)
@@ -163,6 +183,16 @@ def test_runner_leaves_output_directory_creation_to_workflow_validator(tmp_path:
     assert (output / "runs" / case["id"] / "evidence.json").is_file()
     assert (output / "runs" / case["id"] / "native-pcb-inventory.json").is_file()
     assert (output / "logs" / f"{case['id']}.invocation.json").is_file()
+    workflow_command = workflow_commands[0]
+    assert "--native-contracts" in workflow_command
+    assert Path(workflow_command[workflow_command.index("--native-contracts") + 1]) == case["_contracts_path"].resolve()
+    assert workflow_command[workflow_command.index("--native-contracts-sha256") + 1] == case["_contracts_sha256"]
+    workflow_command = workflow_commands[0]
+    assert "--native-contracts" in workflow_command
+    contract_index = workflow_command.index("--native-contracts") + 1
+    contract_path = Path(workflow_command[contract_index])
+    assert contract_path == case["_contracts_path"].resolve()
+    assert workflow_command[workflow_command.index("--native-contracts-sha256") + 1] == case["_contracts_sha256"]
 
 
 def test_run_case_preserves_venv_interpreter_and_its_site_packages(tmp_path: Path, monkeypatch):

@@ -48,7 +48,13 @@ def _is_power_net(net: str) -> bool:
     upper = net.strip().upper()
     roots = ("GND", "AGND", "DGND", "PGND", "VSS", "VDD", "VCC", "VBUS", "VIN", "VBAT", "VSYS")
     return any(upper == root or upper.startswith(root + "_") for root in roots) or upper in {
-        "3V3", "5V", "+3V3", "+5V", "12V", "+12V", "-12V",
+        "3V3",
+        "5V",
+        "+3V3",
+        "+5V",
+        "12V",
+        "+12V",
+        "-12V",
     }
 
 
@@ -96,8 +102,7 @@ def verify_native_signal_paths(inventory: Mapping[str, Any], contracts: Any) -> 
             raw_endpoints = segment.get("endpoints")
             if not isinstance(raw_endpoints, Sequence) or isinstance(raw_endpoints, (str, bytes)):
                 raise ConnectivityContractError(f"{segment_context}.endpoints must be a sequence")
-            endpoints = [_endpoint(item, f"{segment_context}.endpoints[{i}]")
-                         for i, item in enumerate(raw_endpoints)]
+            endpoints = [_endpoint(item, f"{segment_context}.endpoints[{i}]") for i, item in enumerate(raw_endpoints)]
             endpoint_refs = [ref for ref, _ in endpoints]
             if len(endpoints) < 2 or len(set(endpoint_refs)) != len(endpoint_refs):
                 raise ConnectivityContractError(
@@ -119,9 +124,7 @@ def verify_native_signal_paths(inventory: Mapping[str, Any], contracts: Any) -> 
         if not isinstance(raw_through, Sequence) or isinstance(raw_through, (str, bytes)):
             raise ConnectivityContractError(f"{context}.through must be a sequence")
         if len(raw_through) != len(segment_rows) - 1:
-            raise ConnectivityContractError(
-                f"{context}.through must contain one bridge per adjacent segment pair"
-            )
+            raise ConnectivityContractError(f"{context}.through must contain one bridge per adjacent segment pair")
         through_refs: set[str] = set()
         for boundary, bridge in enumerate(raw_through):
             bridge_context = f"{context}.through[{boundary}]"
@@ -145,12 +148,54 @@ def verify_native_signal_paths(inventory: Mapping[str, Any], contracts: Any) -> 
             _require_pad_net(native, ref, input_pad, before_net, bridge_context)
             _require_pad_net(native, ref, output_pad, after_net, bridge_context)
 
-        verified.append({
-            "id": path_id,
-            "source": {"ref": source[0], "pad": source[1]},
-            "loads": [{"ref": ref, "pad": number} for ref, number in loads],
-            "nets": [net for net, _ in segment_rows],
-            "endpoint_count": sum(len(endpoints) for _, endpoints in segment_rows),
-        })
+        raw_returns = raw.get("return_assertions", [])
+        if not isinstance(raw_returns, Sequence) or isinstance(raw_returns, (str, bytes)):
+            raise ConnectivityContractError(f"{context}.return_assertions must be a sequence")
+        signal_refs = {ref for _, endpoints in segment_rows for ref, _ in endpoints}
+        signal_pads = {endpoint for _, endpoints in segment_rows for endpoint in endpoints}
+        checked_returns = []
+        for return_index, assertion in enumerate(raw_returns):
+            return_context = f"{context}.return_assertions[{return_index}]"
+            if not isinstance(assertion, Mapping):
+                raise ConnectivityContractError(f"{return_context} must be a mapping")
+            return_net = _text(assertion.get("net"), f"{return_context}.net")
+            if not _is_power_net(return_net):
+                raise ConnectivityContractError(f"{return_context}.net must be a power or return net")
+            raw_endpoints = assertion.get("endpoints")
+            if not isinstance(raw_endpoints, Sequence) or isinstance(raw_endpoints, (str, bytes)):
+                raise ConnectivityContractError(f"{return_context}.endpoints must be a sequence")
+            endpoints = [_endpoint(item, f"{return_context}.endpoints[{i}]") for i, item in enumerate(raw_endpoints)]
+            if len(endpoints) < 2 or len(set(endpoints)) != len(endpoints):
+                raise ConnectivityContractError(f"{return_context} needs at least two distinct pad endpoints")
+            if len({ref for ref, _ in endpoints}) < 2 or any(ref not in signal_refs for ref, _ in endpoints):
+                raise ConnectivityContractError(
+                    f"{return_context} endpoints must use at least two references already in the signal path"
+                )
+            if any(endpoint in signal_pads for endpoint in endpoints):
+                raise ConnectivityContractError(f"{return_context} must use pads distinct from signal-path pads")
+            for ref, pad_number in endpoints:
+                _require_pad_net(native, ref, pad_number, return_net, return_context)
+            checked_returns.append(
+                {
+                    "net": return_net,
+                    "endpoints": [{"ref": ref, "pad": pad} for ref, pad in endpoints],
+                }
+            )
 
-    return {"status": "pass", "verified_paths": len(verified), "paths": verified}
+        verified.append(
+            {
+                "id": path_id,
+                "source": {"ref": source[0], "pad": source[1]},
+                "loads": [{"ref": ref, "pad": number} for ref, number in loads],
+                "nets": [net for net, _ in segment_rows],
+                "endpoint_count": sum(len(endpoints) for _, endpoints in segment_rows),
+                "return_assertions": checked_returns,
+            }
+        )
+
+    return {
+        "status": "pass",
+        "verified_paths": len(verified),
+        "verified_return_assertions": sum(len(path["return_assertions"]) for path in verified),
+        "paths": verified,
+    }

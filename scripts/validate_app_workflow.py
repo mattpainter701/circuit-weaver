@@ -162,6 +162,145 @@ def initialize_workflow_project(output: Path, *, cwd: Path, env: dict) -> None:
         raise RuntimeError("Workflow project initialization did not produce a local state manifest")
 
 
+def native_contract_preflight(
+    board: Path, contracts: Path, expected_contract_sha256: str, demo: "Demo", output: Path
+) -> dict:
+    """Check snapshotted channel/path pad nets on the unplaced native board."""
+    contract_hash = digest(contracts)
+    if contract_hash != expected_contract_sha256:
+        raise RuntimeError("native contract snapshot hash does not match the runner's expected hash")
+    contract_data = json.loads(contracts.read_text(encoding="utf-8"))
+    if not isinstance(contract_data, dict) or not (
+        contract_data.get("required_channels") or contract_data.get("required_paths")
+    ):
+        raise RuntimeError("native contract snapshot must contain channels or signal paths")
+    board_hash = digest(board)
+    helper_dir = REPO / "benchmarks" / "general_scale"
+    script = (
+        "import json,sys; sys.path.insert(0,sys.argv[3]); "
+        "from circuit_weaver.kicad_bridge import run_kicad; "
+        "from connectivity import verify_native_connectivity; "
+        "from signal_connectivity import verify_native_signal_paths; "
+        "inventory=run_kicad('inspect',board=sys.argv[1],timeout=float(sys.argv[2])); "
+        "contracts=json.load(open(sys.argv[4],encoding='utf-8')); "
+        "channels=contracts.get('required_channels',[]); paths=contracts.get('required_paths',[]); "
+        "proof={'inventory':inventory}; "
+        "proof.update({'connectivity':verify_native_connectivity(inventory,channels)} if channels else {}); "
+        "proof.update({'signal_connectivity':verify_native_signal_paths(inventory,paths)} if paths else {}); "
+        "print(json.dumps(proof))"
+    )
+    timeout = min(max(demo.timeout, 120), 600)
+    evidence_path = output / "native-contract-preflight.json"
+
+    def fail(message: str, **details: object) -> None:
+        proof = {
+            "status": "failed",
+            "error": message,
+            "contract_sha256": contract_hash,
+            "board_sha256_before": board_hash,
+            **details,
+        }
+        try:
+            proof["board_sha256_after"] = digest(board)
+            proof["contract_sha256_after"] = digest(contracts)
+        except OSError:
+            pass
+        evidence_path.write_text(json.dumps(proof, indent=2) + "\n", encoding="utf-8")
+
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                script,
+                str(board.resolve()),
+                str(timeout),
+                str(helper_dir),
+                str(contracts.resolve()),
+            ],
+            cwd=demo.cwd,
+            env=demo.env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout + 30,
+        )
+    except Exception as exc:
+        fail(exception_message(exc))
+        raise RuntimeError("native pad/net contract preflight could not inspect the unplaced board") from exc
+    (output / "native-contract-preflight.stdout.log").write_text(result.stdout, encoding="utf-8")
+    (output / "native-contract-preflight.stderr.log").write_text(result.stderr, encoding="utf-8")
+    if result.returncode != 0:
+        fail(
+            "native contract verifier rejected the unplaced board",
+            verifier_exit_code=result.returncode,
+            stdout_log="native-contract-preflight.stdout.log",
+            stderr_log="native-contract-preflight.stderr.log",
+        )
+        raise RuntimeError("native pad/net contract preflight failed; placement and routing were not started")
+    try:
+        details = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        fail("native contract preflight returned invalid JSON", stdout_log="native-contract-preflight.stdout.log")
+        raise RuntimeError("native contract preflight returned invalid JSON") from exc
+    inventory = details.get("inventory")
+    connectivity = details.get("connectivity")
+    paths = details.get("signal_connectivity")
+    after_board_hash = digest(board)
+    after_contract_hash = digest(contracts)
+    if after_board_hash != board_hash or after_contract_hash != contract_hash:
+        fail("native contract preflight changed its board or contract input")
+        raise RuntimeError("native contract preflight changed its board or contract input")
+    if not isinstance(inventory, dict) or inventory.get("status") != "ok":
+        fail("native contract preflight did not receive an OK inventory")
+        raise RuntimeError("native contract preflight did not receive an OK inventory")
+    expected_channels = len(contract_data.get("required_channels", []))
+    expected_paths = len(contract_data.get("required_paths", []))
+    if expected_channels and (
+        not isinstance(connectivity, dict)
+        or connectivity.get("status") != "pass"
+        or connectivity.get("verified_channels") != expected_channels
+    ):
+        fail("native channel preflight did not pass every contract")
+        raise RuntimeError("native channel preflight did not pass every contract")
+    if expected_paths and (
+        not isinstance(paths, dict)
+        or paths.get("status") != "pass"
+        or paths.get("verified_paths") != expected_paths
+    ):
+        fail("native signal-path preflight did not pass every contract")
+        raise RuntimeError("native signal-path preflight did not pass every contract")
+    proof = {
+        "status": "pass",
+        "board_sha256": board_hash,
+        "contract_sha256": contract_hash,
+        "native_inventory_sha256": hashlib.sha256(json.dumps(inventory, sort_keys=True).encode("utf-8")).hexdigest(),
+        "verified_channels": connectivity.get("verified_channels", 0) if connectivity else 0,
+        "verified_paths": paths.get("verified_paths", 0) if paths else 0,
+        "verified_return_assertions": paths.get("verified_return_assertions", 0) if paths else 0,
+    }
+    evidence_path.write_text(json.dumps({**proof, "checks": details}, indent=2) + "\n", encoding="utf-8")
+    return proof
+
+def place_after_native_contracts(
+    demo: "Demo",
+    board: Path,
+    contracts: Path | None,
+    expected_contract_sha256: str | None,
+    output: Path,
+    placement_arguments: list[str],
+) -> tuple[dict, dict | None]:
+    """Make native preflight a hard barrier before placement starts."""
+    proof = None
+    if contracts is not None:
+        if expected_contract_sha256 is None:
+            raise RuntimeError("native contract preflight is missing its expected hash")
+        proof = native_contract_preflight(board, contracts, expected_contract_sha256, demo, output)
+    placement = demo.command("place", placement_arguments)
+    return placement, proof
+
+
 def _payload_hash(files: dict[str, str]) -> str:
     hasher = hashlib.sha256()
     for name, content_hash in sorted(files.items()):
@@ -1012,7 +1151,16 @@ def main() -> int:
                         help="Test this Python's installed package, not checkout src/")
     parser.add_argument("--expected-wheel", type=Path,
                         help="Require the installed package payload to exactly match this wheel")
+    parser.add_argument("--native-contracts", type=Path,
+                        help="Snapshotted channel/path pad-net contracts to check before placement")
+    parser.add_argument("--native-contracts-sha256", help="Expected SHA-256 for --native-contracts")
     args = parser.parse_args()
+    if bool(args.native_contracts) != bool(args.native_contracts_sha256):
+        parser.error("--native-contracts and --native-contracts-sha256 must be provided together")
+    if args.native_contracts is not None and not args.native_contracts.is_file():
+        parser.error("--native-contracts does not exist")
+    if args.native_contracts is not None and digest(args.native_contracts.resolve()) != args.native_contracts_sha256:
+        parser.error("--native-contracts hash does not match --native-contracts-sha256")
     if args.plane_cleanup is not None and args.ground_plane is None:
         parser.error("--plane-cleanup requires --ground-plane in the generated-board workflow")
     for name, value in (("--width", args.width), ("--height", args.height)):
@@ -1024,6 +1172,14 @@ def main() -> int:
         parser.error(f"--expected-wheel does not exist: {args.expected_wheel}")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
+    contract_snapshot = None
+    if args.native_contracts is not None:
+        contract_snapshot = output / "native-contracts.json"
+        shutil.copy2(args.native_contracts.resolve(), contract_snapshot)
+        require(
+            digest(contract_snapshot) == args.native_contracts_sha256,
+            "Copied native contract snapshot does not match the runner hash",
+        )
     source_spec = args.spec.resolve()
     spec = output / "design.yaml"
     demo = Demo(output, max(300, args.route_timeout + 120), installed=args.installed)
@@ -1120,10 +1276,19 @@ def main() -> int:
         require(built.get("fabrication_ready") is False, "Prototype board incorrectly claims fabrication readiness")
         summary["prototype_clearance_mm"] = args.clearance
         summary["prototype_minimum_drill_mm"] = args.minimum_drill
-        placement = demo.command("place", ["place-pcb", str(output / "unplaced.kicad_pcb"),
-                                          "-o", str(output / "placed.kicad_pcb"),
-                                          "--iterations", str(args.iterations), "--seed", "7",
-                                          "--design", str(spec), "--tidy-references"])
+        placement, preflight = place_after_native_contracts(
+            demo,
+            output / "unplaced.kicad_pcb",
+            contract_snapshot,
+            args.native_contracts_sha256 if contract_snapshot is not None else None,
+            output,
+            ["place-pcb", str(output / "unplaced.kicad_pcb"),
+             "-o", str(output / "placed.kicad_pcb"),
+             "--iterations", str(args.iterations), "--seed", "7",
+             "--design", str(spec), "--tidy-references"],
+        )
+        if preflight is not None:
+            summary["native_contract_preflight"] = preflight
         require(placement["placement"]["quality"]["review_required"] is False, "Placement constraints were violated")
         summary["layout_review"] = placement["placement"].get("layout_review", {})
         summary["placement_quality"] = placement["placement"]["quality"]

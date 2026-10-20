@@ -5646,13 +5646,20 @@ cases:
       - ref: R7
         pad: '2'
       - ref: C28
-        pad: '1'
+        pad: '2'
       - ref: J2
         pad: '1'
     through:
     - ref: R7
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C28
+        pad: '1'
+      - ref: J2
+        pad: '2'
   - id: setpoint_output_02
     source:
       ref: U30
@@ -5672,13 +5679,20 @@ cases:
       - ref: R8
         pad: '2'
       - ref: C29
-        pad: '1'
+        pad: '2'
       - ref: J3
         pad: '1'
     through:
     - ref: R8
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C29
+        pad: '1'
+      - ref: J3
+        pad: '2'
   - id: setpoint_output_03
     source:
       ref: U31
@@ -5698,13 +5712,20 @@ cases:
       - ref: R9
         pad: '2'
       - ref: C34
-        pad: '1'
+        pad: '2'
       - ref: J4
         pad: '1'
     through:
     - ref: R9
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C34
+        pad: '1'
+      - ref: J4
+        pad: '2'
   - id: setpoint_output_04
     source:
       ref: U31
@@ -5724,13 +5745,20 @@ cases:
       - ref: R10
         pad: '2'
       - ref: C35
-        pad: '1'
+        pad: '2'
       - ref: J5
         pad: '1'
     through:
     - ref: R10
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C35
+        pad: '1'
+      - ref: J5
+        pad: '2'
   - id: setpoint_output_05
     source:
       ref: U32
@@ -5750,13 +5778,20 @@ cases:
       - ref: R11
         pad: '2'
       - ref: C40
-        pad: '1'
+        pad: '2'
       - ref: J6
         pad: '1'
     through:
     - ref: R11
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C40
+        pad: '1'
+      - ref: J6
+        pad: '2'
   - id: setpoint_output_06
     source:
       ref: U32
@@ -5776,13 +5811,20 @@ cases:
       - ref: R12
         pad: '2'
       - ref: C41
-        pad: '1'
+        pad: '2'
       - ref: J7
         pad: '1'
     through:
     - ref: R12
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C41
+        pad: '1'
+      - ref: J7
+        pad: '2'
   - id: setpoint_output_07
     source:
       ref: U33
@@ -5802,13 +5844,20 @@ cases:
       - ref: R13
         pad: '2'
       - ref: C46
-        pad: '1'
+        pad: '2'
       - ref: J8
         pad: '1'
     through:
     - ref: R13
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C46
+        pad: '1'
+      - ref: J8
+        pad: '2'
   - id: setpoint_output_08
     source:
       ref: U33
@@ -5828,13 +5877,20 @@ cases:
       - ref: R14
         pad: '2'
       - ref: C47
-        pad: '1'
+        pad: '2'
       - ref: J9
         pad: '1'
     through:
     - ref: R14
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C47
+        pad: '1'
+      - ref: J9
+        pad: '2'
   - id: setpoint_output_09
     source:
       ref: U34
@@ -5854,13 +5910,20 @@ cases:
       - ref: R15
         pad: '2'
       - ref: C52
-        pad: '1'
+        pad: '2'
       - ref: J10
         pad: '1'
     through:
     - ref: R15
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C52
+        pad: '1'
+      - ref: J10
+        pad: '2'
   - id: setpoint_output_10
     source:
       ref: U34
@@ -5880,13 +5943,20 @@ cases:
       - ref: R16
         pad: '2'
       - ref: C53
-        pad: '1'
+        pad: '2'
       - ref: J11
         pad: '1'
     through:
     - ref: R16
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C53
+        pad: '1'
+      - ref: J11
+        pad: '2'
   - id: setpoint_output_11
     source:
       ref: U35
@@ -5906,13 +5976,20 @@ cases:
       - ref: R17
         pad: '2'
       - ref: C58
-        pad: '1'
+        pad: '2'
       - ref: J12
         pad: '1'
     through:
     - ref: R17
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C58
+        pad: '1'
+      - ref: J12
+        pad: '2'
   - id: setpoint_output_12
     source:
       ref: U35
@@ -5932,13 +6009,20 @@ cases:
       - ref: R18
         pad: '2'
       - ref: C59
-        pad: '1'
+        pad: '2'
       - ref: J13
         pad: '1'
     through:
     - ref: R18
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C59
+        pad: '1'
+      - ref: J13
+        pad: '2'
   - id: setpoint_output_13
     source:
       ref: U36
@@ -5958,13 +6042,20 @@ cases:
       - ref: R19
         pad: '2'
       - ref: C64
-        pad: '1'
+        pad: '2'
       - ref: J14
         pad: '1'
     through:
     - ref: R19
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C64
+        pad: '1'
+      - ref: J14
+        pad: '2'
   - id: setpoint_output_14
     source:
       ref: U36
@@ -5984,13 +6075,20 @@ cases:
       - ref: R20
         pad: '2'
       - ref: C65
-        pad: '1'
+        pad: '2'
       - ref: J15
         pad: '1'
     through:
     - ref: R20
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C65
+        pad: '1'
+      - ref: J15
+        pad: '2'
   - id: setpoint_output_15
     source:
       ref: U37
@@ -6010,13 +6108,20 @@ cases:
       - ref: R21
         pad: '2'
       - ref: C70
-        pad: '1'
+        pad: '2'
       - ref: J16
         pad: '1'
     through:
     - ref: R21
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C70
+        pad: '1'
+      - ref: J16
+        pad: '2'
   - id: setpoint_output_16
     source:
       ref: U37
@@ -6036,13 +6141,20 @@ cases:
       - ref: R22
         pad: '2'
       - ref: C71
-        pad: '1'
+        pad: '2'
       - ref: J17
         pad: '1'
     through:
     - ref: R22
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C71
+        pad: '1'
+      - ref: J17
+        pad: '2'
   - id: setpoint_output_17
     source:
       ref: U38
@@ -6062,13 +6174,20 @@ cases:
       - ref: R23
         pad: '2'
       - ref: C76
-        pad: '1'
+        pad: '2'
       - ref: J18
         pad: '1'
     through:
     - ref: R23
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C76
+        pad: '1'
+      - ref: J18
+        pad: '2'
   - id: setpoint_output_18
     source:
       ref: U38
@@ -6088,13 +6207,20 @@ cases:
       - ref: R24
         pad: '2'
       - ref: C77
-        pad: '1'
+        pad: '2'
       - ref: J19
         pad: '1'
     through:
     - ref: R24
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C77
+        pad: '1'
+      - ref: J19
+        pad: '2'
   - id: setpoint_output_19
     source:
       ref: U39
@@ -6114,13 +6240,20 @@ cases:
       - ref: R25
         pad: '2'
       - ref: C82
-        pad: '1'
+        pad: '2'
       - ref: J20
         pad: '1'
     through:
     - ref: R25
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C82
+        pad: '1'
+      - ref: J20
+        pad: '2'
   - id: setpoint_output_20
     source:
       ref: U39
@@ -6140,13 +6273,20 @@ cases:
       - ref: R26
         pad: '2'
       - ref: C83
-        pad: '1'
+        pad: '2'
       - ref: J21
         pad: '1'
     through:
     - ref: R26
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C83
+        pad: '1'
+      - ref: J21
+        pad: '2'
   - id: setpoint_output_21
     source:
       ref: U40
@@ -6166,13 +6306,20 @@ cases:
       - ref: R27
         pad: '2'
       - ref: C88
-        pad: '1'
+        pad: '2'
       - ref: J22
         pad: '1'
     through:
     - ref: R27
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C88
+        pad: '1'
+      - ref: J22
+        pad: '2'
   - id: setpoint_output_22
     source:
       ref: U40
@@ -6192,13 +6339,20 @@ cases:
       - ref: R28
         pad: '2'
       - ref: C89
-        pad: '1'
+        pad: '2'
       - ref: J23
         pad: '1'
     through:
     - ref: R28
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C89
+        pad: '1'
+      - ref: J23
+        pad: '2'
   - id: setpoint_output_23
     source:
       ref: U41
@@ -6218,13 +6372,20 @@ cases:
       - ref: R29
         pad: '2'
       - ref: C94
-        pad: '1'
+        pad: '2'
       - ref: J24
         pad: '1'
     through:
     - ref: R29
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C94
+        pad: '1'
+      - ref: J24
+        pad: '2'
   - id: setpoint_output_24
     source:
       ref: U41
@@ -6244,13 +6405,20 @@ cases:
       - ref: R30
         pad: '2'
       - ref: C95
-        pad: '1'
+        pad: '2'
       - ref: J25
         pad: '1'
     through:
     - ref: R30
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C95
+        pad: '1'
+      - ref: J25
+        pad: '2'
   - id: setpoint_output_25
     source:
       ref: U42
@@ -6270,13 +6438,20 @@ cases:
       - ref: R31
         pad: '2'
       - ref: C100
-        pad: '1'
+        pad: '2'
       - ref: J26
         pad: '1'
     through:
     - ref: R31
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C100
+        pad: '1'
+      - ref: J26
+        pad: '2'
   - id: setpoint_output_26
     source:
       ref: U42
@@ -6296,13 +6471,20 @@ cases:
       - ref: R32
         pad: '2'
       - ref: C101
-        pad: '1'
+        pad: '2'
       - ref: J27
         pad: '1'
     through:
     - ref: R32
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C101
+        pad: '1'
+      - ref: J27
+        pad: '2'
   - id: setpoint_output_27
     source:
       ref: U43
@@ -6322,13 +6504,20 @@ cases:
       - ref: R33
         pad: '2'
       - ref: C106
-        pad: '1'
+        pad: '2'
       - ref: J28
         pad: '1'
     through:
     - ref: R33
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C106
+        pad: '1'
+      - ref: J28
+        pad: '2'
   - id: setpoint_output_28
     source:
       ref: U43
@@ -6348,13 +6537,20 @@ cases:
       - ref: R34
         pad: '2'
       - ref: C107
-        pad: '1'
+        pad: '2'
       - ref: J29
         pad: '1'
     through:
     - ref: R34
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C107
+        pad: '1'
+      - ref: J29
+        pad: '2'
   - id: setpoint_output_29
     source:
       ref: U44
@@ -6374,13 +6570,20 @@ cases:
       - ref: R35
         pad: '2'
       - ref: C112
-        pad: '1'
+        pad: '2'
       - ref: J30
         pad: '1'
     through:
     - ref: R35
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C112
+        pad: '1'
+      - ref: J30
+        pad: '2'
   - id: setpoint_output_30
     source:
       ref: U44
@@ -6400,13 +6603,20 @@ cases:
       - ref: R36
         pad: '2'
       - ref: C113
-        pad: '1'
+        pad: '2'
       - ref: J31
         pad: '1'
     through:
     - ref: R36
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C113
+        pad: '1'
+      - ref: J31
+        pad: '2'
   - id: setpoint_output_31
     source:
       ref: U45
@@ -6426,13 +6636,20 @@ cases:
       - ref: R37
         pad: '2'
       - ref: C118
-        pad: '1'
+        pad: '2'
       - ref: J32
         pad: '1'
     through:
     - ref: R37
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C118
+        pad: '1'
+      - ref: J32
+        pad: '2'
   - id: setpoint_output_32
     source:
       ref: U45
@@ -6452,13 +6669,20 @@ cases:
       - ref: R38
         pad: '2'
       - ref: C119
-        pad: '1'
+        pad: '2'
       - ref: J33
         pad: '1'
     through:
     - ref: R38
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C119
+        pad: '1'
+      - ref: J33
+        pad: '2'
   - id: setpoint_output_33
     source:
       ref: U46
@@ -6478,13 +6702,20 @@ cases:
       - ref: R39
         pad: '2'
       - ref: C124
-        pad: '1'
+        pad: '2'
       - ref: J34
         pad: '1'
     through:
     - ref: R39
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C124
+        pad: '1'
+      - ref: J34
+        pad: '2'
   - id: setpoint_output_34
     source:
       ref: U46
@@ -6504,13 +6735,20 @@ cases:
       - ref: R40
         pad: '2'
       - ref: C125
-        pad: '1'
+        pad: '2'
       - ref: J35
         pad: '1'
     through:
     - ref: R40
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C125
+        pad: '1'
+      - ref: J35
+        pad: '2'
   - id: setpoint_output_35
     source:
       ref: U47
@@ -6530,13 +6768,20 @@ cases:
       - ref: R41
         pad: '2'
       - ref: C130
-        pad: '1'
+        pad: '2'
       - ref: J36
         pad: '1'
     through:
     - ref: R41
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C130
+        pad: '1'
+      - ref: J36
+        pad: '2'
   - id: setpoint_output_36
     source:
       ref: U47
@@ -6556,13 +6801,20 @@ cases:
       - ref: R42
         pad: '2'
       - ref: C131
-        pad: '1'
+        pad: '2'
       - ref: J37
         pad: '1'
     through:
     - ref: R42
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C131
+        pad: '1'
+      - ref: J37
+        pad: '2'
   - id: setpoint_output_37
     source:
       ref: U48
@@ -6582,13 +6834,20 @@ cases:
       - ref: R43
         pad: '2'
       - ref: C136
-        pad: '1'
+        pad: '2'
       - ref: J38
         pad: '1'
     through:
     - ref: R43
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C136
+        pad: '1'
+      - ref: J38
+        pad: '2'
   - id: setpoint_output_38
     source:
       ref: U48
@@ -6608,13 +6867,20 @@ cases:
       - ref: R44
         pad: '2'
       - ref: C137
-        pad: '1'
+        pad: '2'
       - ref: J39
         pad: '1'
     through:
     - ref: R44
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C137
+        pad: '1'
+      - ref: J39
+        pad: '2'
   - id: setpoint_output_39
     source:
       ref: U49
@@ -6634,13 +6900,20 @@ cases:
       - ref: R45
         pad: '2'
       - ref: C142
-        pad: '1'
+        pad: '2'
       - ref: J40
         pad: '1'
     through:
     - ref: R45
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C142
+        pad: '1'
+      - ref: J40
+        pad: '2'
   - id: setpoint_output_40
     source:
       ref: U49
@@ -6660,13 +6933,20 @@ cases:
       - ref: R46
         pad: '2'
       - ref: C143
-        pad: '1'
+        pad: '2'
       - ref: J41
         pad: '1'
     through:
     - ref: R46
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C143
+        pad: '1'
+      - ref: J41
+        pad: '2'
   - id: setpoint_output_41
     source:
       ref: U50
@@ -6686,13 +6966,20 @@ cases:
       - ref: R47
         pad: '2'
       - ref: C148
-        pad: '1'
+        pad: '2'
       - ref: J42
         pad: '1'
     through:
     - ref: R47
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C148
+        pad: '1'
+      - ref: J42
+        pad: '2'
   - id: setpoint_output_42
     source:
       ref: U50
@@ -6712,13 +6999,20 @@ cases:
       - ref: R48
         pad: '2'
       - ref: C149
-        pad: '1'
+        pad: '2'
       - ref: J43
         pad: '1'
     through:
     - ref: R48
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C149
+        pad: '1'
+      - ref: J43
+        pad: '2'
   - id: setpoint_output_43
     source:
       ref: U51
@@ -6738,13 +7032,20 @@ cases:
       - ref: R49
         pad: '2'
       - ref: C154
-        pad: '1'
+        pad: '2'
       - ref: J44
         pad: '1'
     through:
     - ref: R49
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C154
+        pad: '1'
+      - ref: J44
+        pad: '2'
   - id: setpoint_output_44
     source:
       ref: U51
@@ -6764,13 +7065,20 @@ cases:
       - ref: R50
         pad: '2'
       - ref: C155
-        pad: '1'
+        pad: '2'
       - ref: J45
         pad: '1'
     through:
     - ref: R50
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C155
+        pad: '1'
+      - ref: J45
+        pad: '2'
   - id: setpoint_output_45
     source:
       ref: U52
@@ -6790,13 +7098,20 @@ cases:
       - ref: R51
         pad: '2'
       - ref: C160
-        pad: '1'
+        pad: '2'
       - ref: J46
         pad: '1'
     through:
     - ref: R51
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C160
+        pad: '1'
+      - ref: J46
+        pad: '2'
   - id: setpoint_output_46
     source:
       ref: U52
@@ -6816,13 +7131,20 @@ cases:
       - ref: R52
         pad: '2'
       - ref: C161
-        pad: '1'
+        pad: '2'
       - ref: J47
         pad: '1'
     through:
     - ref: R52
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C161
+        pad: '1'
+      - ref: J47
+        pad: '2'
   - id: setpoint_output_47
     source:
       ref: U53
@@ -6842,13 +7164,20 @@ cases:
       - ref: R53
         pad: '2'
       - ref: C166
-        pad: '1'
+        pad: '2'
       - ref: J48
         pad: '1'
     through:
     - ref: R53
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C166
+        pad: '1'
+      - ref: J48
+        pad: '2'
   - id: setpoint_output_48
     source:
       ref: U53
@@ -6868,13 +7197,20 @@ cases:
       - ref: R54
         pad: '2'
       - ref: C167
-        pad: '1'
+        pad: '2'
       - ref: J49
         pad: '1'
     through:
     - ref: R54
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C167
+        pad: '1'
+      - ref: J49
+        pad: '2'
   - id: setpoint_output_49
     source:
       ref: U54
@@ -6894,13 +7230,20 @@ cases:
       - ref: R55
         pad: '2'
       - ref: C172
-        pad: '1'
+        pad: '2'
       - ref: J50
         pad: '1'
     through:
     - ref: R55
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C172
+        pad: '1'
+      - ref: J50
+        pad: '2'
   - id: setpoint_output_50
     source:
       ref: U54
@@ -6920,13 +7263,20 @@ cases:
       - ref: R56
         pad: '2'
       - ref: C173
-        pad: '1'
+        pad: '2'
       - ref: J51
         pad: '1'
     through:
     - ref: R56
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C173
+        pad: '1'
+      - ref: J51
+        pad: '2'
   - id: setpoint_output_51
     source:
       ref: U55
@@ -6946,13 +7296,20 @@ cases:
       - ref: R57
         pad: '2'
       - ref: C178
-        pad: '1'
+        pad: '2'
       - ref: J52
         pad: '1'
     through:
     - ref: R57
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C178
+        pad: '1'
+      - ref: J52
+        pad: '2'
   - id: setpoint_output_52
     source:
       ref: U55
@@ -6972,13 +7329,20 @@ cases:
       - ref: R58
         pad: '2'
       - ref: C179
-        pad: '1'
+        pad: '2'
       - ref: J53
         pad: '1'
     through:
     - ref: R58
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C179
+        pad: '1'
+      - ref: J53
+        pad: '2'
   - id: setpoint_output_53
     source:
       ref: U56
@@ -6998,13 +7362,20 @@ cases:
       - ref: R59
         pad: '2'
       - ref: C184
-        pad: '1'
+        pad: '2'
       - ref: J54
         pad: '1'
     through:
     - ref: R59
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C184
+        pad: '1'
+      - ref: J54
+        pad: '2'
   - id: setpoint_output_54
     source:
       ref: U56
@@ -7024,13 +7395,20 @@ cases:
       - ref: R60
         pad: '2'
       - ref: C185
-        pad: '1'
+        pad: '2'
       - ref: J55
         pad: '1'
     through:
     - ref: R60
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C185
+        pad: '1'
+      - ref: J55
+        pad: '2'
   - id: setpoint_output_55
     source:
       ref: U57
@@ -7050,13 +7428,20 @@ cases:
       - ref: R61
         pad: '2'
       - ref: C190
-        pad: '1'
+        pad: '2'
       - ref: J56
         pad: '1'
     through:
     - ref: R61
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C190
+        pad: '1'
+      - ref: J56
+        pad: '2'
   - id: setpoint_output_56
     source:
       ref: U57
@@ -7076,13 +7461,20 @@ cases:
       - ref: R62
         pad: '2'
       - ref: C191
-        pad: '1'
+        pad: '2'
       - ref: J57
         pad: '1'
     through:
     - ref: R62
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C191
+        pad: '1'
+      - ref: J57
+        pad: '2'
   - id: setpoint_output_57
     source:
       ref: U58
@@ -7102,13 +7494,20 @@ cases:
       - ref: R63
         pad: '2'
       - ref: C196
-        pad: '1'
+        pad: '2'
       - ref: J58
         pad: '1'
     through:
     - ref: R63
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C196
+        pad: '1'
+      - ref: J58
+        pad: '2'
   - id: setpoint_output_58
     source:
       ref: U58
@@ -7128,13 +7527,20 @@ cases:
       - ref: R64
         pad: '2'
       - ref: C197
-        pad: '1'
+        pad: '2'
       - ref: J59
         pad: '1'
     through:
     - ref: R64
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C197
+        pad: '1'
+      - ref: J59
+        pad: '2'
   - id: setpoint_output_59
     source:
       ref: U59
@@ -7154,13 +7560,20 @@ cases:
       - ref: R65
         pad: '2'
       - ref: C202
-        pad: '1'
+        pad: '2'
       - ref: J60
         pad: '1'
     through:
     - ref: R65
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C202
+        pad: '1'
+      - ref: J60
+        pad: '2'
   - id: setpoint_output_60
     source:
       ref: U59
@@ -7180,13 +7593,20 @@ cases:
       - ref: R66
         pad: '2'
       - ref: C203
-        pad: '1'
+        pad: '2'
       - ref: J61
         pad: '1'
     through:
     - ref: R66
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C203
+        pad: '1'
+      - ref: J61
+        pad: '2'
   - id: setpoint_output_61
     source:
       ref: U60
@@ -7206,13 +7626,20 @@ cases:
       - ref: R67
         pad: '2'
       - ref: C208
-        pad: '1'
+        pad: '2'
       - ref: J62
         pad: '1'
     through:
     - ref: R67
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C208
+        pad: '1'
+      - ref: J62
+        pad: '2'
   - id: setpoint_output_62
     source:
       ref: U60
@@ -7232,13 +7659,20 @@ cases:
       - ref: R68
         pad: '2'
       - ref: C209
-        pad: '1'
+        pad: '2'
       - ref: J63
         pad: '1'
     through:
     - ref: R68
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C209
+        pad: '1'
+      - ref: J63
+        pad: '2'
   - id: setpoint_output_63
     source:
       ref: U61
@@ -7258,13 +7692,20 @@ cases:
       - ref: R69
         pad: '2'
       - ref: C214
-        pad: '1'
+        pad: '2'
       - ref: J64
         pad: '1'
     through:
     - ref: R69
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C214
+        pad: '1'
+      - ref: J64
+        pad: '2'
   - id: setpoint_output_64
     source:
       ref: U61
@@ -7284,13 +7725,20 @@ cases:
       - ref: R70
         pad: '2'
       - ref: C215
-        pad: '1'
+        pad: '2'
       - ref: J65
         pad: '1'
     through:
     - ref: R70
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C215
+        pad: '1'
+      - ref: J65
+        pad: '2'
   - id: setpoint_output_65
     source:
       ref: U62
@@ -7310,13 +7758,20 @@ cases:
       - ref: R71
         pad: '2'
       - ref: C220
-        pad: '1'
+        pad: '2'
       - ref: J66
         pad: '1'
     through:
     - ref: R71
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C220
+        pad: '1'
+      - ref: J66
+        pad: '2'
   - id: setpoint_output_66
     source:
       ref: U62
@@ -7336,13 +7791,20 @@ cases:
       - ref: R72
         pad: '2'
       - ref: C221
-        pad: '1'
+        pad: '2'
       - ref: J67
         pad: '1'
     through:
     - ref: R72
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C221
+        pad: '1'
+      - ref: J67
+        pad: '2'
   - id: setpoint_output_67
     source:
       ref: U63
@@ -7362,13 +7824,20 @@ cases:
       - ref: R73
         pad: '2'
       - ref: C226
-        pad: '1'
+        pad: '2'
       - ref: J68
         pad: '1'
     through:
     - ref: R73
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C226
+        pad: '1'
+      - ref: J68
+        pad: '2'
   - id: setpoint_output_68
     source:
       ref: U63
@@ -7388,13 +7857,20 @@ cases:
       - ref: R74
         pad: '2'
       - ref: C227
-        pad: '1'
+        pad: '2'
       - ref: J69
         pad: '1'
     through:
     - ref: R74
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C227
+        pad: '1'
+      - ref: J69
+        pad: '2'
   - id: setpoint_output_69
     source:
       ref: U64
@@ -7414,13 +7890,20 @@ cases:
       - ref: R75
         pad: '2'
       - ref: C232
-        pad: '1'
+        pad: '2'
       - ref: J70
         pad: '1'
     through:
     - ref: R75
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C232
+        pad: '1'
+      - ref: J70
+        pad: '2'
   - id: setpoint_output_70
     source:
       ref: U64
@@ -7440,13 +7923,20 @@ cases:
       - ref: R76
         pad: '2'
       - ref: C233
-        pad: '1'
+        pad: '2'
       - ref: J71
         pad: '1'
     through:
     - ref: R76
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C233
+        pad: '1'
+      - ref: J71
+        pad: '2'
   - id: setpoint_output_71
     source:
       ref: U65
@@ -7466,13 +7956,20 @@ cases:
       - ref: R77
         pad: '2'
       - ref: C238
-        pad: '1'
+        pad: '2'
       - ref: J72
         pad: '1'
     through:
     - ref: R77
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C238
+        pad: '1'
+      - ref: J72
+        pad: '2'
   - id: setpoint_output_72
     source:
       ref: U65
@@ -7492,10 +7989,17 @@ cases:
       - ref: R78
         pad: '2'
       - ref: C239
-        pad: '1'
+        pad: '2'
       - ref: J73
         pad: '1'
     through:
     - ref: R78
       input_pad: '1'
       output_pad: '2'
+    return_assertions:
+    - net: GND
+      endpoints:
+      - ref: C239
+        pad: '1'
+      - ref: J73
+        pad: '2'

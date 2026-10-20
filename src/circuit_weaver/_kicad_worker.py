@@ -741,6 +741,280 @@ def _reference_conflict_report(board, pcbnew, moved_count, orientation_normalize
             "conflict_counts": conflict_counts}
 
 
+def _reference_conflict_signature(board, pcbnew):
+    """Return exact native label-conflict identities for no-new-conflict checks."""
+    signature = Counter()
+    obstacles = _silk_obstacles(board, pcbnew)
+    obstacle_indexes, peer_indexes = _silk_indexes(obstacles, pcbnew)
+    entries = _reference_entries(board, pcbnew)
+    bounds = _board_text_bounds(board, pcbnew)
+    by_layer = {pcbnew.F_SilkS: [], pcbnew.B_SilkS: []}
+    for entry in entries:
+        ref, layer, box = entry["ref"], entry["layer"], entry["box"]
+        if not _inside_bounds(box, bounds):
+            signature[("edge", ref)] += 1
+        rows = obstacles[layer]
+        for index in obstacle_indexes[layer].query(box):
+            kind, owner, obstacle = rows[index]
+            if _boxes_overlap(box, obstacle):
+                signature[(kind, ref, owner, tuple(obstacle))] += 1
+        center = ((box[0] + box[2]) // 2, (box[1] + box[3]) // 2)
+        courtyard = _courtyard_box(entry["footprint"], pcbnew)
+        if not _candidate_associated(center, courtyard, ref, rows, peer_indexes[layer]):
+            signature[("association", ref)] += 1
+        by_layer[layer].append(entry)
+    for layer_entries in by_layer.values():
+        index = _AabbIndex([entry["box"] for entry in layer_entries], pcbnew.FromMM(5.0))
+        for first_index, first in enumerate(layer_entries):
+            for second_index in index.query(first["box"]):
+                if second_index <= first_index:
+                    continue
+                second = layer_entries[second_index]
+                if _boxes_overlap(first["box"], second["box"]):
+                    refs = tuple(sorted((first["ref"], second["ref"])))
+                    signature[("reference_reference", *refs)] += 1
+    return signature
+
+
+def _reference_repair_preservation_state(board, pcbnew, movable_refs=()):
+    """Capture all footprint/pad geometry and non-position reference properties."""
+    footprints = {}
+    text = {}
+    for footprint in board.GetFootprints():
+        ref = footprint.GetReference()
+        pads = []
+        for pad in footprint.Pads():
+            position = pad.GetPosition()
+            layers = pad.GetLayerSet()
+            layer_state = layers.FmtBin() if hasattr(layers, "FmtBin") else str(layers)
+            pads.append((pad.GetNumber(), pad.GetNetname(), position.x, position.y,
+                         int(pad.GetOrientationDegrees()), layer_state, pad.IsLocked()))
+        position = footprint.GetPosition()
+        uuid = footprint.m_Uuid.AsString() if hasattr(footprint, "m_Uuid") else None
+        footprints[ref] = (uuid, position.x, position.y, float(footprint.GetOrientationDegrees()),
+                           int(footprint.GetLayer()), bool(footprint.IsLocked()), tuple(sorted(pads)))
+        for field in footprint.GetFields():
+            field_position = field.GetTextPos()
+            size = field.GetTextSize()
+            thickness = field.GetTextThickness()
+            key = (ref, field.GetTextTypeDescription(), field.GetText())
+            uuid = field.m_Uuid.AsString() if hasattr(field, "m_Uuid") else None
+            is_reference = field.GetTextTypeDescription() == "Reference"
+            text[key] = (
+                None if is_reference and ref in movable_refs else (field_position.x, field_position.y),
+                float(field.GetTextAngleDegrees()), size.x, size.y, thickness,
+                int(field.GetLayer()), _field_visible(field), bool(field.IsLocked()), uuid,
+            )
+    return footprints, text, _copper_state(board)
+
+
+def _bounded_reference_field_repair(board, pcbnew, baseline_report):
+    """Try a bounded native-clear reassignment of only conflicting labels.
+
+    The routine uses the ordinary tidy algorithm's candidate generator,
+    association rule, obstacle inventory, and complete conflict reporter.
+    It fails closed on locked fields, oversized neighborhoods, empty domains,
+    search limits, new conflicts, or any changed footprint/pad/copper state.
+    """
+    from _native_reference_repair import apply_candidate_positions, solve_bounded_assignment
+
+    max_group_size = 8
+    max_ring = 24
+    max_move_mm = 8.0
+    max_options = 96
+    max_center_evaluations = 25000
+    max_search_nodes = 50000
+    active_refs = set(baseline_report.get("unresolved_references", []))
+    if not active_refs:
+        return {"status": "not_needed", "reason": "no_native_conflict_references"}
+    entries = {entry["ref"]: entry for entry in _reference_entries(board, pcbnew)}
+    if active_refs - entries.keys():
+        return {"status": "not_applied", "reason": "conflicted_reference_field_missing"}
+
+    # Partition only actual overlapping labels into neighborhoods. A label
+    # blocked by a static obstacle forms a singleton neighborhood.
+    graph = {ref: set() for ref in active_refs}
+    for ref in sorted(active_refs):
+        first = entries[ref]
+        for other in sorted(active_refs):
+            if other <= ref:
+                continue
+            second = entries[other]
+            if first["layer"] == second["layer"] and _boxes_overlap(first["box"], second["box"]):
+                graph[ref].add(other)
+                graph[other].add(ref)
+    groups = []
+    pending = set(active_refs)
+    while pending:
+        seed = min(pending)
+        component = set()
+        stack = [seed]
+        while stack:
+            ref = stack.pop()
+            if ref in component:
+                continue
+            component.add(ref)
+            stack.extend(sorted(graph[ref] - component, reverse=True))
+        pending -= component
+        groups.append(sorted(component))
+    if any(len(group) > max_group_size for group in groups):
+        return {"status": "not_applied", "reason": "conflict_neighborhood_too_large",
+                "group_sizes": [len(group) for group in groups], "max_group_size": max_group_size}
+
+    original_positions = {
+        ref: (entry["field"].GetTextPos().x, entry["field"].GetTextPos().y)
+        for ref, entry in entries.items()
+    }
+    identity_before = _identity(board)
+    baseline_signature = _reference_conflict_signature(board, pcbnew)
+    static_obstacles = _silk_obstacles(board, pcbnew)
+    obstacle_indexes, peer_indexes = _silk_indexes(static_obstacles, pcbnew)
+    bounds = _board_text_bounds(board, pcbnew)
+    move_limit = pcbnew.FromMM(max_move_mm)
+    candidate_evaluations = 0
+    search_nodes = 0
+    option_counts = {}
+    chosen_all = {}
+    # Virtual reservations let later groups see earlier assignments while no
+    # field mutates until every conflict group has a bounded solution.
+    virtual_boxes = {ref: entry["box"] for ref, entry in entries.items()}
+
+    for group in groups:
+        if any(entries[ref]["locked"] for ref in group):
+            return {"status": "not_applied", "reason": "conflict_neighborhood_contains_locked_reference",
+                    "groups": groups, "candidate_center_evaluations": candidate_evaluations,
+                    "search_nodes": search_nodes}
+        fixed_by_layer = {pcbnew.F_SilkS: [], pcbnew.B_SilkS: []}
+        for ref, entry in entries.items():
+            if ref not in group:
+                fixed_by_layer[entry["layer"]].append(virtual_boxes[ref])
+        options_by_ref = {}
+        group_entries = {ref: entries[ref] for ref in group}
+        for ref in group:
+            entry = entries[ref]
+            field, current, layer = entry["field"], virtual_boxes[ref], entry["layer"]
+            courtyard = _courtyard_box(entry["footprint"], pcbnew)
+            width = current[2] - current[0] - 2 * pcbnew.FromMM(_SILK_CLEARANCE_MM)
+            height = current[3] - current[1] - 2 * pcbnew.FromMM(_SILK_CLEARANCE_MM)
+            initial_center = ((current[0] + current[2]) // 2, (current[1] + current[3]) // 2)
+            position = field.GetTextPos()
+            origin_offset = (position.x - initial_center[0], position.y - initial_center[1])
+            centers = set(_candidate_centers(
+                courtyard, width, height, bounds, pcbnew, max_ring=max_ring,
+            ))
+            centers.add(initial_center)
+            viable = []
+            for center in centers:
+                if candidate_evaluations >= max_center_evaluations:
+                    return {"status": "budget_exhausted", "reason": "candidate_center_budget_exhausted",
+                            "groups": groups, "candidate_center_evaluations": candidate_evaluations,
+                            "candidate_center_budget": max_center_evaluations,
+                            "search_nodes": search_nodes, "search_node_budget": max_search_nodes}
+                candidate_evaluations += 1
+                dx, dy = center[0] - initial_center[0], center[1] - initial_center[1]
+                if dx * dx + dy * dy > move_limit * move_limit:
+                    continue
+                box = (current[0] + dx, current[1] + dy, current[2] + dx, current[3] + dy)
+                if not _inside_bounds(box, bounds):
+                    continue
+                rows = static_obstacles[layer]
+                if any(_boxes_overlap(box, rows[index][2])
+                       for index in obstacle_indexes[layer].query(box)):
+                    continue
+                if any(_boxes_overlap(box, fixed_box)
+                       for fixed_box in fixed_by_layer[layer]):
+                    continue
+                if not _candidate_associated(center, courtyard, ref, rows, peer_indexes[layer]):
+                    continue
+                viable.append({
+                    "center": center,
+                    "box": box,
+                    "pos": (center[0] + origin_offset[0], center[1] + origin_offset[1]),
+                    "move_sq": dx * dx + dy * dy,
+                    "own_distance_sq": _point_box_distance_sq(center, courtyard),
+                })
+            viable.sort(key=lambda row: (row["move_sq"], row["own_distance_sq"],
+                                         row["center"][1], row["center"][0]))
+            options_by_ref[ref] = viable[:max_options]
+        option_counts.update({ref: len(rows) for ref, rows in options_by_ref.items()})
+        if any(not rows for rows in options_by_ref.values()):
+            return {"status": "not_applied", "reason": "empty_candidate_domain",
+                    "groups": groups, "candidate_options_by_ref": option_counts,
+                    "candidate_center_evaluations": candidate_evaluations,
+                    "search_nodes": search_nodes}
+        result = solve_bounded_assignment(
+            options_by_ref,
+            layer_by_ref={ref: group_entries[ref]["layer"] for ref in group},
+            fixed_boxes_by_layer=fixed_by_layer,
+            max_nodes=max_search_nodes - search_nodes,
+        )
+        search_nodes += result["search_nodes"]
+        if result["status"] != "solved":
+            return {"status": result["status"], "reason": "bounded_assignment_failed",
+                    "groups": groups, "candidate_options_by_ref": option_counts,
+                    "candidate_center_evaluations": candidate_evaluations,
+                    "candidate_center_budget": max_center_evaluations,
+                    "search_nodes": search_nodes, "search_node_budget": max_search_nodes}
+        for ref, candidate in result["assignment"].items():
+            chosen_all[ref] = candidate
+            virtual_boxes[ref] = candidate["box"]
+
+    fields_by_ref = {ref: entry["field"] for ref, entry in entries.items()}
+    preservation_before = _reference_repair_preservation_state(board, pcbnew, chosen_all)
+    candidate_report = None
+
+    def validate_candidate():
+        nonlocal candidate_report
+        candidate_report = _reference_conflict_report(board, pcbnew, 0, 0)
+        candidate_signature = _reference_conflict_signature(board, pcbnew)
+        new_conflicts = candidate_signature - baseline_signature
+        improved = candidate_report["remaining_conflict_count"] < baseline_report["remaining_conflict_count"]
+        no_new_conflicts = not new_conflicts
+        preserved = (
+            _identity(board) == identity_before
+            and _reference_repair_preservation_state(board, pcbnew, chosen_all) == preservation_before
+        )
+        return improved and no_new_conflicts and preserved
+
+    applied = apply_candidate_positions(
+        fields_by_ref, chosen_all, lambda x, y: pcbnew.VECTOR2I(x, y), validate_candidate,
+    )
+    if not applied["applied"]:
+        return {"status": "rolled_back", "reason": applied["reason"], "groups": groups,
+                "candidate_options_by_ref": option_counts,
+                "candidate_center_evaluations": candidate_evaluations,
+                "candidate_center_budget": max_center_evaluations,
+                "search_nodes": search_nodes, "search_node_budget": max_search_nodes,
+                "before_conflict_count": baseline_report["remaining_conflict_count"],
+                "candidate_conflict_count": (candidate_report or {}).get("remaining_conflict_count")}
+    moved_refs = sorted(ref for ref, candidate in chosen_all.items()
+                        if tuple(candidate["pos"]) != original_positions[ref])
+    return {
+        "status": "accepted",
+        "reason": applied["reason"],
+        "groups": groups,
+        "moved_refs": moved_refs,
+        "candidate_options_by_ref": option_counts,
+        "candidate_center_evaluations": candidate_evaluations,
+        "candidate_center_budget": max_center_evaluations,
+        "search_nodes": search_nodes,
+        "search_node_budget": max_search_nodes,
+        "max_group_size": max_group_size,
+        "candidate_ring_cap": max_ring,
+        "max_move_mm": max_move_mm,
+        "max_candidates_per_reference": max_options,
+        "before_conflict_count": baseline_report["remaining_conflict_count"],
+        "after_conflict_count": candidate_report["remaining_conflict_count"],
+        "before_conflict_categories": dict(baseline_report["conflict_counts"]),
+        "after_conflict_categories": dict(candidate_report["conflict_counts"]),
+        "no_new_native_conflicts": True,
+        "pad_net_identity_preserved": True,
+        "footprints_and_pad_geometry_preserved": True,
+        "nonreference_text_fields_preserved": True,
+        "copper_preserved": True,
+    }
+
+
 def execute(request):
     import pcbnew
 
@@ -748,8 +1022,10 @@ def execute(request):
     if board is None:
         raise ValueError("KiCad could not load the board")
     identity = _identity(board)
+    reference_positions_before_tidy = None
     operation = request["operation"]
     tidy_summary = None
+    label_repair = None
     refinement = None
     cleanup = None
     plane_cleanup = None
@@ -927,6 +1203,11 @@ def execute(request):
                 f.SetPosition(target)
                 f.SetOrientationDegrees(p["rotation"])
         if request.get("tidy_references") is True:
+            reference_positions_before_tidy = {
+                footprint.GetReference(): (footprint.Reference().GetTextPos().x,
+                                           footprint.Reference().GetTextPos().y)
+                for footprint in board.GetFootprints()
+            }
             placement_positions = {
                 footprint.GetReference(): (footprint.GetPosition().x, footprint.GetPosition().y,
                                            footprint.GetOrientationDegrees(), footprint.GetLayer())
@@ -939,6 +1220,12 @@ def execute(request):
                           footprint.GetOrientationDegrees(), footprint.GetLayer())
                 if actual != expected:
                     raise ValueError(f"Reference cleanup unexpectedly moved footprint {footprint.GetReference()}")
+            tidy_report = _reference_conflict_report(
+                board, pcbnew, tidy_summary["moved_count"],
+                tidy_summary["orientation_normalized_count"],
+            )
+            if tidy_report["remaining_conflict_count"]:
+                label_repair = _bounded_reference_field_repair(board, pcbnew, tidy_report)
     else:
         raise ValueError(f"Unknown KiCad operation: {operation}")
     if _identity(board) != identity:
@@ -997,6 +1284,18 @@ def execute(request):
             reloaded, pcbnew, tidy_summary["moved_count"],
             tidy_summary["orientation_normalized_count"],
         )
+        if label_repair is not None:
+            final_positions = {
+                footprint.GetReference(): (footprint.Reference().GetTextPos().x,
+                                           footprint.Reference().GetTextPos().y)
+                for footprint in reloaded.GetFootprints()
+            }
+            label_repair["final_moved_refs"] = sorted(
+                ref for ref, position in final_positions.items()
+                if reference_positions_before_tidy.get(ref) != position
+            )
+            result["silkscreen"]["moved_count"] = len(label_repair["final_moved_refs"])
+            result["silkscreen"]["local_repair"] = label_repair
     if refinement is not None:
         result["refinement"] = {**refinement, "original_copper_preserved": True,
                                 "original_footprints_and_text_preserved": True}

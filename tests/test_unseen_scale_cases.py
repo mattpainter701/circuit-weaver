@@ -4,6 +4,7 @@ from pathlib import Path
 
 import yaml
 
+from benchmarks.unseen_scale.build_stress_fixtures import build_suite
 from circuit_weaver.assembly_manifest import build_assembly_manifest
 from circuit_weaver.design_loader import compile_design_ir
 
@@ -35,9 +36,13 @@ def _pad_nets(spec):
     }
     manifest = build_assembly_manifest(compiled.components)
     for item in manifest.items:
-        if item.source_kind in {"bypass", "strap"}:
+        if item.source_kind == "strap":
             nets[(item.reference, "1")] = item.net1
             nets[(item.reference, "2")] = item.net2
+        elif item.source_kind == "bypass":
+            # Generated capacitor symbols are reversed in the emitted netlist.
+            nets[(item.reference, "1")] = item.net2
+            nets[(item.reference, "2")] = item.net1
     return nets
 
 
@@ -124,6 +129,31 @@ def test_gateway_retains_all_eight_analog_frontend_to_adc_channels():
             interface.get("name") == channel["reference_net"] for interface in providers[0].get("interfaces", [])
         )
 
+
+def test_analog_contracts_use_compiled_support_ownership_and_pad_convention():
+    suite, specs = _load_suite()
+    case = next(item for item in suite["cases"] if item["id"] == "multichannel_analog_setpoint_card")
+    generated_case = next(item for item in build_suite()["cases"] if item["id"] == case["id"])
+    assert case["required_paths"] == generated_case["required_paths"]
+    spec = specs[case["id"]]
+    manifest = build_assembly_manifest(compile_design_ir(spec).components)
+    output_caps = {
+        (item.owner_ref, item.net1): item.reference
+        for item in manifest.items
+        if item.source_kind == "bypass" and item.role == "output_filter"
+    }
+    output_paths = [path for path in case["required_paths"] if path["id"].startswith("setpoint_output_")]
+    assert len(output_paths) == 72
+    assert all(len(path.get("return_assertions", [])) == 1 for path in output_paths)
+    assert all(path["return_assertions"][0]["net"] == "GND" for path in output_paths)
+    for path in output_paths:
+        signal = path["segments"][-1]["net"]
+        capacitor = next(endpoint for endpoint in path["segments"][-1]["endpoints"] if endpoint["ref"].startswith("C"))
+        owner = next(item.owner_ref for item in manifest.items if item.reference == capacitor["ref"])
+        assert output_caps[(owner, signal)] == capacitor["ref"]
+        assert capacitor["pad"] == "2"
+
+
 def test_expanded_physical_counts_clear_each_case_floor():
     suite, specs = _load_suite()
     expected_counts = {
@@ -173,5 +203,12 @@ def test_channel_topology_is_genuinely_repeated_and_connected():
     assert len(outputs) == 72
     assert {path["loads"][0]["ref"] for path in outputs} == {f"J{i}" for i in range(2, 74)}
     assert len(sync) == dac_count
+    assert all(len(path.get("return_assertions", [])) == 1 for path in outputs)
+    assert {
+        endpoint["ref"]
+        for path in outputs
+        for endpoint in path["return_assertions"][0]["endpoints"]
+        if endpoint["ref"].startswith("J")
+    } == {f"J{i}" for i in range(2, 74)}
     assert len(analog_case["required_paths"]) == 110
     assert len({case["family"] for case in suite["cases"]}) == 3

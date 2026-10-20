@@ -51,6 +51,120 @@ def test_demo_rejects_stale_final_board_evidence(tmp_path):
         _demo.verify_routing(payload, board)
 
 
+def test_native_contract_failure_is_a_hard_barrier_before_placement(tmp_path, monkeypatch):
+    calls = []
+    demo = SimpleNamespace(command=lambda name, arguments: calls.append((name, arguments)) or {})
+
+    def reject(*_args, **_kwargs):
+        raise RuntimeError("native pad/net contract preflight failed")
+
+    monkeypatch.setattr(_demo, "native_contract_preflight", reject)
+    with pytest.raises(RuntimeError, match="preflight failed"):
+        _demo.place_after_native_contracts(
+            demo,
+            tmp_path / "unplaced.kicad_pcb",
+            tmp_path / "contracts.json",
+            "hash",
+            tmp_path,
+            ["place-pcb"],
+        )
+    assert calls == []
+
+def test_no_contract_mode_places_without_preflight(tmp_path, monkeypatch):
+    calls = []
+    demo = SimpleNamespace(command=lambda name, arguments: calls.append((name, arguments)) or {"ok": True})
+    monkeypatch.setattr(
+        _demo,
+        "native_contract_preflight",
+        lambda *_args, **_kwargs: pytest.fail("no-contract mode must skip native preflight"),
+    )
+    placement, proof = _demo.place_after_native_contracts(
+        demo,
+        tmp_path / "unplaced.kicad_pcb",
+        None,
+        None,
+        tmp_path,
+        ["place-pcb"],
+    )
+    assert placement == {"ok": True}
+    assert proof is None
+    assert calls == [("place", ["place-pcb"])]
+
+def test_native_preflight_runs_before_placement_on_success(tmp_path, monkeypatch):
+    calls = []
+    demo = SimpleNamespace(command=lambda name, arguments: calls.append("placement") or {"ok": True})
+    monkeypatch.setattr(
+        _demo,
+        "native_contract_preflight",
+        lambda *_args, **_kwargs: calls.append("preflight") or {"status": "pass"},
+    )
+    _demo.place_after_native_contracts(
+        demo,
+        tmp_path / "unplaced.kicad_pcb",
+        tmp_path / "contracts.json",
+        "sha256",
+        tmp_path,
+        ["place-pcb"],
+    )
+    assert calls == ["preflight", "placement"]
+
+def test_native_preflight_uses_selected_environment_and_retains_hash_evidence(tmp_path, monkeypatch):
+    board = tmp_path / "unplaced.kicad_pcb"
+    board.write_bytes(b"native board bytes")
+    contracts = tmp_path / "contracts.json"
+    contracts.write_text('{"required_paths": [{"id": "path-1"}]}\n', encoding="utf-8")
+    output = tmp_path / "workflow"
+    output.mkdir()
+    selected_env = {"PYTHONUTF8": "1"}
+    demo = SimpleNamespace(timeout=180, cwd=tmp_path, env=selected_env)
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, json.dumps({
+            "inventory": {"status": "ok", "footprints": []},
+            "signal_connectivity": {"status": "pass", "verified_paths": 1, "verified_return_assertions": 0},
+        }), "")
+
+    monkeypatch.setattr(_demo.subprocess, "run", fake_run)
+    proof = _demo.native_contract_preflight(board, contracts, _demo.digest(contracts), demo, output)
+    assert proof["status"] == "pass"
+    assert proof["contract_sha256"] == _demo.digest(contracts)
+    assert proof["board_sha256"] == _demo.digest(board)
+    assert calls[0][0][0] == _demo.sys.executable
+    assert calls[0][1]["env"] is selected_env
+    assert "PYTHONPATH" not in calls[0][1]["env"]
+    saved = json.loads((output / "native-contract-preflight.json").read_text(encoding="utf-8"))
+    assert saved["status"] == "pass"
+    assert (output / "native-contract-preflight.stdout.log").is_file()
+
+def test_native_preflight_rejects_bad_pad_before_any_placement_command(tmp_path, monkeypatch):
+    board = tmp_path / "unplaced.kicad_pcb"
+    board.write_bytes(b"native board bytes")
+    contracts = tmp_path / "contracts.json"
+    contracts.write_text('{"required_paths": [{"id": "bad-pad"}]}\n', encoding="utf-8")
+    output = tmp_path / "workflow"
+    output.mkdir()
+    calls = []
+
+    def reject_contract(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 1, "", "pad 1 is on GND, expected SIGNAL")
+
+    monkeypatch.setattr(_demo.subprocess, "run", reject_contract)
+    place_calls = []
+    placer = SimpleNamespace(timeout=180, cwd=tmp_path, env={}, command=lambda *args: place_calls.append(args))
+    with pytest.raises(RuntimeError, match="placement and routing were not started"):
+        _demo.place_after_native_contracts(
+            placer, board, contracts, _demo.digest(contracts), output, ["place-pcb"],
+        )
+    assert len(calls) == 1
+    assert place_calls == []
+    failure = json.loads((output / "native-contract-preflight.json").read_text(encoding="utf-8"))
+    assert failure["status"] == "failed"
+    assert failure["contract_sha256"] == _demo.digest(contracts)
+
+
 def test_demo_rejects_partial_routing_even_with_clean_drc(tmp_path):
     with pytest.raises(RuntimeError, match="incomplete"):
         _demo.verify_routing({"routing_complete": False, "drc": {"passed": True}}, tmp_path / "board.kicad_pcb")
