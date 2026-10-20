@@ -48,9 +48,21 @@ the [automated workflow demo](automation-validation.md) for a repeatable run.
 the existing `iterations` budget. Each restart has its own seed, cooling schedule,
 and progressively smaller local moves. Final refinement tries small translations,
 rotations, whole-block moves, and attractions toward electrically connected blocks.
+Each restart also has a refinement evaluation budget of the larger of 512 and
+its allocated annealing iterations. Rejected candidates count against that
+budget, and family candidate generation stops when it is exhausted. The search
+report records each budget and actual count.
 Every accepted refinement improves the lexicographic pair `(hard defects, cost)`.
 Candidate selection uses the same pair after legalization. A legalized initial
 layout remains available even when every annealed candidate is worse.
+
+Before annealing, a second starting layout tries four synchronous weighted
+relaxation passes over the existing connectivity graph. Movable primary blocks
+translate with their support families toward connected neighbors. Connector,
+USB, debug and RF anchors and authored fixed/edge placements stay in place.
+The candidate is legalized and selected only if the same hard-defect-first rank
+improves on the original baseline; the report retains both ranks. This starting
+layout does not resize the board or alter nets, footprints, fonts or constraints.
 
 Fixed components reserve space first, including fixed support parts. Movable
 support parts follow owners displaced during legalization. The edge-to-edge gap

@@ -2280,6 +2280,113 @@ def _placement_hard_defects(
     return int(defects)
 
 
+def _topology_relaxed_seed(
+    state: list[ComponentPlacement],
+    pairs: dict[tuple[str, str], float],
+    config: PlacementConfig,
+    constraint_plan: _ConstraintPlan,
+    *,
+    passes: int = 4,
+    blend: float = 0.5,
+) -> tuple[list[ComponentPlacement], dict[str, int]]:
+    """Relax movable primary families toward connected neighbors synchronously.
+
+    This is only a deterministic seed candidate. The caller legalizes it and
+    accepts it only when the ordinary hard-defect-first placement rank beats
+    the original legalized baseline. Mechanical connector anchors, authored
+    fixed/edge placements, and owner/support relative geometry are preserved.
+    """
+    if passes < 0 or not math.isfinite(blend) or not 0.0 <= blend <= 1.0:
+        raise ValueError("topology seed passes and blend must be finite and within range")
+    candidate = [replace(placement) for placement in state]
+    by_ref = {placement.ref: placement for placement in candidate}
+    families: dict[str, list[ComponentPlacement]] = {}
+    for placement in candidate:
+        if placement.parent_ref:
+            families.setdefault(placement.parent_ref, []).append(placement)
+        else:
+            families.setdefault(placement.ref, []).append(placement)
+
+    adjacency: dict[str, dict[str, float]] = {}
+    for (left, right), weight in pairs.items():
+        if left not in by_ref or right not in by_ref or not math.isfinite(weight) or weight <= 0:
+            continue
+        adjacency.setdefault(left, {})[right] = weight
+        adjacency.setdefault(right, {})[left] = weight
+
+    anchor_categories = {"connector", "usb", "debug", "rf"}
+    authored_edges = constraint_plan.edges
+    movable_roots: set[str] = set()
+    for root, family in families.items():
+        owner = by_ref.get(root)
+        if owner is None or owner.parent_ref or owner.category in anchor_categories:
+            continue
+        if any(
+            member.locked
+            or member.constraint_locked
+            or member.edge_constrained
+            or member.rotation_locked
+            or member.ref in authored_edges
+            for member in family
+        ):
+            continue
+        movable_roots.add(root)
+
+    moved_roots: set[str] = set()
+    for _pass in range(passes):
+        positions = {ref: (placement.x, placement.y) for ref, placement in by_ref.items()}
+        deltas: dict[str, tuple[float, float]] = {}
+        for root in sorted(movable_roots):
+            owner = by_ref[root]
+            neighbors = [
+                (other, weight)
+                for other, weight in adjacency.get(root, {}).items()
+                if other != root and other in positions
+            ]
+            total_weight = sum(weight for _, weight in neighbors)
+            if total_weight <= 0:
+                continue
+            target_x = sum(positions[other][0] * weight for other, weight in neighbors) / total_weight
+            target_y = sum(positions[other][1] * weight for other, weight in neighbors) / total_weight
+            proposed_x = (target_x - owner.x) * blend
+            proposed_y = (target_y - owner.y) * blend
+            family = families[root]
+            min_dx = max(
+                config.edge_clearance_mm + _effective_dimensions(member)[0] / 2 - member.x
+                for member in family
+            )
+            max_dx = min(
+                config.board_width_mm - config.edge_clearance_mm - _effective_dimensions(member)[0] / 2 - member.x
+                for member in family
+            )
+            min_dy = max(
+                config.edge_clearance_mm + _effective_dimensions(member)[1] / 2 - member.y
+                for member in family
+            )
+            max_dy = min(
+                config.board_height_mm - config.edge_clearance_mm - _effective_dimensions(member)[1] / 2 - member.y
+                for member in family
+            )
+            if min_dx > max_dx or min_dy > max_dy:
+                continue
+            dx = max(min_dx, min(proposed_x, max_dx))
+            dy = max(min_dy, min(proposed_y, max_dy))
+            if dx or dy:
+                deltas[root] = (dx, dy)
+
+        if not deltas:
+            break
+        # Jacobi-style updates: every target in this pass used the same
+        # previous state, so results do not depend on component iteration order.
+        for root, (dx, dy) in deltas.items():
+            for member in families[root]:
+                member.x += dx
+                member.y += dy
+            moved_roots.add(root)
+
+    return candidate, {"eligible_families": len(movable_roots), "moved_families": len(moved_roots)}
+
+
 def _courtyard_envelope_center(
     placements: list[ComponentPlacement],
 ) -> tuple[float, float]:
@@ -2298,8 +2405,12 @@ def _courtyard_envelope_center(
 def _family_alignment_candidates(
     state: list[ComponentPlacement],
     config: PlacementConfig,
+    *,
+    max_candidates: int | None = None,
 ) -> list[list[ComponentPlacement]]:
     """Align distinct owner families, optionally recentering the whole layout."""
+    if max_candidates is not None and max_candidates <= 0:
+        return []
     excluded = {"connector", "usb", "debug", "rf", "passive"}
     roots = [placement for placement in state if not placement.parent_ref and placement.category not in excluded]
     families: list[tuple[str, list[int], tuple[float, float], tuple[float, float, float, float]]] = []
@@ -2357,6 +2468,8 @@ def _family_alignment_candidates(
         )
         spread = max(0.0, channel - gap) / 2
         for fraction in (0.5, 1.0):
+            if max_candidates is not None and len(candidates) >= max_candidates:
+                return candidates
             candidate = [replace(placement) for placement in state]
             shift = delta * fraction / 2
             for index in first_members_indices:
@@ -2387,6 +2500,8 @@ def _family_alignment_candidates(
             candidates.append(candidate)
 
             if can_recenter:
+                if max_candidates is not None and len(candidates) >= max_candidates:
+                    return candidates
                 center_x, center_y = _courtyard_envelope_center(candidate)
                 dx = config.board_width_mm / 2 - center_x
                 dy = config.board_height_mm / 2 - center_y
@@ -2405,10 +2520,16 @@ def _refine_placement(
     plan: _ConstraintPlan,
     *,
     skip_worse_hard_defects: bool = True,
+    evaluation_budget: int | None = None,
 ) -> tuple[list[ComponentPlacement], int]:
     """Polish legal candidates with deterministic component and block moves."""
+    if evaluation_budget is not None and (
+        isinstance(evaluation_budget, bool) or not isinstance(evaluation_budget, int) or evaluation_budget < 0
+    ):
+        raise ValueError("evaluation_budget must be a non-negative integer or None")
     rank = _placement_rank(state, config, pairs, plan)
     evaluations = 0
+    budget_exhausted = False
 
     def score_candidate(candidate: list[ComponentPlacement]) -> tuple[int, float] | None:
         defects = _placement_hard_defects(candidate, config, plan)
@@ -2420,6 +2541,9 @@ def _refine_placement(
         step = 1.0 / (2**pass_index)
         changed = False
         for index, placement in enumerate(state):
+            if evaluation_budget is not None and evaluations >= evaluation_budget:
+                budget_exhausted = True
+                break
             if placement.constraint_locked:
                 continue
             groups = [[index]]
@@ -2524,6 +2648,9 @@ def _refine_placement(
                         dx, dy = target_x - placement.x, target_y - placement.y
                         moves.extend((dx * fraction, dy * fraction) for fraction in (0.125, 0.25, 0.375))
                 for dx, dy in moves:
+                    if evaluation_budget is not None and evaluations >= evaluation_budget:
+                        budget_exhausted = True
+                        break
                     candidate = [replace(p) for p in state]
                     for i in group:
                         candidate[i].x += dx
@@ -2536,8 +2663,15 @@ def _refine_placement(
                     if candidate_rank < rank:
                         state, rank = candidate, candidate_rank
                         changed = True
+                if budget_exhausted:
+                    break
+            if budget_exhausted:
+                break
             if not placement.rotation_locked:
                 for rotation in (90, 180, 270):
+                    if evaluation_budget is not None and evaluations >= evaluation_budget:
+                        budget_exhausted = True
+                        break
                     candidate = [replace(p) for p in state]
                     candidate[index].rotation = (state[index].rotation + rotation) % 360
                     evaluations += 1
@@ -2547,7 +2681,17 @@ def _refine_placement(
                     if candidate_rank < rank:
                         state, rank = candidate, candidate_rank
                         changed = True
-        for candidate in _family_alignment_candidates(state, config):
+            if budget_exhausted:
+                break
+        if budget_exhausted:
+            break
+        remaining_budget = None if evaluation_budget is None else evaluation_budget - evaluations
+        for candidate in _family_alignment_candidates(
+            state, config, max_candidates=remaining_budget
+        ):
+            if evaluation_budget is not None and evaluations >= evaluation_budget:
+                budget_exhausted = True
+                break
             evaluations += 1
             candidate_rank = score_candidate(candidate)
             if candidate_rank is None:
@@ -2672,22 +2816,36 @@ def optimize_placement(
     # Keep the legal initial layout as a fallback. Every trial is compared
     # after legalization, so a cheaper but physically worse layout cannot win.
     initial_state = state
-    baseline, baseline_moves = _legalize_overlaps(_quantize_state(state), config, constraint_plan)
-    baseline = _quantize_state(baseline)
+    original_baseline, original_baseline_moves = _legalize_overlaps(
+        _quantize_state(state), config, constraint_plan
+    )
+    original_baseline = _quantize_state(original_baseline)
+    original_baseline_rank = _placement_rank(original_baseline, config, connectivity_pairs, constraint_plan)
+    relaxed, relaxed_counts = _topology_relaxed_seed(
+        original_baseline, connectivity_pairs, config, constraint_plan, passes=4, blend=0.5
+    )
+    relaxed, relaxed_moves = _legalize_overlaps(_quantize_state(relaxed), config, constraint_plan)
+    relaxed = _quantize_state(relaxed)
+    relaxed_rank = _placement_rank(relaxed, config, connectivity_pairs, constraint_plan)
+    topology_seed_accepted = relaxed_rank < original_baseline_rank
+    baseline = relaxed if topology_seed_accepted else original_baseline
+    baseline_moves = relaxed_moves if topology_seed_accepted else original_baseline_moves
+    baseline_rank = relaxed_rank if topology_seed_accepted else original_baseline_rank
     initial_cost = _total_cost(initial_state, config, connectivity_pairs, constraint_plan)
     winner = baseline
-    winner_rank = _placement_rank(winner, config, connectivity_pairs, constraint_plan)
+    winner_rank = baseline_rank
     winner_index, winner_moves = 0, baseline_moves
     trials = [
         {
             "candidate": 0,
-            "kind": "legalized_baseline",
-            "defects": winner_rank[0],
-            "cost": round(winner_rank[1], 2),
+            "kind": "topology_relaxed_seed" if topology_seed_accepted else "legalized_baseline",
+            "defects": baseline_rank[0],
+            "cost": round(baseline_rank[1], 2),
             "iterations": 0,
         }
     ]
     refinement_evaluations = 0
+    refinement_evaluation_budgets: list[int] = []
     restarts = min(config.restarts, config.iterations)
     seed_rng = random.Random(config.seed)
     for restart in range(restarts):
@@ -2709,12 +2867,15 @@ def optimize_placement(
                     best_state, best_cost = state, current_cost
             temp *= config.cooling_rate**restarts
         candidate, moved = _legalize_overlaps(_quantize_state(best_state), config, constraint_plan)
+        refinement_budget = max(512, budget)
         candidate, evaluations = _refine_placement(
             _quantize_state(candidate),
             config,
             connectivity_pairs,
             constraint_plan,
+            evaluation_budget=refinement_budget,
         )
+        refinement_evaluation_budgets.append(refinement_budget)
         refinement_evaluations += evaluations
         rank = _placement_rank(candidate, config, connectivity_pairs, constraint_plan)
         trials.append(
@@ -2723,6 +2884,8 @@ def optimize_placement(
                 "kind": "annealed",
                 "seed": trial_seed,
                 "iterations": budget,
+                "refinement_evaluation_budget": refinement_budget,
+                "refinement_evaluations": evaluations,
                 "defects": rank[0],
                 "cost": round(rank[1], 2),
             }
@@ -2743,7 +2906,23 @@ def optimize_placement(
         "selected_candidate": winner_index,
         "restarts": restarts,
         "iteration_budget": config.iterations,
+        "refinement_evaluation_budgets": refinement_evaluation_budgets,
         "refinement_evaluations": refinement_evaluations,
+        "topology_seed": {
+            "passes": 4,
+            "blend": 0.5,
+            **relaxed_counts,
+            "accepted": topology_seed_accepted,
+            "fallback_baseline_rank": {
+                "hard_defects": original_baseline_rank[0],
+                "cost": round(original_baseline_rank[1], 2),
+            },
+            "candidate_rank": {
+                "hard_defects": relaxed_rank[0],
+                "cost": round(relaxed_rank[1], 2),
+            },
+            "legalization_moves": relaxed_moves,
+        },
         "candidates": trials,
     }
     result["routing_estimate"] = {
