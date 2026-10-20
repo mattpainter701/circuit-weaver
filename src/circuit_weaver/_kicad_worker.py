@@ -12,6 +12,91 @@ _SILK_EDGE_MARGIN_MM = 0.4
 _SILK_SEARCH_STEP_MM = 0.5
 
 
+def _native_is_roundrect(pad, pcbnew):
+    try:
+        return int(pad.GetShape()) == int(pcbnew.PAD_SHAPE_ROUNDRECT)
+    except (AttributeError, RuntimeError, TypeError, ValueError, OverflowError):
+        return False
+
+
+def _native_roundrect_radius_ratio(pad, pcbnew):
+    """Return a validated native roundrect ratio, or None when unavailable."""
+    try:
+        shape = int(pad.GetShape())
+        roundrect = int(pcbnew.PAD_SHAPE_ROUNDRECT)
+        if shape != roundrect:
+            return None
+        getter = getattr(pad, "GetRoundRectRadiusRatio", None)
+        if not callable(getter):
+            getter = getattr(pad, "GetRoundrectRadiusRatio", None)
+        if not callable(getter):
+            return None
+        ratio = float(getter())
+        return ratio if math.isfinite(ratio) and 0.0 <= ratio <= 0.5 else None
+    except (AttributeError, RuntimeError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def _native_surface_shape_known(pad, pcbnew):
+    """Known solid occupancy geometry, separate from legacy known_shape."""
+    try:
+        shape = int(pad.GetShape())
+        ordinary = {
+            int(getattr(pcbnew, name)) for name in (
+                "PAD_SHAPE_CIRCLE", "PAD_SHAPE_RECT", "PAD_SHAPE_OVAL")
+            if hasattr(pcbnew, name)
+        }
+        return shape in ordinary or _native_roundrect_radius_ratio(pad, pcbnew) is not None
+    except (AttributeError, RuntimeError, TypeError, ValueError, OverflowError):
+        return False
+
+
+def _opposite_courtyard_state(footprint, pcbnew):
+    """Return (known, present) for the courtyard on the other PCB surface."""
+    try:
+        layer = pcbnew.F_CrtYd if footprint.GetLayer() == pcbnew.B_Cu else pcbnew.B_CrtYd
+        courtyard = footprint.GetCourtyard(layer)
+        polygon_present = not courtyard.IsEmpty()
+        graphics = list(footprint.GraphicalItems())
+        graphics_on_layer = [item for item in graphics if int(item.GetLayer()) == int(layer)]
+        return True, polygon_present or bool(graphics_on_layer)
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return False, None
+
+
+def _native_copper_layer_inventory(board, pcbnew):
+    """Return the enabled copper stack and whether the API inventory is complete."""
+    known_ids, known_complete = _native_known_copper_layer_inventory(pcbnew)
+    try:
+        stack = board.GetEnabledLayers().CuStack()
+        seq = getattr(stack, "Seq", None)
+        values = seq() if callable(seq) else stack
+        layer_ids = sorted(set(int(layer) for layer in values))
+        complete = (known_complete
+                    and len(layer_ids) == int(board.GetCopperLayerCount())
+                    and set(layer_ids) <= set(known_ids)
+                    and {int(pcbnew.F_Cu), int(pcbnew.B_Cu)} <= set(known_ids))
+        return layer_ids, complete
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return [], False
+
+
+def _native_known_copper_layer_inventory(pcbnew):
+    """Return all copper IDs, proving enum symbols match KiCad's full copper mask."""
+    try:
+        enum_ids = {
+            int(getattr(pcbnew, name))
+            for name in dir(pcbnew)
+            if (name in {"F_Cu", "B_Cu"} or (name.startswith("In") and name.endswith("_Cu")))
+            and isinstance(getattr(pcbnew, name, None), int)
+        }
+        all_copper_ids = sorted(set(int(layer) for layer in pcbnew.LSET.AllCuMask().Seq()))
+        complete = bool(all_copper_ids) and set(all_copper_ids) == enum_ids
+        return all_copper_ids, complete
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return [], False
+
+
 def _identity(board):
     result = {}
     for footprint in board.GetFootprints():
@@ -161,6 +246,11 @@ def _rectangular_outline_bounds_iu(edges, pcbnew):
 
 def _inspect(board, pcbnew):
     footprints = []
+    copper_layer_ids, copper_layer_inventory_complete = _native_copper_layer_inventory(board, pcbnew)
+    known_copper_layer_ids, known_copper_layer_inventory_complete = (
+        _native_known_copper_layer_inventory(pcbnew)
+    )
+    known_copper_layer_id_set = set(known_copper_layer_ids)
     for footprint in board.GetFootprints():
         position = footprint.GetPosition()
         rotation = footprint.GetOrientationDegrees()
@@ -173,6 +263,7 @@ def _inspect(board, pcbnew):
         for pad in footprint.Pads():
             try:
                 layers = sorted(int(layer) for layer in pad.GetLayerSet().Seq())
+                copper_layers = sorted(set(layers) & known_copper_layer_id_set)
                 local_orientation = (float(pad.GetOrientationDegrees()) - float(rotation)) % 360.0
                 pad_geometry.append({
                     "number": pad.GetNumber(),
@@ -183,6 +274,7 @@ def _inspect(board, pcbnew):
                     "drill_iu": [int(pad.GetDrillSize().x), int(pad.GetDrillSize().y)],
                     "drill_shape": int(pad.GetDrillShape()),
                     "layers": layers,
+                    "copper_layers": copper_layers,
                     "local_orientation_deg": round(local_orientation, 6),
                     "offset_iu": [int(pad.GetOffset().x), int(pad.GetOffset().y)],
                     "local_position_iu": [
@@ -196,10 +288,14 @@ def _inspect(board, pcbnew):
                             "PAD_SHAPE_CIRCLE", "PAD_SHAPE_RECT", "PAD_SHAPE_OVAL")
                         if hasattr(pcbnew, name)
                     },
+                    "native_roundrect": _native_is_roundrect(pad, pcbnew),
+                    "roundrect_radius_ratio": _native_roundrect_radius_ratio(pad, pcbnew),
+                    "surface_shape_known": _native_surface_shape_known(pad, pcbnew),
                 })
             except (AttributeError, TypeError, ValueError):
                 pad_geometry.append({"number": pad.GetNumber(), "net": pad.GetNetname(),
-                                     "known_shape": False})
+                                     "known_shape": False, "surface_shape_known": False,
+                                     "native_roundrect": False, "roundrect_radius_ratio": None})
         fields = [footprint.Reference(), footprint.Value(), *list(footprint.GetFields())]
         field_state = []
         seen_fields = set()
@@ -227,6 +323,21 @@ def _inspect(board, pcbnew):
         courtyard_layer = pcbnew.B_CrtYd if footprint.GetLayer() == pcbnew.B_Cu else pcbnew.F_CrtYd
         courtyard = footprint.GetCourtyard(courtyard_layer)
         box = courtyard.BBox() if not courtyard.IsEmpty() else footprint.GetBoundingBox(False, False)
+        # Two-sided placement is permitted only when absence is explicit.
+        opposite_courtyard_known, opposite_courtyard_present = _opposite_courtyard_state(
+            footprint, pcbnew
+        )
+        native_surface_side = (
+            "back" if footprint.GetLayer() == pcbnew.B_Cu
+            else "front" if footprint.GetLayer() == pcbnew.F_Cu
+            else None
+        )
+        try:
+            native_footprint_is_smd = (
+                int(footprint.GetAttributes()) == int(pcbnew.FP_SMD)
+            )
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            native_footprint_is_smd = None
         # Enclose geometry about the footprint origin, including off-center
         # THT connectors; a width/height alone cannot describe such parts.
         width = 2 * max(abs(box.GetX() - position.x), abs(box.GetRight() - position.x))
@@ -250,12 +361,21 @@ def _inspect(board, pcbnew):
             "footprint_id": footprint.GetFPIDAsString(), "pad_geometry": pad_geometry,
             "x": pcbnew.ToMM(position.x), "y": pcbnew.ToMM(position.y), "rotation": rotation,
             "layer": "back" if footprint.GetLayer() == pcbnew.B_Cu else "front",
+            "native_surface_copper_side": native_surface_side,
+            "native_surface_copper_layer_id": int(footprint.GetLayer()),
+            "native_board_copper_layer_ids": sorted(copper_layer_ids),
+            "native_board_copper_layer_inventory_complete": copper_layer_inventory_complete,
+            "native_known_copper_layer_ids": known_copper_layer_ids,
+            "native_known_copper_layer_inventory_complete": known_copper_layer_inventory_complete,
+            "native_footprint_is_smd": native_footprint_is_smd,
             "locked": footprint.IsLocked(), "reference_locked": reference_field.IsLocked(),
             "width": pcbnew.ToMM(width), "height": pcbnew.ToMM(height),
             "courtyard_width": pcbnew.ToMM(courtyard_width),
             "courtyard_height": pcbnew.ToMM(courtyard_height),
             "courtyard_center_x": pcbnew.ToMM(courtyard_center_x),
             "courtyard_center_y": pcbnew.ToMM(courtyard_center_y),
+            "native_opposite_courtyard_known": opposite_courtyard_known,
+            "native_opposite_courtyard_present": opposite_courtyard_present,
             "reference_size_mm": reference_size_mm,
             "pads": pads,
         })

@@ -61,11 +61,27 @@ class KiCadFootprintLibrary:
         roots: list[Path] = []
         if root:
             roots.append(Path(root))
-        env = os.environ.get("KICAD_FOOTPRINT_DIR") or os.environ.get("KICAD8_FOOTPRINT_DIR")
-        if env:
-            roots.append(Path(env))
+        for name in (
+            "KICAD_FOOTPRINT_DIR",
+            "KICAD10_FOOTPRINT_DIR",
+            "KICAD9_FOOTPRINT_DIR",
+            "KICAD8_FOOTPRINT_DIR",
+        ):
+            env = os.environ.get(name)
+            if env:
+                roots.append(Path(env))
         roots.extend(_KICAD_FOOTPRINT_PATHS.get(platform.system(), []))
-        return [p for p in roots if p.is_dir()]
+
+        existing: list[Path] = []
+        seen: set[str] = set()
+        for candidate in roots:
+            if not candidate.is_dir():
+                continue
+            key = os.path.normcase(os.path.abspath(candidate))
+            if key not in seen:
+                seen.add(key)
+                existing.append(candidate)
+        return existing
 
     @property
     def roots(self) -> list[Path]:

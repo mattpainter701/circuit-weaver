@@ -215,6 +215,18 @@ class ComponentPlacement:
     native_footprint_id: str = ""
     native_pad_geometry: list[dict[str, Any]] | None = None
     native_reference_locked: bool | None = None
+    native_surface_copper_layer_id: int | None = None
+    native_surface_copper_side: str | None = None
+    native_board_copper_layer_ids: list[int] | None = None
+    native_board_copper_layer_inventory_complete: bool | None = None
+    native_known_copper_layer_ids: list[int] | None = None
+    native_known_copper_layer_inventory_complete: bool | None = None
+    native_footprint_is_smd: bool | None = None
+    native_opposite_courtyard_known: bool | None = None
+    native_opposite_courtyard_present: bool | None = None
+    native_surface_cache: tuple[tuple[Any, ...], str | None] | None = field(
+        default=None, repr=False, compare=False
+    )
 
 
 @dataclass
@@ -767,6 +779,29 @@ def _init_placements(
             native_footprint_id=str(getattr(comp, "placement_native_footprint_id", "") or ""),
             native_pad_geometry=getattr(comp, "placement_native_pad_geometry", None),
             native_reference_locked=getattr(comp, "placement_native_reference_locked", None),
+            native_surface_copper_layer_id=getattr(
+                comp, "placement_native_surface_copper_layer_id", None
+            ),
+            native_surface_copper_side=getattr(comp, "placement_native_surface_copper_side", None),
+            native_board_copper_layer_ids=getattr(
+                comp, "placement_native_board_copper_layer_ids", None
+            ),
+            native_board_copper_layer_inventory_complete=getattr(
+                comp, "placement_native_board_copper_layer_inventory_complete", None
+            ),
+            native_known_copper_layer_ids=getattr(
+                comp, "placement_native_known_copper_layer_ids", None
+            ),
+            native_known_copper_layer_inventory_complete=getattr(
+                comp, "placement_native_known_copper_layer_inventory_complete", None
+            ),
+            native_footprint_is_smd=getattr(comp, "placement_native_footprint_is_smd", None),
+            native_opposite_courtyard_known=getattr(
+                comp, "placement_native_opposite_courtyard_known", None
+            ),
+            native_opposite_courtyard_present=getattr(
+                comp, "placement_native_opposite_courtyard_present", None
+            ),
             geometry_status=str(getattr(comp, "placement_geometry_status", "estimated") or "estimated"),
         )
         placements.append(placement)
@@ -775,8 +810,177 @@ def _init_placements(
     return placements
 
 
-def _overlap_area(a: ComponentPlacement, b: ComponentPlacement, gap: float = 0.0) -> float:
+def _proven_native_surface(placement: ComponentPlacement) -> str | None:
+    """Return the physical surface only for complete, native, solid SMD pads.
+
+    The native inspector must explicitly identify the footprint's copper
+    surface, each pad's copper layers, and confirm no opposite-side courtyard.
+    Every pad must be known, non-drilled SMD geometry on that one surface.
+    Missing, mixed, through-hole, NPTH, or otherwise unfamiliar metadata
+    remains blocking.
+    """
+    side = str(placement.layer).lower()
+    surface_layer = placement.native_surface_copper_layer_id
+    native_side = placement.native_surface_copper_side
+    board_copper_layers = placement.native_board_copper_layer_ids
+    board_layer_signature = tuple(board_copper_layers) if isinstance(board_copper_layers, list) else ()
+    known_copper_layers = placement.native_known_copper_layer_ids
+    known_layer_signature = tuple(known_copper_layers) if isinstance(known_copper_layers, list) else ()
+    pads = placement.native_pad_geometry
+    pad_signature = _native_pad_geometry_signature(pads)
+    cached = placement.native_surface_cache
+    cache_key = (
+        side,
+        surface_layer,
+        native_side,
+        board_layer_signature,
+        known_layer_signature,
+        placement.geometry_status,
+        placement.native_footprint_id,
+        placement.native_board_copper_layer_inventory_complete,
+        placement.native_known_copper_layer_inventory_complete,
+        placement.native_footprint_is_smd,
+        placement.native_opposite_courtyard_known,
+        placement.native_opposite_courtyard_present,
+        placement.width,
+        placement.height,
+        pad_signature,
+    )
+    if cached is not None and cached[0] == cache_key:
+        return cached[1]
+
+    def cache(value: str | None) -> str | None:
+        placement.native_surface_cache = (cache_key, value)
+        return value
+
+    if (placement.geometry_status != "board_geometry" or not placement.native_footprint_id
+            or placement.native_footprint_is_smd is not True
+            or placement.native_opposite_courtyard_known is not True
+            or placement.native_opposite_courtyard_present is not False):
+        return cache(None)
+    if (type(surface_layer) is not int or native_side not in {"front", "back"}
+            or native_side != side):
+        return cache(None)
+    if (not isinstance(board_copper_layers, list) or not board_copper_layers
+            or any(type(value) is not int or value < 0 for value in board_copper_layers)
+            or len(set(board_copper_layers)) != len(board_copper_layers)
+            or placement.native_board_copper_layer_inventory_complete is not True
+            or surface_layer not in board_copper_layers):
+        return cache(None)
+    if (not isinstance(known_copper_layers, list) or not known_copper_layers
+            or any(type(value) is not int or value < 0 for value in known_copper_layers)
+            or len(set(known_copper_layers)) != len(known_copper_layers)
+            or placement.native_known_copper_layer_inventory_complete is not True
+            or not set(board_copper_layers) <= set(known_copper_layers)
+            or surface_layer not in known_copper_layers):
+        return cache(None)
+    known_copper_set = set(known_copper_layers)
+    if not isinstance(pads, list) or not pads:
+        return cache(None)
+    if (not math.isfinite(placement.width) or not math.isfinite(placement.height)
+            or placement.width <= 0 or placement.height <= 0):
+        return cache(None)
+    for pad in pads:
+        if not isinstance(pad, dict) or pad.get("surface_shape_known") is not True:
+            return cache(None)
+        if pad.get("known_shape") is not True:
+            ratio = pad.get("roundrect_radius_ratio")
+            if (pad.get("native_roundrect") is not True
+                    or type(ratio) not in (int, float)
+                    or not math.isfinite(float(ratio)) or not 0.0 <= float(ratio) <= 0.5):
+                return cache(None)
+        if type(pad.get("attribute")) is not int or pad["attribute"] != 1:  # pcbnew.PAD_ATTRIB_SMD
+            return cache(None)
+        if (type(pad.get("shape")) is not int or not isinstance(pad.get("number"), str)
+                or not pad["number"]):
+            return cache(None)
+        size = pad.get("size_iu")
+        drill = pad.get("drill_iu")
+        layers = pad.get("layers")
+        if (not isinstance(size, list) or len(size) != 2
+                or any(type(value) is not int or value <= 0 for value in size)):
+            return cache(None)
+        if (not isinstance(drill, list) or len(drill) != 2
+                or any(type(value) is not int or value != 0 for value in drill)):
+            return cache(None)
+        if (not isinstance(layers, list) or not layers
+                or any(type(value) is not int or value < 0 for value in layers)
+                or len(set(layers)) != len(layers)):
+            return cache(None)
+        copper_layers = pad.get("copper_layers")
+        # Include disabled-but-known copper layers in the pad mask. A pad
+        # spanning an inner copper layer remains mixed even when the current
+        # board stack has that layer disabled.
+        actual_copper_layers = sorted(set(layers) & known_copper_set)
+        if (not isinstance(copper_layers, list) or copper_layers != actual_copper_layers
+                or actual_copper_layers != [surface_layer]):
+            return cache(None)
+    return cache(side)
+
+
+def _native_pad_geometry_signature(pads: Any) -> tuple[Any, ...]:
+    """Build a value signature so in-place native-pad mutations invalidate proof."""
+    fields = (
+        "known_shape", "surface_shape_known", "native_roundrect",
+        "roundrect_radius_ratio", "attribute", "shape", "number", "size_iu",
+        "drill_iu", "layers", "copper_layers",
+    )
+
+    def freeze(value: Any) -> Any:
+        if value is None or type(value) in (bool, int, float, str):
+            return (type(value).__name__, value)
+        if isinstance(value, (list, tuple)):
+            return (type(value).__name__, tuple(freeze(item) for item in value))
+        return ("unsupported", type(value).__module__, type(value).__qualname__, repr(value))
+
+    if not isinstance(pads, list):
+        return ("invalid-container", type(pads).__module__, type(pads).__qualname__, repr(pads))
+    return tuple(
+        ("pad", tuple((name, freeze(pad.get(name))) for name in fields))
+        if isinstance(pad, dict)
+        else ("invalid-pad", type(pad).__module__, type(pad).__qualname__, repr(pad))
+        for pad in pads
+    )
+
+
+def _proven_opposite_native_smd_sides(
+    a: ComponentPlacement,
+    b: ComponentPlacement,
+    *,
+    surface_cache: dict[int, str | None] | None = None,
+    a_index: int | None = None,
+    b_index: int | None = None,
+) -> bool:
+    """Prove both native bodies are mounted on distinct PCB surfaces."""
+    if str(a.layer).lower() == str(b.layer).lower():
+        return False
+
+    def proven(placement: ComponentPlacement, index: int | None) -> str | None:
+        if surface_cache is None or index is None:
+            return _proven_native_surface(placement)
+        if index not in surface_cache:
+            surface_cache[index] = _proven_native_surface(placement)
+        return surface_cache[index]
+
+    first_side = proven(a, a_index)
+    second_side = proven(b, b_index)
+    return first_side is not None and second_side is not None and first_side != second_side
+
+
+def _overlap_area(
+    a: ComponentPlacement,
+    b: ComponentPlacement,
+    gap: float = 0.0,
+    *,
+    _surface_cache: dict[int, str | None] | None = None,
+    _a_index: int | None = None,
+    _b_index: int | None = None,
+) -> float:
     """Calculate overlap area between two components (including gap)."""
+    if _proven_opposite_native_smd_sides(
+        a, b, surface_cache=_surface_cache, a_index=_a_index, b_index=_b_index
+    ):
+        return 0.0
     aw, ah = _effective_dimensions(a)
     bw, bh = _effective_dimensions(b)
     # Split the requested edge-to-edge gap between the two courtyards.
@@ -832,6 +1036,9 @@ def _overlapping_pairs(
     active: dict[int, tuple[float, float, float, float, int, ComponentPlacement]] = {}
     expiry: list[tuple[float, int]] = []
     pairs: list[tuple[int, int, float]] = []
+    # Keep proof reuse local to this unchanged placement sweep. Direct geometry
+    # calls continue to validate current native pad contents on every call.
+    surface_cache: dict[int, str | None] = {}
     for box in boxes:
         left, right, top, bottom, index, placement = box
         while expiry and expiry[0][0] <= left:
@@ -841,8 +1048,12 @@ def _overlapping_pairs(
             other = active[other_index]
             if bottom <= other[2] or top >= other[3]:
                 continue
-            first, second = (other[5], placement) if other_index < index else (placement, other[5])
-            area = _overlap_area(first, second, gap)
+            first_index, second_index = sorted((other_index, index))
+            first, second = placements[first_index], placements[second_index]
+            area = _overlap_area(
+                first, second, gap, _surface_cache=surface_cache,
+                _a_index=first_index, _b_index=second_index,
+            )
             if area > 0:
                 pairs.append((min(index, other_index), max(index, other_index), area))
         active[index] = box
@@ -879,6 +1090,11 @@ def _rectangle_clearance(a: ComponentPlacement, b: ComponentPlacement) -> float:
     return math.hypot(dx, dy)
 
 
+def _support_body_clearance_applies(a: ComponentPlacement, b: ComponentPlacement) -> bool:
+    """Whether 2D body-spacing applies to this pair of board surfaces."""
+    return not _proven_opposite_native_smd_sides(a, b)
+
+
 def _is_parent_support_pair(a: ComponentPlacement, b: ComponentPlacement) -> bool:
     return a.parent_ref == b.ref or b.parent_ref == a.ref
 
@@ -910,6 +1126,8 @@ def _cost_support_body_clearance(placements: list[ComponentPlacement], config: P
             continue
         parent = by_ref.get(support.parent_ref)
         if parent is None:
+            continue
+        if not _support_body_clearance_applies(support, parent):
             continue
         clearance = _rectangle_clearance(support, parent)
         if clearance < config.support_body_clearance_mm:
@@ -2082,6 +2300,7 @@ def _legalize_overlaps(
                     return False
                 if (
                     _is_parent_support_pair(placement, other)
+                    and _support_body_clearance_applies(placement, other)
                     and _rectangle_clearance(placement, other) < config.support_body_clearance_mm
                 ):
                     return False
@@ -2281,7 +2500,10 @@ def _placement_hard_defects(
     for p in state:
         if p.parent_ref:
             parent = by_ref.get(p.parent_ref)
-            defects += parent is None or _rectangle_clearance(p, parent) + 0.001 < config.support_body_clearance_mm
+            defects += parent is None or (
+                _support_body_clearance_applies(p, parent)
+                and _rectangle_clearance(p, parent) + 0.001 < config.support_body_clearance_mm
+            )
     defects += len(_constraint_evaluation(state, config, plan)["violations"])
     return int(defects)
 
@@ -3370,7 +3592,8 @@ def _build_result(
                         }
                     )
                 clearance = _rectangle_clearance(first, parent)
-                if clearance + 0.001 < config.support_body_clearance_mm:
+                if (_support_body_clearance_applies(first, parent)
+                        and clearance + 0.001 < config.support_body_clearance_mm):
                     support_body_violations.append(
                         {
                             "support_ref": first.ref,

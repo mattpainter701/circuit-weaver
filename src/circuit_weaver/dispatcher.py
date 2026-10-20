@@ -45,6 +45,7 @@ from .design_loader import (
 )
 from .design_logger import DesignLogger
 from .generator import _contained_output_path, _validate_project_name, generate_from_components
+from .primitives import qualify_footprint
 from .project_spec import _parse_yaml
 from .subcircuits.base import BoundaryPort, DataDrivenTemplate, get_default_registry
 from .validator import run_validation_checks
@@ -730,7 +731,12 @@ def _validate_component_resolution(
                     message="Resolved block has no footprint binding",
                 )
             )
-        elif primary.footprint and fp_lib and fp_lib.roots and not fp_lib.footprint_exists(primary.footprint):
+        elif (
+            primary.footprint
+            and fp_lib
+            and fp_lib.roots
+            and not fp_lib.footprint_exists(qualify_footprint(primary.footprint))
+        ):
             from .footprint_lib import custom_footprint_suggestion, official_kicad_footprint_url
 
             roots = ", ".join(str(root) for root in fp_lib.roots[:2])

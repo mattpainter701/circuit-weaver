@@ -393,6 +393,17 @@ locked footprints and board sides, uses real courtyards and rotated pad location
 and checks physical DRC. Routing publishes the final board only after KiCad DRC
 passes, preserving project rules. See [setup and limits](docs/routing-placement-search.md).
 
+For custom footprint installations, set `KICAD_FOOTPRINT_DIR` or the matching
+`KICAD10_FOOTPRINT_DIR`, `KICAD9_FOOTPRINT_DIR`, or `KICAD8_FOOTPRINT_DIR`.
+An explicit library root takes precedence. Known bare package names use the same
+library-prefix mapping during validation and generation; custom references must
+still resolve exactly.
+
+Native placement permits overlapping front/back SMD body projections only when
+the pad and copper-layer inventory proves separate surfaces and no opposite-side
+courtyard is present. Through-hole and unknown geometry remain blocking. This
+does not establish 3D enclosure clearance or signal integrity.
+
 For imported boards with a legacy `.pro` project, convert and verify the project
 rules in KiCad before placement, routing, or copper edits. These operations
 require a sibling `.kicad_pro` when `.pro` exists; upgrading the PCB format alone

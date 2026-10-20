@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Resolve known bare footprint names consistently during validation and generation, and discover custom libraries through the KiCad 9/10 footprint-directory variables while preserving exact library matching.
+- Distinguish native SMD bodies on opposite PCB sides during placement. Require complete pad and copper-layer evidence with no opposite-side courtyard; keep through-hole, unknown geometry, mechanical constraints and native DRC blocking. Reuse surface proofs only within an unchanged overlap sweep.
 - Refuse automatic board mutations and routing exports when only a legacy `.pro` project exists, requiring project-rule conversion rather than silently staging without those authored settings. Keep read-only inspection and previews available.
 - Use actual rectangular Edge.Cuts centerlines for native placement bounds, preserving board dimensions and offsets regardless of outline drawing thickness.
 - Initialize the Windows native helpers' wx application before loading boards, preventing crashes or hangs reproduced on a 459-footprint motherboard reference. Preserve hidden operation and the existing geometry, identity and DRC checks.

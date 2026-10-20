@@ -356,6 +356,31 @@ def _place_pcb_once(
             component.placement_geometry_status = "board_geometry"
             component.placement_reference_size_mm = item.get("reference_size_mm")
             component.placement_native_footprint_id = item.get("footprint_id")
+            component.placement_native_surface_copper_layer_id = item.get(
+                "native_surface_copper_layer_id"
+            )
+            component.placement_native_surface_copper_side = item.get(
+                "native_surface_copper_side"
+            )
+            component.placement_native_board_copper_layer_ids = item.get(
+                "native_board_copper_layer_ids"
+            )
+            component.placement_native_board_copper_layer_inventory_complete = item.get(
+                "native_board_copper_layer_inventory_complete"
+            )
+            component.placement_native_known_copper_layer_ids = item.get(
+                "native_known_copper_layer_ids"
+            )
+            component.placement_native_known_copper_layer_inventory_complete = item.get(
+                "native_known_copper_layer_inventory_complete"
+            )
+            component.placement_native_footprint_is_smd = item.get("native_footprint_is_smd")
+            component.placement_native_opposite_courtyard_known = item.get(
+                "native_opposite_courtyard_known"
+            )
+            component.placement_native_opposite_courtyard_present = item.get(
+                "native_opposite_courtyard_present"
+            )
             inspected_pad_geometry = item.get("pad_geometry") or []
             inspected_pads = item.get("pads") or []
             # Retain each native pad's net even if one geometry accessor fails;
@@ -365,12 +390,17 @@ def _place_pcb_once(
                  "number": pad.get("number", f"__missing_pad_{index}"),
                  "net": pad.get("net", ""),
                  "known_shape": bool(index < len(inspected_pad_geometry)
-                                      and inspected_pad_geometry[index].get("known_shape") is True)}
+                                      and inspected_pad_geometry[index].get("known_shape") is True),
+                 "surface_shape_known": bool(index < len(inspected_pad_geometry)
+                                              and inspected_pad_geometry[index].get("surface_shape_known") is True),
+                 "native_roundrect": bool(index < len(inspected_pad_geometry)
+                                           and inspected_pad_geometry[index].get("native_roundrect") is True)}
                 for index, pad in enumerate(inspected_pads)
             ]
             if len(inspected_pad_geometry) != len(inspected_pads):
                 component.placement_native_pad_geometry.append({
                     "number": "__inventory_mismatch__", "net": "", "known_shape": False,
+                    "surface_shape_known": False, "native_roundrect": False,
                 })
             component.placement_native_reference_locked = item.get("reference_locked")
             if design_component:
