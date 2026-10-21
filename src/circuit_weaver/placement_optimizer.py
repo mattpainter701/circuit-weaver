@@ -336,6 +336,16 @@ def _constraint_target(raw: dict[str, Any]) -> str:
     return str(raw.get("target") or raw.get("ref") or "").strip()
 
 
+def _is_board_dimension_constraint(raw: dict[str, Any]) -> bool:
+    """Recognize legacy/placement outline declarations, excluding keepouts."""
+    if _constraint_kind(raw) not in {"", "placement"}:
+        return False
+    target = _constraint_target(raw).lower()
+    nested = raw.get("board") if isinstance(raw.get("board"), dict) else {}
+    explicit_board_keys = "board_width_mm" in raw or "board_height_mm" in raw or bool(nested)
+    return target in _BOARD_TARGETS or explicit_board_keys
+
+
 def _position_values(raw: dict[str, Any]) -> tuple[float | None, float | None]:
     nested = raw.get("position") if isinstance(raw.get("position"), dict) else {}
     x = _finite_number(raw.get("x_mm", raw.get("x", nested.get("x_mm", nested.get("x")))))
@@ -378,11 +388,10 @@ def _board_dimensions(
     width = float(config.board_width_mm)
     height = float(config.board_height_mm)
     for raw in constraints:
+        if not isinstance(raw, dict) or not _is_board_dimension_constraint(raw):
+            continue
         target = _constraint_target(raw).lower()
         nested = raw.get("board") if isinstance(raw.get("board"), dict) else {}
-        explicit_board_keys = "board_width_mm" in raw or "board_height_mm" in raw or bool(nested)
-        if target not in _BOARD_TARGETS and not explicit_board_keys:
-            continue
         candidate_width = _finite_number(
             raw.get(
                 "board_width_mm",
@@ -468,15 +477,18 @@ def _build_constraint_plan(
         target = _constraint_target(raw)
         target_lower = target.lower()
         if kind not in _PLACEMENT_CONSTRAINT_KINDS:
-            plan.deferred.append(
-                {
-                    "index": index,
-                    "kind": kind or "unspecified",
-                    "target": target,
-                    "reason": "Constraint belongs to a non-placement stage.",
-                }
-            )
-            continue
+            if kind == "" and _is_board_dimension_constraint(raw):
+                kind = "placement"
+            else:
+                plan.deferred.append(
+                    {
+                        "index": index,
+                        "kind": kind or "unspecified",
+                        "target": target,
+                        "reason": "Constraint belongs to a non-placement stage.",
+                    }
+                )
+                continue
 
         has_board_keys = (
             target_lower in _BOARD_TARGETS
@@ -484,7 +496,7 @@ def _build_constraint_plan(
             or "board_height_mm" in raw
             or isinstance(raw.get("board"), dict)
         )
-        if kind == "placement" and has_board_keys:
+        if kind in {"", "placement"} and has_board_keys:
             # Already recorded by _board_dimensions. A board entry may also
             # carry clearance policy, which is applied below.
             edge_clearance = _finite_number(raw.get("edge_clearance_mm"))

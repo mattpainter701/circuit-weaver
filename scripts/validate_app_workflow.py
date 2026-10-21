@@ -49,8 +49,20 @@ def _finite_number(value) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _is_board_dimension_constraint(raw: dict) -> bool:
+    """Identify placement-stage outline declarations, excluding keepout geometry."""
+    kind = str(raw.get("kind") or raw.get("type") or "").strip().lower()
+    if kind not in {"", "placement"}:
+        return False
+    target = str(raw.get("target") or raw.get("ref") or "").strip().lower()
+    nested = raw.get("board") if isinstance(raw.get("board"), dict) else {}
+    return target in _BOARD_TARGETS or (
+        "board_width_mm" in raw or "board_height_mm" in raw or bool(nested)
+    )
+
+
 def _design_board_size(design: dict, default: tuple[float, float] = (80.0, 60.0)) -> tuple[float, float]:
-    """Resolve board dimensions with the same aliases and precedence as placement."""
+    """Resolve placement-stage board dimensions, never keepout rectangles."""
     width, height = default
     constraints = design.get("pcb_constraints")
     if not isinstance(constraints, list):
@@ -58,13 +70,10 @@ def _design_board_size(design: dict, default: tuple[float, float] = (80.0, 60.0)
     for raw in constraints:
         if not isinstance(raw, dict):
             continue
+        if not _is_board_dimension_constraint(raw):
+            continue
         target = str(raw.get("target") or raw.get("ref") or "").strip().lower()
         nested = raw.get("board") if isinstance(raw.get("board"), dict) else {}
-        explicit_board_keys = (
-            "board_width_mm" in raw or "board_height_mm" in raw or bool(nested)
-        )
-        if target not in _BOARD_TARGETS and not explicit_board_keys:
-            continue
         candidate_width = _finite_number(raw.get(
             "board_width_mm",
             nested.get("width_mm", raw.get("width_mm") if target in _BOARD_TARGETS else None),
@@ -91,13 +100,10 @@ def _apply_size_overrides(design: dict, width: float, height: float) -> None:
     for raw in constraints:
         if not isinstance(raw, dict):
             continue
+        if not _is_board_dimension_constraint(raw):
+            continue
         target = str(raw.get("target") or raw.get("ref") or "").strip().lower()
         nested = raw.get("board") if isinstance(raw.get("board"), dict) else None
-        explicit_board_keys = (
-            "board_width_mm" in raw or "board_height_mm" in raw or bool(nested)
-        )
-        if target not in _BOARD_TARGETS and not explicit_board_keys:
-            continue
 
         if "board_width_mm" in raw:
             raw["board_width_mm"] = width

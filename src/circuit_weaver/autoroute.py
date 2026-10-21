@@ -372,6 +372,23 @@ def _validate_dsn_semantics(root: str) -> tuple[dict[str, Any] | None, str | Non
     if not list(_iter_sexpr_blocks(placement, "place")):
         return None, "DSN placement section contains no placed component instances"
 
+    # A DSN placement identity is the placed reference, independent of which
+    # component/image group contains the place record.  Decode using the same
+    # quote-aware tokenizer as the rest of the Specctra parser so quoted and
+    # unquoted spellings of the same reference compare identically.
+    placed_references: set[str] = set()
+    for component_block in _iter_sexpr_blocks(placement, "component"):
+        for place_block in _iter_sexpr_blocks(component_block, "place"):
+            place_tokens = _payload_tokens(_block_payload(place_block, "place"))
+            if not place_tokens:
+                return None, "DSN placement contains a placed component without a reference"
+            reference = _decode_specctra_token(place_tokens[0])
+            if not reference:
+                return None, "DSN placement contains a placed component without a reference"
+            if reference in placed_references:
+                return None, f"DSN placement contains duplicate footprint reference {reference!r}"
+            placed_references.add(reference)
+
     network = network_blocks[0]
     net_blocks = list(_iter_sexpr_blocks(network, "net"))
     if not net_blocks:

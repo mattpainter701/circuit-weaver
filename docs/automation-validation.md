@@ -160,6 +160,17 @@ Resolve the root schematic from the generation result's `root_schematic` field;
 do not guess its filename. `build-pcb` exports the schematic's netlist through
 KiCad, loads the named local library footprints, and requires exact pin/pad
 number reconciliation. It never invents missing footprints or infers pin swaps.
+Project-local footprint nicknames may map to a different library directory using
+literal `${KIPRJMOD}/relative/path.pretty` entries in the source project's
+`fp-lib-table`. Explicit mappings take precedence over global libraries; missing,
+duplicate, unsupported or escaping mappings fail rather than selecting a global
+lookalike. Other URI variables and remote library types are unsupported here.
+
+Forward generation currently creates a two-copper-layer rectangular prototype
+with front-side footprints. Importing a multilayer schematic does not reproduce
+its vendor PCB stackup, BGA escape routing, DDR timing or controlled impedance.
+These require separate layout capabilities and engineering verification.
+
 The initial rectangular board uses `--width`/`--height` in millimeters and is
 unrouted. The demo explicitly requests 0.127 mm default clearance because the
 USB connector has 0.15 mm pad gaps; the native 0.2 mm default would reject it.
@@ -169,7 +180,8 @@ edge/orientation constraint. The runner uses those dimensions (or explicit
 `--width`/`--height`) and passes the matching design into native placement.
 Explicit dimension overrides update only the copied demo design, including its
 placement constraints, so generation, board construction, and placement use
-the same outline. Evidence retains the original and effective sizes, overrides,
+the same outline. Keepout rectangles retain their authored dimensions and do
+not define the board outline. Evidence retains the original and effective sizes, overrides,
 and copied-design hash. A single-axis override keeps the other declared dimension.
 Functional ownership and edge intent survive placement, while native reference
 cleanup is measured after saving and reloading. Layout review warnings and

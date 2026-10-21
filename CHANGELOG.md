@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Keep board-outline dimensions separate from keepout rectangles during workflow sizing, explicit size overrides and placement normalization. Preserve authored keepout geometry.
+- Resolve project-local KiCad footprint nicknames through literal `${KIPRJMOD}/...` entries in the source project's `fp-lib-table`, preserving original library names and rejecting ambiguous or unsupported mappings.
+- Reject duplicate placed footprint references in routing exports before publishing a DSN file.
+- Reject invalid microstrip geometry, nonphysical coupled-line results and impedance targets outside the requested width bracket; verify the width solver's final impedance residual.
 - Improve native decoupling placement by searching position and rotation together around actual supply and return pads. Bound the search within the existing refinement budget, preserve locks and board sides, and require improved placement rank without increasing either local power leg or global power-net spans. Retain native label and DRC gates.
 - Resolve known bare footprint names consistently during validation and generation, and discover custom libraries through the KiCad 9/10 footprint-directory variables while preserving exact library matching.
 - Distinguish native SMD bodies on opposite PCB sides during placement. Require complete pad and copper-layer evidence with no opposite-side courtyard; keep through-hole, unknown geometry, mechanical constraints and native DRC blocking. Reuse surface proofs only within an unchanged overlap sweep.

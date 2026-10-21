@@ -35,6 +35,128 @@ _KICAD_FOOTPRINT_PATHS = {
 }
 
 
+def _parse_kicad_sexp(text: str) -> list:
+    """Parse table data only; never evaluate KiCad expressions."""
+    tokens: list[object] = []
+    position = 0
+    while position < len(text):
+        char = text[position]
+        if char.isspace():
+            position += 1
+            continue
+        if char == ";":
+            newline = text.find("\n", position)
+            position = len(text) if newline < 0 else newline + 1
+            continue
+        if char in "()":
+            tokens.append(char)
+            position += 1
+            continue
+        if char == '"':
+            position += 1
+            value: list[str] = []
+            while position < len(text) and text[position] != '"':
+                if text[position] == "\\":
+                    if position + 1 >= len(text):
+                        raise ValueError("unterminated escape in KiCad footprint library table")
+                    if text[position + 1] in {'"', "\\"}:
+                        value.append(text[position + 1])
+                        position += 2
+                    else:
+                        # Preserve unknown escapes; this keeps unsafe path separators visible.
+                        value.append("\\")
+                        position += 1
+                    continue
+                value.append(text[position])
+                position += 1
+            if position >= len(text):
+                raise ValueError("unterminated quoted string in KiCad footprint library table")
+            position += 1
+            tokens.append(("quoted", "".join(value)))
+            continue
+        atom_start = position
+        while position < len(text) and not text[position].isspace() and text[position] not in '();"':
+            position += 1
+        if atom_start == position:
+            raise ValueError("invalid token in KiCad footprint library table")
+        tokens.append(text[atom_start:position])
+    if not tokens:
+        raise ValueError("empty KiCad footprint library table")
+
+    stack: list[list] = []
+    root: list | None = None
+    for token in tokens:
+        if token == "(":
+            node: list = []
+            if stack:
+                stack[-1].append(node)
+            elif root is None:
+                root = node
+            else:
+                raise ValueError("multiple top-level expressions in KiCad footprint library table")
+            stack.append(node)
+        elif token == ")":
+            if not stack:
+                raise ValueError("unbalanced KiCad footprint library table")
+            stack.pop()
+        else:
+            if not stack:
+                raise ValueError("atom outside KiCad footprint library table")
+            stack[-1].append(token[1] if isinstance(token, tuple) else token)
+    if stack or root is None:
+        raise ValueError("unbalanced KiCad footprint library table")
+    return root
+
+
+def _direct_string(node: list, key: str) -> str | None:
+    fields = [child for child in node if isinstance(child, list) and child and child[0] == key]
+    if len(fields) > 1:
+        raise ValueError(f"duplicate {key!r} field in KiCad footprint library table")
+    if not fields:
+        return None
+    field = fields[0]
+    if len(field) != 2 or not isinstance(field[1], str):
+        raise ValueError(f"malformed {key!r} field in KiCad footprint library table")
+    return field[1]
+
+
+def _project_library_uri(project_root: Path, nickname: str) -> Path | None:
+    table = project_root / "fp-lib-table"
+    if not table.is_file():
+        return None
+    if table.stat().st_size > 1024 * 1024:
+        raise ValueError("KiCad footprint library table exceeds 1 MiB")
+    try:
+        tree = _parse_kicad_sexp(table.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"could not read KiCad footprint library table: {exc}") from exc
+    if not tree or tree[0] != "fp_lib_table":
+        raise ValueError("invalid KiCad footprint library table root")
+    matches = [x for x in tree[1:] if isinstance(x, list) and x and x[0] == "lib"
+               and _direct_string(x, "name") == nickname]
+    if len(matches) > 1:
+        raise ValueError(f"duplicate footprint library nickname in project table: {nickname}")
+    if not matches:
+        return None
+    entry = matches[0]
+    kind, uri = _direct_string(entry, "type"), _direct_string(entry, "uri")
+    if kind != "KiCad":
+        raise ValueError(f"unsupported project footprint library type for {nickname}: {kind!r}")
+    prefix = "${KIPRJMOD}/"
+    if not uri or not uri.startswith(prefix):
+        raise ValueError(f"unsupported project footprint library URI for {nickname}: {uri!r}")
+    relative = uri[len(prefix):]
+    parts = relative.split("/")
+    if (not relative or "\\" in relative or any(x in {"", ".", ".."} for x in parts)
+            or ":" in relative or "${" in relative):
+        raise ValueError(f"unsafe project footprint library URI for {nickname}: {uri!r}")
+    root = project_root.resolve(strict=True)
+    library = root.joinpath(*parts).resolve(strict=False)
+    if not library.is_relative_to(root):
+        raise ValueError(f"project footprint library escapes project root: {uri!r}")
+    return library
+
+
 @dataclass(frozen=True)
 class FootprintGeometry:
     """Real library geometry used by authoritative placement/handoff."""
@@ -52,8 +174,9 @@ class FootprintGeometry:
 class KiCadFootprintLibrary:
     """Resolve KiCad footprint references against local `.pretty` libraries."""
 
-    def __init__(self, root: str | Path | None = None) -> None:
+    def __init__(self, root: str | Path | None = None, *, project_root: str | Path | None = None) -> None:
         self._roots = self._default_roots(root)
+        self._project_root = Path(project_root).resolve() if project_root is not None else None
         self._geometry_cache: dict[tuple[str, str, str], FootprintGeometry] = {}
 
     @staticmethod
@@ -104,6 +227,13 @@ class KiCadFootprintLibrary:
         lib, name = footprint.split(":", 1)
         if not lib or not name or any(token in lib + name for token in ("/", "\\", "..")):
             return None
+        if self._project_root is not None:
+            project_library = _project_library_uri(self._project_root, lib)
+            if project_library is not None:
+                candidate = (project_library / f"{name}.kicad_mod").resolve(strict=False)
+                if not candidate.is_relative_to(self._project_root):
+                    raise ValueError("project footprint file escapes project root")
+                return candidate if candidate.is_file() else None
         rel = Path(f"{lib}.pretty") / f"{name}.kicad_mod"
         for root in self._roots:
             candidate = root / rel

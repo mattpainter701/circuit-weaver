@@ -413,7 +413,7 @@ def schematic_to_pcb(
                     "KiCad schematic netlist export reported annotation errors; "
                     "repair the schematic first"
                 )
-            footprint_library = KiCadFootprintLibrary()
+            footprint_library = KiCadFootprintLibrary(project_root=source.parent)
             model = _parse_netlist(netlist, footprint_library)
             _pack_components(model["components"], float(width_mm), float(height_mm), footprint_library)
             staged_board = staging / target.name
