@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Improve native decoupling placement by searching position and rotation together around actual supply and return pads. Bound the search within the existing refinement budget, preserve locks and board sides, and require improved placement rank without increasing either local power leg or global power-net spans. Retain native label and DRC gates.
 - Resolve known bare footprint names consistently during validation and generation, and discover custom libraries through the KiCad 9/10 footprint-directory variables while preserving exact library matching.
 - Distinguish native SMD bodies on opposite PCB sides during placement. Require complete pad and copper-layer evidence with no opposite-side courtyard; keep through-hole, unknown geometry, mechanical constraints and native DRC blocking. Reuse surface proofs only within an unchanged overlap sweep.
 - Refuse automatic board mutations and routing exports when only a legacy `.pro` project exists, requiring project-rule conversion rather than silently staging without those authored settings. Keep read-only inspection and previews available.

@@ -2741,6 +2741,335 @@ def _family_alignment_candidates(
     return candidates
 
 
+_POWER_SUPPORT_MAX_TARGETS = 16
+_POWER_SUPPORT_MAX_RAW = 128
+_POWER_SUPPORT_MAX_FULL_RANK = 3
+_POWER_SUPPORT_RAYS = tuple((math.cos(math.radians(a)), math.sin(math.radians(a))) for a in range(0, 360, 45))
+_POWER_SUPPORT_ROTATIONS = (0.0, 90.0, 180.0, 270.0)
+
+
+def _power_support_native_maps_complete_unchecked(p: ComponentPlacement) -> bool:
+    if (p.geometry_status != "board_geometry" or not p.native_footprint_id
+            or p.native_board_copper_layer_inventory_complete is not True
+            or p.native_known_copper_layer_inventory_complete is not True
+            or p.native_surface_copper_side not in {"front", "back"}
+            or p.layer.casefold() != p.native_surface_copper_side.casefold()
+            or p.native_surface_copper_layer_id is None
+            or p.native_surface_copper_layer_id not in (p.native_board_copper_layer_ids or [])
+            or p.native_surface_copper_layer_id not in (p.native_known_copper_layer_ids or [])
+            or p.native_footprint_is_smd is not True
+            or not isinstance(p.native_pad_geometry, list) or not p.native_pad_geometry
+            or not isinstance(p.pin_offsets, dict) or not isinstance(p.pin_nets, dict)
+            or not isinstance(p.net_pad_offsets, dict)):
+        return False
+    rows = p.native_pad_geometry
+    numbers = [str(row.get("number", "")) for row in rows if isinstance(row, dict)]
+    if (len(numbers) != len(rows) or not all(numbers) or len(numbers) != len(set(numbers))
+            or set(numbers) != set(p.pin_offsets) or set(numbers) != set(p.pin_nets)):
+        return False
+    frame_delta = None
+    grouped: dict[str, list[tuple[float, float]]] = {}
+    for row in rows:
+        number, net, pos = str(row["number"]), row.get("net"), row.get("local_position_iu")
+        if not isinstance(net, str) or not isinstance(pos, (list, tuple)) or len(pos) != 2:
+            return False
+        if (not isinstance(row.get("copper_layers"), (list, tuple)) or not row["copper_layers"]
+                or p.native_surface_copper_layer_id not in row["copper_layers"]):
+            return False
+        try:
+            native_xy = (float(pos[0]) / 1_000_000.0, float(pos[1]) / 1_000_000.0)
+            offset = p.pin_offsets[number]
+            if not isinstance(offset, (list, tuple)) or len(offset) != 2:
+                return False
+            mapped_xy = (float(offset[0]), float(offset[1]))
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return False
+        if (not all(math.isfinite(value) for value in (*native_xy, *mapped_xy))
+                or p.pin_nets[number] != net):
+            return False
+        delta = (native_xy[0] - mapped_xy[0], native_xy[1] - mapped_xy[1])
+        if frame_delta is None:
+            frame_delta = delta
+        elif max(abs(delta[0] - frame_delta[0]), abs(delta[1] - frame_delta[1])) > 1e-6:
+            return False
+        if net:
+            grouped.setdefault(net, []).append(mapped_xy)
+    declared = {str(net): list(offsets) for net, offsets in p.net_pad_offsets.items() if offsets}
+    if set(declared) != set(grouped):
+        return False
+    for net, expected in grouped.items():
+        remaining = list(declared[net])
+        if len(remaining) != len(expected):
+            return False
+        for x, y in expected:
+            match = next((i for i, point in enumerate(remaining) if len(point) == 2
+                          and abs(float(point[0]) - x) <= 1e-6
+                          and abs(float(point[1]) - y) <= 1e-6), None)
+            if match is None:
+                return False
+            remaining.pop(match)
+    return True
+
+
+def _power_support_native_maps_complete(p: ComponentPlacement) -> bool:
+    """Treat malformed native geometry as unproven instead of raising."""
+    try:
+        return _power_support_native_maps_complete_unchecked(p)
+    except (AttributeError, IndexError, KeyError, OverflowError, TypeError, ValueError):
+        return False
+
+
+def _power_support_state_maps_complete(state: list[ComponentPlacement]) -> bool:
+    """Prove complete physical pad endpoints for global rail/return HPWL."""
+    if not state:
+        return False
+    for placement in state:
+        if (placement.geometry_status != "board_geometry" or not placement.native_footprint_id
+                or placement.native_board_copper_layer_inventory_complete is not True
+                or placement.native_known_copper_layer_inventory_complete is not True
+                or not isinstance(placement.native_board_copper_layer_ids, list)
+                or not isinstance(placement.native_known_copper_layer_ids, list)
+                or not isinstance(placement.native_pad_geometry, list)
+                or not isinstance(placement.pin_offsets, dict)
+                or not isinstance(placement.net_pad_offsets, dict)):
+            return False
+        try:
+            board_layers = set(placement.native_board_copper_layer_ids)
+            known_layers = set(placement.native_known_copper_layer_ids)
+            if (not board_layers or not known_layers or not board_layers <= known_layers
+                    or any(isinstance(layer, bool) or not isinstance(layer, int)
+                           for layer in board_layers | known_layers)):
+                return False
+            rows = placement.native_pad_geometry
+            counts: dict[str, int] = {}
+            grouped_native: dict[str, list[tuple[float, float]]] = {}
+            for row in rows:
+                if not isinstance(row, dict):
+                    return False
+                number = row.get("number")
+                net = row.get("net")
+                pos = row.get("local_position_iu")
+                layers = row.get("copper_layers")
+                if (not isinstance(number, str) or not isinstance(net, str)
+                        or not isinstance(pos, (list, tuple)) or len(pos) != 2
+                        or not isinstance(layers, (list, tuple))):
+                    return False
+                if (any(isinstance(layer, bool) or not isinstance(layer, int) for layer in layers)
+                        or not set(layers) <= known_layers or (net and not set(layers))):
+                    return False
+                native_xy = (float(pos[0]) / 1_000_000.0, float(pos[1]) / 1_000_000.0)
+                if not all(math.isfinite(value) for value in native_xy):
+                    return False
+                if not number and net:
+                    return False
+                counts[number] = counts.get(number, 0) + 1
+                if net:
+                    grouped_native.setdefault(net, []).append(native_xy)
+            unique_numbers = {number for number, count in counts.items() if number and count == 1}
+            if set(placement.pin_offsets) != unique_numbers:
+                return False
+            frame_delta = None
+            for number in sorted(unique_numbers):
+                offset = placement.pin_offsets[number]
+                if not isinstance(offset, (list, tuple)) or len(offset) != 2:
+                    return False
+                mapped_xy = (float(offset[0]), float(offset[1]))
+                row = next(row for row in rows if row["number"] == number)
+                native_xy = tuple(float(value) / 1_000_000.0 for value in row["local_position_iu"])
+                delta = (native_xy[0] - mapped_xy[0], native_xy[1] - mapped_xy[1])
+                if frame_delta is None:
+                    frame_delta = delta
+                elif max(abs(delta[0] - frame_delta[0]), abs(delta[1] - frame_delta[1])) > 1e-6:
+                    return False
+            declared = placement.net_pad_offsets
+            if any(not isinstance(net, str) or not isinstance(points, list) for net, points in declared.items()):
+                return False
+            normalized_declared = {net: points for net, points in declared.items() if points}
+            if set(normalized_declared) != set(grouped_native):
+                return False
+            if grouped_native and frame_delta is None:
+                return False
+            dx, dy = frame_delta or (0.0, 0.0)
+            for net, expected in grouped_native.items():
+                remaining = list(normalized_declared[net])
+                if len(remaining) != len(expected):
+                    return False
+                for x, y in expected:
+                    target = (x - dx, y - dy)
+                    match = next((i for i, point in enumerate(remaining)
+                                  if isinstance(point, (list, tuple)) and len(point) == 2
+                                  and all(math.isfinite(float(value)) for value in point)
+                                  and abs(float(point[0]) - target[0]) <= 1e-6
+                                  and abs(float(point[1]) - target[1]) <= 1e-6), None)
+                    if match is None:
+                        return False
+                    remaining.pop(match)
+        except (KeyError, TypeError, ValueError, OverflowError, StopIteration):
+            return False
+    return True
+
+
+def _power_support_pair(parent: ComponentPlacement, support: ComponentPlacement) -> tuple[str, str] | None:
+    if parent.net_pad_offsets is None or support.net_pad_offsets is None:
+        return None
+    common = {n for n in parent.net_pad_offsets.keys() & support.net_pad_offsets.keys()
+              if parent.net_pad_offsets.get(n) and support.net_pad_offsets.get(n)}
+    rails = sorted(n for n in common if n.upper().startswith(_POWER_NET_PREFIXES) or _is_voltage_rail(n))
+    returns = sorted(n for n in common if n.upper().startswith(_GROUND_NET_PREFIXES))
+    if len(rails) != 1 or len(returns) != 1:
+        return None
+    if len(support.net_pad_offsets[rails[0]]) != 1 or len(support.net_pad_offsets[returns[0]]) != 1:
+        return None
+    return rails[0], returns[0]
+
+
+def _power_support_eligibility(state: list[ComponentPlacement], support: ComponentPlacement,
+                               plan: _ConstraintPlan) -> tuple[ComponentPlacement, str, str] | None:
+    if (support.placement_role.strip().casefold() not in _POWER_LOOP_ROLES or not support.parent_ref
+            or support.locked or support.constraint_locked or support.edge_constrained
+            or support.native_reference_locked is not False or support.ref in plan.fixed or support.ref in plan.edges
+            or not _power_support_native_maps_complete(support)):
+        return None
+    parent = next((p for p in state if p.ref == support.parent_ref), None)
+    if (parent is None or not _power_support_native_maps_complete(parent)
+            or parent.layer.casefold() != support.layer.casefold()):
+        return None
+    nets = _power_support_pair(parent, support)
+    return (parent, *nets) if nets else None
+
+
+def _power_support_legs(parent: ComponentPlacement, support: ComponentPlacement,
+                        rail: str, return_net: str) -> tuple[float, float]:
+    p_rail, s_rail = _rotated_net_endpoints(parent, rail), _rotated_net_endpoints(support, rail)
+    p_gnd, s_gnd = _rotated_net_endpoints(parent, return_net), _rotated_net_endpoints(support, return_net)
+    if not p_rail or not s_rail or not p_gnd or not s_gnd:
+        raise ValueError("native rail/return pad endpoints are incomplete")
+    return (min(math.dist(a, b) for a in p_rail for b in s_rail),
+            min(math.dist(a, b) for a in p_gnd for b in s_gnd))
+
+
+def _power_net_hpwl(state: list[ComponentPlacement], net: str) -> float | None:
+    points = [point for p in state for point in _rotated_net_endpoints(p, net)]
+    if len(points) < 2:
+        return None
+    xs, ys = [p[0] for p in points], [p[1] for p in points]
+    return max(xs) - min(xs) + max(ys) - min(ys)
+
+
+def _power_support_joint_candidates(state: list[ComponentPlacement], support: ComponentPlacement,
+                                    config: PlacementConfig, plan: _ConstraintPlan
+                                    ) -> list[tuple[list[ComponentPlacement], tuple[int, int, int, int]]]:
+    eligible = _power_support_eligibility(state, support, plan)
+    if not eligible:
+        return []
+    parent, rail, return_net = eligible
+    parent_rail, parent_return = _rotated_net_endpoints(parent, rail), _rotated_net_endpoints(parent, return_net)
+    support_rail, support_return = _rotated_net_endpoints(support, rail), _rotated_net_endpoints(support, return_net)
+    if not parent_rail or not parent_return or len(support_rail) != 1 or len(support_return) != 1:
+        return []
+    near_rail = sorted(parent_rail, key=lambda p: (math.dist(p, support_rail[0]), p))[:2]
+    near_return = sorted(parent_return, key=lambda p: (math.dist(p, support_return[0]), p))[:2]
+    pairs = sorted(((math.dist(a, support_rail[0]) + math.dist(b, support_return[0]), a, b)
+                    for a in near_rail for b in near_return), key=lambda row: (row[0], row[1], row[2]))
+    pair_rows = []
+    for _distance, a, b in pairs:
+        if (a, b) not in pair_rows:
+            pair_rows.append((a, b))
+        if len(pair_rows) == 2:
+            break
+    gap = max(config.min_component_gap_mm, config.support_body_clearance_mm)
+    diagonal = math.hypot(config.board_width_mm, config.board_height_mm)
+    rotations = ((support.rotation,) if support.rotation_locked else
+                 tuple((support.rotation + d) % 360.0 for d in _POWER_SUPPORT_ROTATIONS))
+    result, seen = [], set()
+    for pair_i, (owner_rail, owner_return) in enumerate(pair_rows):
+        for rotation_i, rotation in enumerate(rotations):
+            oriented = replace(support, x=0.0, y=0.0, rotation=rotation)
+            sr, sg = _rotated_net_endpoints(oriented, rail), _rotated_net_endpoints(oriented, return_net)
+            if len(sr) != 1 or len(sg) != 1:
+                continue
+            bx = ((owner_rail[0] - sr[0][0]) + (owner_return[0] - sg[0][0])) / 2.0
+            by = ((owner_rail[1] - sr[0][1]) + (owner_return[1] - sg[0][1])) / 2.0
+            for ray_i, (ux, uy) in enumerate(_POWER_SUPPORT_RAYS):
+                def clear(distance: float) -> bool:
+                    trial = replace(oriented, x=bx + ux * distance, y=by + uy * distance)
+                    return (_overlap_area(parent, trial, gap) <= 0
+                            and (not _support_body_clearance_applies(parent, trial)
+                                 or _rectangle_clearance(parent, trial) + 1e-9 >= config.support_body_clearance_mm))
+                low, high = 0.0, 0.0
+                if not clear(0.0):
+                    high = max(gap, 0.25)
+                    while high <= diagonal and not clear(high):
+                        low, high = high, high * 2.0
+                    if high > diagonal:
+                        continue
+                    for _ in range(18):
+                        mid = (low + high) / 2.0
+                        if clear(mid):
+                            high = mid
+                        else:
+                            low = mid
+                for step_i, extra in enumerate((0.0, gap)):
+                    x, y = round(bx + ux * (high + extra), 2), round(by + uy * (high + extra), 2)
+                    key = (x, y, rotation, support.layer)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    candidate = [replace(p) for p in state]
+                    moved = next(p for p in candidate if p.ref == support.ref)
+                    moved.x, moved.y, moved.rotation, moved.layer = x, y, rotation, support.layer
+                    result.append((candidate, (pair_i, rotation_i, ray_i, step_i)))
+                    if len(result) >= _POWER_SUPPORT_MAX_RAW:
+                        return result
+    return result
+
+
+def _power_support_prefilter(candidate: list[ComponentPlacement], baseline: list[ComponentPlacement],
+                             support_ref: str, parent_ref: str, rail: str, return_net: str,
+                             config: PlacementConfig, plan: _ConstraintPlan,
+                             old_legs: tuple[float, float], old_hpwl: tuple[float, float]
+                             ) -> tuple[float, float, float, float] | None:
+    moved = next((p for p in candidate if p.ref == support_ref), None)
+    if moved is None or not _inside_board(moved, config, plan):
+        return None
+    original = next(p for p in baseline if p.ref == support_ref)
+    if moved.layer != original.layer:
+        return None
+    for other in candidate:
+        if other.ref == support_ref:
+            continue
+        if _overlap_area(moved, other, config.min_component_gap_mm) > 0:
+            return None
+        if (_is_parent_support_pair(moved, other) and _support_body_clearance_applies(moved, other)
+                and _rectangle_clearance(moved, other) + 1e-9 < config.support_body_clearance_mm):
+            return None
+    owner = next((p for p in candidate if p.ref == parent_ref), None)
+    if owner is None:
+        return None
+    legs = _power_support_legs(owner, moved, rail, return_net)
+    if legs[0] > old_legs[0] + 1e-6 or legs[1] > old_legs[1] + 1e-6 or sum(legs) >= sum(old_legs) - 1e-6:
+        return None
+    hpwl = (_power_net_hpwl(candidate, rail), _power_net_hpwl(candidate, return_net))
+    if (hpwl[0] is None or hpwl[1] is None or hpwl[0] > old_hpwl[0] + 1e-6
+            or hpwl[1] > old_hpwl[1] + 1e-6):
+        return None
+    return legs[0], legs[1], hpwl[0], hpwl[1]
+
+
+def _power_support_refinement_targets(state: list[ComponentPlacement], config: PlacementConfig,
+                                     plan: _ConstraintPlan) -> list[str]:
+    measured = []
+    for support in sorted(state, key=lambda p: p.ref):
+        eligible = _power_support_eligibility(state, support, plan)
+        if eligible:
+            parent, rail, ret = eligible
+            legs = _power_support_legs(parent, support, rail, ret)
+            measured.append((-(legs[0] + legs[1]), support.ref))
+    return [ref for _loop, ref in sorted(measured)[:_POWER_SUPPORT_MAX_TARGETS]]
+
+
+
+
 def _refine_placement(
     state: list[ComponentPlacement],
     config: PlacementConfig,
@@ -2768,6 +3097,52 @@ def _refine_placement(
     for pass_index in range(config.refinement_passes):
         step = 1.0 / (2**pass_index)
         changed = False
+        # Prioritize at most 16 eligible native-pad power loops by measured
+        # baseline loop length. Each target gets at most 128 cheap proposals
+        # and at most three full-rank evaluations, all charged to this budget.
+        support_targets = (_power_support_refinement_targets(state, config, plan)
+                           if _power_support_state_maps_complete(state) else [])
+        for support_ref in support_targets:
+            if evaluation_budget is not None and evaluations >= evaluation_budget:
+                budget_exhausted = True
+                break
+            by_ref = {item.ref: item for item in state}
+            support = by_ref.get(support_ref)
+            if support is None:
+                continue
+            eligible = _power_support_eligibility(state, support, plan)
+            if eligible is None:
+                continue
+            parent, rail, return_net = eligible
+            old_legs = _power_support_legs(parent, support, rail, return_net)
+            old_hpwl = (_power_net_hpwl(state, rail), _power_net_hpwl(state, return_net))
+            if old_hpwl[0] is None or old_hpwl[1] is None:
+                continue
+            proposals = _power_support_joint_candidates(state, support, config, plan)
+            shortlist = []
+            for candidate, stable_key in proposals:
+                metrics = _power_support_prefilter(candidate, state, support_ref, parent.ref,
+                                                   rail, return_net, config, plan, old_legs, old_hpwl)
+                if metrics is None:
+                    continue
+                loop_length = metrics[0] + metrics[1]
+                moved = next(item for item in candidate if item.ref == support_ref)
+                displacement = math.hypot(moved.x - support.x, moved.y - support.y)
+                shortlist.append((loop_length, displacement, stable_key, candidate))
+            shortlist.sort(key=lambda row: (row[0], row[1], row[2]))
+            for _loop, _distance, _key, candidate in shortlist[:_POWER_SUPPORT_MAX_FULL_RANK]:
+                if evaluation_budget is not None and evaluations >= evaluation_budget:
+                    budget_exhausted = True
+                    break
+                evaluations += 1
+                candidate_rank = score_candidate(candidate)
+                if candidate_rank is not None and candidate_rank < rank:
+                    state, rank = candidate, candidate_rank
+                    changed = True
+            if budget_exhausted:
+                break
+        if budget_exhausted:
+            break
         for index, placement in enumerate(state):
             if evaluation_budget is not None and evaluations >= evaluation_budget:
                 budget_exhausted = True

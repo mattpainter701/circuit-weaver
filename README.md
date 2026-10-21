@@ -404,6 +404,13 @@ the pad and copper-layer inventory proves separate surfaces and no opposite-side
 courtyard is present. Through-hole and unknown geometry remain blocking. This
 does not establish 3D enclosure clearance or signal integrity.
 
+With complete native pad maps, decoupling refinement considers position and
+quarter-turn rotation together around the owner's supply and return pads.
+Candidates must improve the existing placement rank while preserving constraints,
+board sides, both local power-leg distances and global power-net spans. These
+geometric checks still require native label checks, routing and final DRC; they
+do not establish routed loop inductance or electrical performance.
+
 For imported boards with a legacy `.pro` project, convert and verify the project
 rules in KiCad before placement, routing, or copper edits. These operations
 require a sibling `.kicad_pro` when `.pro` exists; upgrading the PCB format alone
