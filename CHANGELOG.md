@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Preserve unconnected `Mechanical:MountingHole` and `Mechanical:Fiducial` footprints when their symbols have no pins. Verify every native pad, including unnumbered pads, remains unconnected through save/reload; retain exact electrical pin mapping and physical DRC checks.
+- Apply the same outline-versus-keepout classification during native PCB handoff as during workflow sizing, avoiding false dimension mismatches for designs with rectangular keepouts.
 - Keep board-outline dimensions separate from keepout rectangles during workflow sizing, explicit size overrides and placement normalization. Preserve authored keepout geometry.
 - Resolve project-local KiCad footprint nicknames through literal `${KIPRJMOD}/...` entries in the source project's `fp-lib-table`, preserving original library names and rejecting ambiguous or unsupported mappings.
 - Reject duplicate placed footprint references in routing exports before publishing a DSN file.

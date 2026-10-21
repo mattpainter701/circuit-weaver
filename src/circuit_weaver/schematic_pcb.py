@@ -1,8 +1,9 @@
 """Build a review-only, pad-bearing PCB from a KiCad schematic netlist.
 
-This prototype path uses KiCad's exported netlist and local footprint library
-data.  It requires symbol pin numbers to match footprint pad numbers exactly;
-it does not assert component identity or manufacturing readiness.
+Electrical symbols require exact symbol-pin/footprint-pad identity. A narrow,
+explicitly mechanical/fiducial zero-pin symbol may retain its physical footprint
+only when the exported netlist contains no node for it. This does not assert
+component identity or manufacturing readiness.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from .pcb_handoff import _pcb_output_lock, _publish_staged_transaction
 
 _PAD_RE = re.compile(r"\(pad\s+(?:\"([^\"]*)\"|([^\s()]+))")
 _SHEET_FILE_RE = re.compile(r'\(property\s+"Sheetfile"\s+"([^"\\]*(?:\\.[^"\\]*)*)"', re.IGNORECASE)
+_PINLESS_PHYSICAL_SYMBOLS = {("Mechanical", "MountingHole"), ("Mechanical", "Fiducial")}
 
 
 def _annotation_errors_present(output: str) -> bool:
@@ -62,6 +64,11 @@ def _parse_netlist(netlist: Path, library: KiCadFootprintLibrary) -> dict[str, A
         raise ValueError("KiCad netlist is missing components or nets")
 
     components: dict[str, dict[str, Any]] = {}
+    references_with_net_nodes = {
+        (node.get("ref") or "").strip()
+        for node in nets_root.findall("./net/node")
+        if (node.get("ref") or "").strip()
+    }
     for raw in component_root.findall("comp"):
         reference = (raw.get("ref") or "").strip()
         if not reference or reference in components:
@@ -108,9 +115,22 @@ def _parse_netlist(netlist: Path, library: KiCadFootprintLibrary) -> dict[str, A
                 for pin in (libpart.findall("./pins/pin") if libpart is not None else [])
                 if (pin.get("num") or "").strip()
             }
+        physical_only = False
         if not symbol_pins:
-            raise ValueError(f"{reference}: schematic netlist has no symbol pin numbers")
-        if symbol_pins != pad_numbers:
+            libsource = raw.find("libsource")
+            symbol_identity = (
+                libsource.get("lib") if libsource is not None else None,
+                libsource.get("part") if libsource is not None else None,
+            )
+            if (symbol_identity in _PINLESS_PHYSICAL_SYMBOLS
+                    and reference not in references_with_net_nodes):
+                physical_only = True
+            else:
+                raise ValueError(
+                    f"{reference}: schematic netlist has no symbol pin numbers; only an unconnected "
+                    "Mechanical:MountingHole or Mechanical:Fiducial may be retained as physical-only"
+                )
+        if not physical_only and symbol_pins != pad_numbers:
             missing_pads = sorted(symbol_pins - pad_numbers)
             extra_pads = sorted(pad_numbers - symbol_pins)
             raise ValueError(
@@ -128,6 +148,7 @@ def _parse_netlist(netlist: Path, library: KiCadFootprintLibrary) -> dict[str, A
             "pad_numbers": sorted(pad_numbers),
             "nets": {},
             "library": lib,
+            "physical_only": physical_only,
         }
     if not components:
         raise ValueError("KiCad netlist has no board components with footprints")
@@ -476,6 +497,41 @@ def schematic_to_pcb(
                         )
                 _publish_staged_transaction(staging, publications)
             digest = hashlib.sha256(target.read_bytes()).hexdigest()
+            physical_only_components = sorted(
+                component["reference"] for component in model["components"] if component.get("physical_only")
+            )
+            validation = {
+                "netlist_export": "passed",
+                "netlist_tool": _tool_version(exported.stdout, exported.stderr),
+                "footprint_source": "local_kicad_library",
+                "pin_mapping": (
+                    "exact_number_match_except_explicit_unconnected_physical_only"
+                    if physical_only_components else "exact_number_match"
+                ),
+                "pcbnew_round_trip": "passed",
+                "physical_drc": {
+                    "status": drc.status,
+                    "non_connect_blockers": 0,
+                    "expected_unconnected_count": sum(
+                        1 for finding in drc.findings if finding.rule_id == "CW-DRC-002"
+                    ),
+                },
+                "board_sha256": digest,
+                "manufacturing_readiness": "not_assessed",
+                "prototype_assumptions": (
+                    {**({"default_netclass_clearance_mm": float(clearance_mm)}
+                        if clearance_mm is not None else {}),
+                     **({"minimum_drill_mm": float(minimum_drill_mm)}
+                        if minimum_drill_mm is not None else {})}
+                ),
+            }
+            if physical_only_components:
+                validation["physical_only_components"] = {
+                    "count": len(physical_only_components),
+                    "references": physical_only_components,
+                    "native_pad_count": int(worker.get("physical_only_pad_count", 0)),
+                    "net_assignments": "forbidden_and_verified_after_save_reload",
+                }
             return {
                 "status": "ok",
                 "output_path": str(target),
@@ -488,28 +544,7 @@ def schematic_to_pcb(
                     "nets": len(model["nets"]),
                     "explicit_no_connects": len(model["explicit_no_connects"]),
                 },
-                "validation": {
-                    "netlist_export": "passed",
-                    "netlist_tool": _tool_version(exported.stdout, exported.stderr),
-                    "footprint_source": "local_kicad_library",
-                    "pin_mapping": "exact_number_match",
-                    "pcbnew_round_trip": "passed",
-                    "physical_drc": {
-                        "status": drc.status,
-                        "non_connect_blockers": 0,
-                        "expected_unconnected_count": sum(
-                            1 for finding in drc.findings if finding.rule_id == "CW-DRC-002"
-                        ),
-                    },
-                    "board_sha256": digest,
-                    "manufacturing_readiness": "not_assessed",
-                    "prototype_assumptions": (
-                        {**({"default_netclass_clearance_mm": float(clearance_mm)}
-                            if clearance_mm is not None else {}),
-                         **({"minimum_drill_mm": float(minimum_drill_mm)}
-                            if minimum_drill_mm is not None else {})}
-                    ),
-                },
+                "validation": validation,
                 "message": (
                     "Real footprints and schematic nets were forward-annotated for review; "
                     "placement and routing still require review."

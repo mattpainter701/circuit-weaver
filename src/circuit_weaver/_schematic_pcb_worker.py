@@ -11,6 +11,49 @@ def _point(pcbnew, x_mm: float, y_mm: float):
     return pcbnew.VECTOR2I(pcbnew.FromMM(x_mm), pcbnew.FromMM(y_mm))
 
 
+def _assert_physical_only_unconnected(footprint, reference):
+    """Return every physical pad identity, rejecting any assigned net metadata."""
+    result = []
+    for pad in footprint.Pads():
+        number = str(pad.GetNumber())
+        net_name = str(pad.GetNetname() or "")
+        get_net_code = getattr(pad, "GetNetCode", None)
+        if not callable(get_net_code):
+            raise ValueError(f"{reference}: cannot verify physical-only pad net code")
+        try:
+            net_code = int(get_net_code())
+        except (TypeError, ValueError, RuntimeError) as exc:
+            raise ValueError(f"{reference}: cannot verify physical-only pad net code") from exc
+        if net_name or net_code != 0:
+            raise ValueError(
+                f"{reference}: physical-only pad {number!r} carries stale net metadata "
+                f"(name={net_name!r}, code={net_code})"
+            )
+        result.append((number, net_name, net_code))
+    return sorted(result)
+
+
+def _physical_only_identity(board, references):
+    expected_refs = set(references)
+    result = {}
+    for footprint in board.GetFootprints():
+        reference = footprint.GetReference()
+        if reference in expected_refs:
+            if reference in result:
+                raise ValueError(f"{reference}: duplicate physical-only footprint")
+            result[reference] = _assert_physical_only_unconnected(footprint, reference)
+    if set(result) != expected_refs:
+        raise ValueError("Physical-only footprint references changed during board round trip")
+    return result
+
+
+def _validate_physical_only_request(item, reference):
+    if item.get("physical_only") and (item.get("symbol_pins") or item.get("nets")):
+        raise ValueError(
+            f"{reference}: physical-only component must not declare symbol pins or net assignments"
+        )
+
+
 def _identity(board):
     result = {}
     for footprint in board.GetFootprints():
@@ -84,10 +127,13 @@ def execute(request):
         net_by_name[name] = net
 
     expected = {}
+    physical_only_refs = set()
+    loaded_physical_only_identity = {}
     for item in request["components"]:
         reference = str(item["reference"])
         if not reference or reference in expected:
             raise ValueError("Netlist contains an empty or duplicate board reference")
+        _validate_physical_only_request(item, reference)
         x, y = float(item["x_mm"]), float(item["y_mm"])
         if not math.isfinite(x) or not math.isfinite(y):
             raise ValueError(f"{reference}: invalid placement coordinates")
@@ -99,6 +145,10 @@ def execute(request):
         footprint.SetValue(str(item.get("value", "")))
         footprint.SetPosition(_point(pcbnew, x, y))
         footprint.SetLayer(pcbnew.F_Cu)
+        is_physical_only = bool(item.get("physical_only"))
+        if is_physical_only:
+            loaded_physical_only_identity[reference] = _assert_physical_only_unconnected(footprint, reference)
+            physical_only_refs.add(reference)
         pads = []
         pad_numbers = set()
         for pad in footprint.Pads():
@@ -120,12 +170,16 @@ def execute(request):
         board.Add(footprint)
 
     output = request["board"]
+    if physical_only_refs and _physical_only_identity(board, physical_only_refs) != loaded_physical_only_identity:
+        raise ValueError("Physical-only footprint pad identity changed before board save")
     if not pcbnew.SaveBoard(output, board):
         raise ValueError("KiCad could not save the prototype board")
     reloaded = pcbnew.LoadBoard(output)
     if reloaded is None:
         raise ValueError("KiCad could not reload the saved prototype board")
     actual = _identity(reloaded)
+    if physical_only_refs and _physical_only_identity(reloaded, physical_only_refs) != loaded_physical_only_identity:
+        raise ValueError("Saved board changed physical-only pad/net identity during round trip")
     if actual != expected:
         differing = {
             reference: {"expected": expected.get(reference), "actual": actual.get(reference)}
@@ -133,12 +187,18 @@ def execute(request):
             if expected.get(reference) != actual.get(reference)
         }
         raise ValueError(f"Saved board changed footprint pad/net identity during round trip: {differing}")
-    return {
+    result = {
         "status": "ok",
         "footprints": len(actual),
         "pads": sum(len(pads) for pads in actual.values()),
         "nets": len(net_by_name),
     }
+    if physical_only_refs:
+        result["physical_only_footprints"] = len(physical_only_refs)
+        result["physical_only_pad_count"] = sum(
+            len(pads) for pads in loaded_physical_only_identity.values()
+        )
+    return result
 
 
 if __name__ == "__main__":

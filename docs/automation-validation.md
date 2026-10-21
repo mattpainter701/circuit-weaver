@@ -160,6 +160,11 @@ Resolve the root schematic from the generation result's `root_schematic` field;
 do not guess its filename. `build-pcb` exports the schematic's netlist through
 KiCad, loads the named local library footprints, and requires exact pin/pad
 number reconciliation. It never invents missing footprints or infers pin swaps.
+An explicitly unconnected `Mechanical:MountingHole` or `Mechanical:Fiducial`
+with no symbol pins may retain its physical footprint. Every native pad,
+including unnumbered pads, must have an empty net name and net code zero after
+loading and after save/reload. The result lists these physical-only references
+separately; electrical symbols still require exact pin/pad reconciliation.
 Project-local footprint nicknames may map to a different library directory using
 literal `${KIPRJMOD}/relative/path.pretty` entries in the source project's
 `fp-lib-table`. Explicit mappings take precedence over global libraries; missing,
@@ -170,6 +175,10 @@ Forward generation currently creates a two-copper-layer rectangular prototype
 with front-side footprints. Importing a multilayer schematic does not reproduce
 its vendor PCB stackup, BGA escape routing, DDR timing or controlled impedance.
 These require separate layout capabilities and engineering verification.
+
+Outline dimensions and placement keepout rectangles are distinct constraints.
+The native handoff checks the board dimensions against outline declarations
+without interpreting keepout width or height as the size of the board.
 
 The initial rectangular board uses `--width`/`--height` in millimeters and is
 unrouted. The demo explicitly requests 0.127 mm default clearance because the

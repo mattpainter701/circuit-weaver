@@ -17,7 +17,12 @@ from .drc_runner import run_drc
 from .evidence import EvidenceLedger
 from .kicad_bridge import run_kicad
 from .pcb_handoff import _pcb_output_lock, _publish_staged_transaction
-from .placement_optimizer import PlacementConfig, _position_values, optimize_placement
+from .placement_optimizer import (
+    PlacementConfig,
+    _is_board_dimension_constraint,
+    _position_values,
+    optimize_placement,
+)
 
 _NATIVE_PLACE_BASE_TIMEOUT_SECONDS = 120
 _NATIVE_PLACE_SECONDS_PER_FOOTPRINT = 2
@@ -65,6 +70,31 @@ def _native_origin(placement: dict, offset: tuple[float, float], bounds: dict) -
     return x, y
 
 
+def _validate_design_outline_constraints(constraints: list[dict], bounds: dict) -> None:
+    """Check only placement-stage board-outline declarations against native bounds."""
+    board_targets = {"board", "board_outline", "pcb", "outline"}
+    for rule in constraints:
+        if not isinstance(rule, dict):
+            continue
+        if not _is_board_dimension_constraint(rule):
+            continue
+        target = str(rule.get("target") or rule.get("ref") or "").strip().lower()
+        nested = rule.get("board") if isinstance(rule.get("board"), dict) else {}
+        for axis in ("width", "height"):
+            value = rule.get(f"board_{axis}_mm")
+            if value is None:
+                value = nested.get(f"{axis}_mm")
+            if value is None and target in board_targets:
+                value = rule.get(f"{axis}_mm")
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or abs(float(value) - bounds[axis]) > 0.1
+            ):
+                raise ValueError("Design board dimensions do not match the native Edge.Cuts outline")
+
+
 def _design_intent(spec: dict[str, Any] | None, footprints: list[dict], bounds: dict) -> tuple[dict, list[dict]]:
     """Bind optional design intent to real board references, footprints and nets.
 
@@ -98,16 +128,7 @@ def _design_intent(spec: dict[str, Any] | None, footprints: list[dict], bounds: 
             if actual.get(str(pin)) != net:
                 raise ValueError(f"{item['ref']}.{pin}: design net does not match the native board")
     constraints = list(compiled.ir.pcb_constraints)
-    # A placement command may move parts, never resize an existing board.
-    for rule in constraints:
-        if str(rule.get("target", "")).lower() in {"board", "board_outline", "pcb", "outline"}:
-            for key, axis in (("width_mm", "width"), ("height_mm", "height")):
-                value = rule.get(key, rule.get(f"board_{key}"))
-                if value is not None and (
-                    isinstance(value, bool) or not isinstance(value, (int, float))
-                    or not math.isfinite(value) or abs(float(value) - bounds[axis]) > 0.1
-                ):
-                    raise ValueError("Design board dimensions do not match the native Edge.Cuts outline")
+    _validate_design_outline_constraints(constraints, bounds)
     return by_ref, constraints
 
 
