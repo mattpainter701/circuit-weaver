@@ -21,11 +21,10 @@ from typing import Any
 
 from .drc_runner import _kicad_cli_path, run_drc
 from .evidence import EvidenceLedger
-from .footprint_lib import KiCadFootprintLibrary
+from .footprint_lib import KiCadFootprintLibrary, _parse_kicad_sexp
 from .kicad_bridge import find_kicad_python
 from .pcb_handoff import _pcb_output_lock, _publish_staged_transaction
 
-_PAD_RE = re.compile(r"\(pad\s+(?:\"([^\"]*)\"|([^\s()]+))")
 _SHEET_FILE_RE = re.compile(r'\(property\s+"Sheetfile"\s+"([^"\\]*(?:\\.[^"\\]*)*)"', re.IGNORECASE)
 _PINLESS_PHYSICAL_SYMBOLS = {("Mechanical", "MountingHole"), ("Mechanical", "Fiducial")}
 
@@ -46,6 +45,86 @@ def _annotation_errors_present(output: str) -> bool:
 
 def _xml_text(node: ET.Element | None) -> str:
     return (node.text or "").strip() if node is not None else ""
+
+
+def _footprint_pad_records(text: str) -> list[dict]:
+    """Read direct pad declarations, retaining exact non-plated hole geometry."""
+    tree = _parse_kicad_sexp(text)
+    if not tree or tree[0] not in {"footprint", "module"}:
+        raise ValueError("Footprint has no valid KiCad root")
+    records = []
+    verify_npth = any(isinstance(x, list) and len(x) >= 4 and x[0] == 'pad'
+                      and x[1] and x[2] == 'np_thru_hole' for x in tree[1:])
+    for node in tree[1:]:
+        if not isinstance(node, list) or not node or node[0] != "pad":
+            continue
+        if len(node) < 4 or not all(isinstance(x, str) for x in node[1:4]):
+            raise ValueError("Malformed footprint pad declaration")
+        item = {"number": node[1], "kind": node[2]}
+        if node[2] == "np_thru_hole" and verify_npth:
+            def field(key, pad=node):
+                values = [x[1:] for x in pad[4:] if isinstance(x, list) and x and x[0] == key]
+                if len(values) != 1:
+                    raise ValueError(f"NPTH pad requires one {key} declaration")
+                return values[0]
+
+            def numeric(values):
+                try:
+                    result = [round(float(x), 6) for x in values]
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("Invalid NPTH pad geometry") from exc
+                if not all(math.isfinite(x) for x in result):
+                    raise ValueError("Nonfinite NPTH pad geometry")
+                return result
+
+            if node[3] not in {"circle", "oval"}:
+                raise ValueError("Unsupported NPTH pad shape; cannot verify native normalization")
+            at, size, drill = field("at"), field("size"), field("drill")
+            if len(at) not in {2, 3} or len(size) != 2:
+                raise ValueError("Invalid NPTH pad position or size")
+            offsets = [x for x in drill if isinstance(x, list)]
+            atoms = [x for x in drill if not isinstance(x, list)]
+            offset = [0.0, 0.0]
+            if offsets:
+                if len(offsets) != 1 or offsets[0][0] != "offset" or len(offsets[0]) != 3:
+                    raise ValueError("Unsupported NPTH drill geometry")
+                offset = numeric(offsets[0][1:])
+            if atoms and atoms[0] == "oval" and len(atoms) == 3:
+                drill_size = numeric(atoms[1:])
+            elif len(atoms) == 1:
+                drill_size = numeric(atoms * 2)
+            else:
+                raise ValueError("Unsupported NPTH drill declaration")
+            xy, wh = numeric(at[:2]), numeric(size)
+            angle = numeric(at[2:])[0] % 360 if len(at) == 3 else 0.0
+            if min(*wh, *drill_size) <= 0:
+                raise ValueError("NPTH pad and drill sizes must be positive")
+            item["geometry"] = [node[3], *xy, *wh, *drill_size, round(angle, 6), *offset]
+        records.append(item)
+    return records
+
+
+def _normalized_npth_numbers(reference, records, symbol_pins, nets_root, physical_only, *, symbol_nc_pins=()):
+    npth = [x for x in records if x["kind"] == "np_thru_hole"]
+    numbers = {x["number"] for x in npth if x["number"]}
+    if not numbers:
+        return [], []
+    conductive = {x["number"] for x in records if x["kind"] != "np_thru_hole" and x["number"]}
+    if numbers & conductive:
+        raise ValueError(f"{reference}: numbered NPTH hole collides with an electrical pad number")
+    for number in sorted(numbers):
+        if physical_only:
+            continue
+        nodes = [(net, node) for net in nets_root.findall("net") for node in net.findall("node")
+                 if (node.get("ref") or "").strip() == reference and (node.get("pin") or "").strip() == number]
+        if (number not in symbol_pins or number not in symbol_nc_pins or len(nodes) != 1 or
+                len(nodes[0][0].findall("node")) != 1 or
+                "no_connect" not in {x.strip() for x in (nodes[0][1].get("pintype") or "").lower().split("+")}):
+            raise ValueError(
+                f"{reference}.{number}: numbered NPTH hole requires a no-connect symbol pin "
+                "and explicit singleton no-connect"
+            )
+    return sorted(numbers), npth
 
 
 def _parse_netlist(netlist: Path, library: KiCadFootprintLibrary) -> dict[str, Any]:
@@ -88,11 +167,8 @@ def _parse_netlist(netlist: Path, library: KiCadFootprintLibrary) -> dict[str, A
         if path is None:
             raise ValueError(f"{reference}: unresolved KiCad footprint {footprint!r}")
         footprint_text = path.read_text(encoding="utf-8")
-        pad_numbers = {
-            match.group(1) if match.group(1) is not None else match.group(2)
-            for match in _PAD_RE.finditer(footprint_text)
-            if (match.group(1) or match.group(2))
-        }
+        pad_records = _footprint_pad_records(footprint_text)
+        pad_numbers = {row['number'] for row in pad_records if row['number']}
         symbol_pins = {
             (pin.get("num") or "").strip()
             for pin in raw.findall("./units/unit/pins/pin")
@@ -137,6 +213,21 @@ def _parse_netlist(netlist: Path, library: KiCadFootprintLibrary) -> dict[str, A
                 f"{reference}: symbol pin numbers do not exactly match footprint pads "
                 f"(missing pads: {missing_pads}; extra pads: {extra_pads})"
             )
+        libsource = raw.find('libsource')
+        symbol_nc_pins = set()
+        if libsource is not None:
+            matching_parts = [c for c in root.findall('./libparts/libpart')
+                              if c.get('lib') == libsource.get('lib') and c.get('part') == libsource.get('part')]
+            if len(matching_parts) == 1:
+                pin_types = {}
+                for pin in matching_parts[0].findall('./pins/pin'):
+                    pin_types.setdefault((pin.get('num') or '').strip(), []).append(
+                        (pin.get('type') or '').strip().lower()
+                    )
+                symbol_nc_pins = {n for n, types in pin_types.items() if types == ['no_connect']}
+        normalized_npth, npth_records = _normalized_npth_numbers(
+            reference, pad_records, symbol_pins, nets_root, physical_only, symbol_nc_pins=symbol_nc_pins
+        )
         lib, name = footprint.split(":", 1)
         components[reference] = {
             "reference": reference,
@@ -145,11 +236,14 @@ def _parse_netlist(netlist: Path, library: KiCadFootprintLibrary) -> dict[str, A
             "library_path": str(path.parent),
             "footprint_name": name,
             "symbol_pins": sorted(symbol_pins),
-            "pad_numbers": sorted(pad_numbers),
+            "pad_numbers": sorted(pad_numbers - set(normalized_npth)),
             "nets": {},
             "library": lib,
             "physical_only": physical_only,
         }
+        if npth_records:
+            components[reference]['npth_pad_records'] = npth_records
+            components[reference]['normalized_npth_pin_numbers'] = normalized_npth
     if not components:
         raise ValueError("KiCad netlist has no board components with footprints")
 
@@ -325,6 +419,54 @@ def _check_snapshot(snapshot: dict[Path, str | None]) -> None:
             raise ValueError(f"Input or output changed during schematic-to-PCB processing: {path}")
 
 
+def _restore_authored_project_settings(
+    board: Path, payloads: dict[str, bytes | None], *, clearance_mm=None, minimum_drill_mm=None,
+) -> dict[Path, str]:
+    """Undo native SaveBoard defaults without discarding explicit prototype assumptions."""
+    restored = {}
+    for suffix, original in payloads.items():
+        if original is None:
+            continue
+        destination = board.with_suffix(suffix)
+        content = original
+        if suffix == ".kicad_pro":
+            try:
+                settings = json.loads(original)
+            except (ValueError, UnicodeError) as exc:
+                raise ValueError("Source KiCad project settings are not valid JSON") from exc
+            if not isinstance(settings, dict):
+                raise ValueError("Source KiCad project settings must be a JSON object")
+            if clearance_mm is not None:
+                # The public preflight permits this only when the source does
+                # not own board/netclass rules. Reuse the native schema rather
+                # than inventing a KiCad-version-specific NET_SETTINGS payload.
+                if "net_settings" in settings:
+                    raise ValueError("Cannot override authored source netclass rules")
+                native = json.loads(destination.read_bytes())
+                if not isinstance(native, dict) or not isinstance(native.get("net_settings"), dict):
+                    raise ValueError("Native project has no verifiable netclass settings")
+                net_settings = native.get("net_settings", {})
+                if not isinstance(net_settings.get("classes"), list):
+                    raise ValueError("Native project has no verifiable netclass list")
+                defaults = [x for x in net_settings.get("classes", [])
+                            if isinstance(x, dict) and x.get("name") == "Default"]
+                if len(defaults) != 1 or defaults[0].get("clearance") != clearance_mm:
+                    raise ValueError("Native project did not retain the requested prototype clearance")
+                settings["net_settings"] = net_settings
+            if minimum_drill_mm is not None:
+                current = settings
+                for key in ("board", "design_settings", "rules"):
+                    current = current.setdefault(key, {})
+                    if not isinstance(current, dict):
+                        raise ValueError("Source KiCad board settings are malformed")
+                current["min_through_hole_diameter"] = float(minimum_drill_mm)
+            if clearance_mm is not None or minimum_drill_mm is not None:
+                content = (json.dumps(settings, indent=2) + "\n").encode("utf-8")
+        destination.write_bytes(content)
+        restored[destination] = hashlib.sha256(content).hexdigest()
+    return restored
+
+
 def schematic_to_pcb(
     schematic_path: str | Path,
     output_path: str | Path,
@@ -369,6 +511,16 @@ def schematic_to_pcb(
         source_project_settings = {
             suffix: source.with_suffix(suffix)
             for suffix in (".kicad_pro", ".kicad_dru")
+        }
+        if source.with_suffix(".pro").is_file() and not source_project_settings[".kicad_pro"].is_file():
+            raise ValueError("Legacy project rules require conversion to .kicad_pro before schematic-to-PCB generation")
+        source_settings_payloads = {
+            suffix: path.read_bytes() if path.is_file() else None
+            for suffix, path in source_project_settings.items()
+        }
+        source_settings_snapshot = {
+            source_project_settings[suffix]: hashlib.sha256(payload).hexdigest() if payload is not None else None
+            for suffix, payload in source_settings_payloads.items()
         }
         if clearance_mm is not None and _source_project_has_clearance_rules(
             source_project_settings[".kicad_pro"], source_project_settings[".kicad_dru"]
@@ -469,7 +621,15 @@ def schematic_to_pcb(
             if not staged_board.is_file():
                 raise RuntimeError("KiCad worker did not create the board")
 
+            _check_snapshot(source_settings_snapshot)
+            # Native SaveBoard can replace even an existing staged .kicad_pro
+            # with fresh defaults. DRC and publication must use authored rules.
+            restored_settings = _restore_authored_project_settings(
+                staged_board, source_settings_payloads,
+                clearance_mm=clearance_mm, minimum_drill_mm=minimum_drill_mm,
+            )
             drc = run_drc(staged_board, evidence_ledger=EvidenceLedger())
+            _check_snapshot(restored_settings)
             non_connect_blockers = [
                 finding for finding in drc.findings
                 if finding.severity == "blocker" and finding.rule_id != "CW-DRC-002"
@@ -482,11 +642,14 @@ def schematic_to_pcb(
                     details = "; ".join(item for item in (drc.failure_reason, details) if item)
                 raise RuntimeError(f"Prototype board failed physical DRC validation: {details or drc.status}")
             _check_snapshot(source_snapshot)
+            _check_snapshot(source_settings_snapshot)
             publications = [(staged_board, target)]
-            if staged_project_file.is_file() and not target.with_suffix(".kicad_pro").is_file():
-                publications.append((staged_project_file, target.with_suffix(".kicad_pro")))
-            if staged_rules_file.is_file() and not target.with_suffix(".kicad_dru").is_file():
-                publications.append((staged_rules_file, target.with_suffix(".kicad_dru")))
+            for staged_settings in (staged_project_file, staged_rules_file):
+                destination = target.with_suffix(staged_settings.suffix)
+                if staged_settings.is_file() and (
+                    not destination.is_file() or staged_settings.read_bytes() != destination.read_bytes()
+                ):
+                    publications.append((staged_settings, destination))
             with _pcb_output_lock(target.parent):
                 _check_snapshot(target_snapshot)
                 for source_file, destination in publications:
@@ -531,6 +694,17 @@ def schematic_to_pcb(
                     "references": physical_only_components,
                     "native_pad_count": int(worker.get("physical_only_pad_count", 0)),
                     "net_assignments": "forbidden_and_verified_after_save_reload",
+                }
+            normalized_holes = [
+                {"reference": c["reference"], "pins": c["normalized_npth_pin_numbers"]}
+                for c in model["components"] if c.get("normalized_npth_pin_numbers")
+            ]
+            if normalized_holes:
+                validation["pin_mapping"] = "exact_electrical_number_match_with_verified_non_electrical_holes"
+                validation["non_electrical_hole_pins"] = {
+                    "components": normalized_holes,
+                    "mapping": "native_npth_number_normalization_only",
+                    "geometry_and_no_net_metadata": "verified_after_save_reload",
                 }
             return {
                 "status": "ok",

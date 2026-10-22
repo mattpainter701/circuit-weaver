@@ -165,6 +165,20 @@ with no symbol pins may retain its physical footprint. Every native pad,
 including unnumbered pads, must have an empty net name and net code zero after
 loading and after save/reload. The result lists these physical-only references
 separately; electrical symbols still require exact pin/pad reconciliation.
+Some legacy footprints assign bookkeeping numbers to non-plated holes that
+KiCad clears on load. These qualify only when the symbol pin is typed
+`no_connect` and has an explicit singleton no-connect node, or belongs to the
+pinless physical-only case above. The importer retains the source pin numbers
+in its report and verifies the complete hole inventory, positions, sizes,
+drills, offsets and orientation through save/reload. It never converts a hole
+into a copper pad or drops a connected pin. Ordinary unnumbered holes retain
+their existing import behavior.
+Native board creation can write a fresh project file. The importer restores
+authored project/rule settings before DRC, including their rule severities,
+and checks those bytes through validation. Explicit prototype clearance/drill
+assumptions are merged only when source-owned rules permit them. A board with
+authored silkscreen errors therefore remains blocked; a native default must
+not silently downgrade those errors to warnings.
 Project-local footprint nicknames may map to a different library directory using
 literal `${KIPRJMOD}/relative/path.pretty` entries in the source project's
 `fp-lib-table`. Explicit mappings take precedence over global libraries; missing,

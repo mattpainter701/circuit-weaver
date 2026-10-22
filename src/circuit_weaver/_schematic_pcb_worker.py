@@ -11,11 +11,13 @@ def _point(pcbnew, x_mm: float, y_mm: float):
     return pcbnew.VECTOR2I(pcbnew.FromMM(x_mm), pcbnew.FromMM(y_mm))
 
 
-def _assert_physical_only_unconnected(footprint, reference):
+def _assert_physical_only_unconnected(footprint, reference, *, npth_attribute=None):
     """Return every physical pad identity, rejecting any assigned net metadata."""
     result = []
     for pad in footprint.Pads():
         number = str(pad.GetNumber())
+        if npth_attribute is not None and pad.GetAttribute() == npth_attribute:
+            number = ""
         net_name = str(pad.GetNetname() or "")
         get_net_code = getattr(pad, "GetNetCode", None)
         if not callable(get_net_code):
@@ -33,7 +35,7 @@ def _assert_physical_only_unconnected(footprint, reference):
     return sorted(result)
 
 
-def _physical_only_identity(board, references):
+def _physical_only_identity(board, references, *, npth_refs=(), npth_attribute=None):
     expected_refs = set(references)
     result = {}
     for footprint in board.GetFootprints():
@@ -41,7 +43,9 @@ def _physical_only_identity(board, references):
         if reference in expected_refs:
             if reference in result:
                 raise ValueError(f"{reference}: duplicate physical-only footprint")
-            result[reference] = _assert_physical_only_unconnected(footprint, reference)
+            result[reference] = _assert_physical_only_unconnected(
+                footprint, reference, npth_attribute=npth_attribute if reference in npth_refs else None
+            )
     if set(result) != expected_refs:
         raise ValueError("Physical-only footprint references changed during board round trip")
     return result
@@ -54,7 +58,48 @@ def _validate_physical_only_request(item, reference):
         )
 
 
-def _identity(board):
+def _assert_npth_geometry(footprint, records, pcbnew):
+    """Verify every non-plated hole, allowing only KiCad's loss of its NC number."""
+    expected = sorted(tuple(x["geometry"]) for x in records)
+    allowed = {}
+    for record in records:
+        allowed.setdefault(tuple(record["geometry"]), set()).add(record["number"])
+    actual = []
+    for pad in footprint.Pads():
+        if pad.GetAttribute() != pcbnew.PAD_ATTRIB_NPTH:
+            continue
+        position, size, drill, offset = pad.GetFPRelativePosition(), pad.GetSize(), pad.GetDrillSize(), pad.GetOffset()
+        shape = {pcbnew.PAD_SHAPE_CIRCLE: "circle", pcbnew.PAD_SHAPE_OVAL: "oval"}.get(pad.GetShape())
+        angle = (pad.GetOrientation().AsDegrees() - footprint.GetOrientation().AsDegrees()) % 360
+        values = [position.x, position.y, size.x, size.y, drill.x, drill.y]
+        geometry = (shape, *(round(pcbnew.ToMM(v), 6) for v in values), round(angle, 6),
+                    round(pcbnew.ToMM(offset.x), 6), round(pcbnew.ToMM(offset.y), 6))
+        if geometry not in allowed or (str(pad.GetNumber()) and str(pad.GetNumber()) not in allowed[geometry]):
+            raise ValueError(f"{footprint.GetReference()}: native NPTH geometry or source number changed")
+        if str(pad.GetNetname() or "") or int(pad.GetNetCode()) != 0:
+            raise ValueError(f"{footprint.GetReference()}: NPTH hole carries electrical net metadata")
+        actual.append(geometry)
+    if sorted(actual) != expected:
+        raise ValueError(f"{footprint.GetReference()}: native NPTH hole inventory changed")
+
+
+def _validate_npth_request(item, reference, explicit_no_connects):
+    records = item.get("npth_pad_records", [])
+    if not records and not item.get("normalized_npth_pin_numbers"):
+        return
+    numbers = {x["number"] for x in records if x["number"]}
+    if numbers != set(item.get("normalized_npth_pin_numbers", [])):
+        raise ValueError(f"{reference}: NPTH normalization declaration is inconsistent")
+    if numbers & set(item.get("nets", {})):
+        raise ValueError(f"{reference}: NPTH hole cannot receive an electrical net")
+    if not item.get("physical_only"):
+        if any((reference, n) not in explicit_no_connects for n in numbers):
+            raise ValueError(f"{reference}: NPTH hole lacks an explicit no-connect proof")
+        if set(item.get("symbol_pins", [])) - numbers != set(item["pad_numbers"]):
+            raise ValueError(f"{reference}: electrical pin/pad identity differs after NPTH normalization")
+
+
+def _identity(board, *, npth_refs=(), npth_attribute=None):
     result = {}
     for footprint in board.GetFootprints():
         reference = footprint.GetReference()
@@ -62,6 +107,8 @@ def _identity(board):
             raise ValueError("Board footprints require unique, nonempty references")
         pads = []
         for pad in footprint.Pads():
+            if reference in npth_refs and pad.GetAttribute() == npth_attribute:
+                continue
             number = str(pad.GetNumber())
             if number:
                 pads.append((number, str(pad.GetNetname() or "")))
@@ -128,12 +175,15 @@ def execute(request):
 
     expected = {}
     physical_only_refs = set()
+    npth_by_ref = {}
+    explicit_ncs = {(x['reference'], x['pin']) for x in request.get('explicit_no_connects', [])}
     loaded_physical_only_identity = {}
     for item in request["components"]:
         reference = str(item["reference"])
         if not reference or reference in expected:
             raise ValueError("Netlist contains an empty or duplicate board reference")
         _validate_physical_only_request(item, reference)
+        _validate_npth_request(item, reference, explicit_ncs)
         x, y = float(item["x_mm"]), float(item["y_mm"])
         if not math.isfinite(x) or not math.isfinite(y):
             raise ValueError(f"{reference}: invalid placement coordinates")
@@ -147,11 +197,18 @@ def execute(request):
         footprint.SetLayer(pcbnew.F_Cu)
         is_physical_only = bool(item.get("physical_only"))
         if is_physical_only:
-            loaded_physical_only_identity[reference] = _assert_physical_only_unconnected(footprint, reference)
+            loaded_physical_only_identity[reference] = _assert_physical_only_unconnected(
+                footprint, reference, npth_attribute=pcbnew.PAD_ATTRIB_NPTH if item.get('npth_pad_records') else None
+            )
             physical_only_refs.add(reference)
+        if item.get('npth_pad_records'):
+            _assert_npth_geometry(footprint, item['npth_pad_records'], pcbnew)
+            npth_by_ref[reference] = item['npth_pad_records']
         pads = []
         pad_numbers = set()
         for pad in footprint.Pads():
+            if reference in npth_by_ref and pad.GetAttribute() == pcbnew.PAD_ATTRIB_NPTH:
+                continue
             number = str(pad.GetNumber())
             if not number:
                 continue
@@ -170,15 +227,25 @@ def execute(request):
         board.Add(footprint)
 
     output = request["board"]
-    if physical_only_refs and _physical_only_identity(board, physical_only_refs) != loaded_physical_only_identity:
+    if physical_only_refs and _physical_only_identity(
+        board, physical_only_refs, npth_refs=npth_by_ref, npth_attribute=pcbnew.PAD_ATTRIB_NPTH
+    ) != loaded_physical_only_identity:
         raise ValueError("Physical-only footprint pad identity changed before board save")
+    for footprint in board.GetFootprints():
+        if footprint.GetReference() in npth_by_ref:
+            _assert_npth_geometry(footprint, npth_by_ref[footprint.GetReference()], pcbnew)
     if not pcbnew.SaveBoard(output, board):
         raise ValueError("KiCad could not save the prototype board")
     reloaded = pcbnew.LoadBoard(output)
     if reloaded is None:
         raise ValueError("KiCad could not reload the saved prototype board")
-    actual = _identity(reloaded)
-    if physical_only_refs and _physical_only_identity(reloaded, physical_only_refs) != loaded_physical_only_identity:
+    for footprint in reloaded.GetFootprints():
+        if footprint.GetReference() in npth_by_ref:
+            _assert_npth_geometry(footprint, npth_by_ref[footprint.GetReference()], pcbnew)
+    actual = _identity(reloaded, npth_refs=npth_by_ref, npth_attribute=pcbnew.PAD_ATTRIB_NPTH)
+    if physical_only_refs and _physical_only_identity(
+        reloaded, physical_only_refs, npth_refs=npth_by_ref, npth_attribute=pcbnew.PAD_ATTRIB_NPTH
+    ) != loaded_physical_only_identity:
         raise ValueError("Saved board changed physical-only pad/net identity during round trip")
     if actual != expected:
         differing = {

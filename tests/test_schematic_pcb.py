@@ -54,6 +54,66 @@ def test_netlist_maps_only_declared_pin_numbers_and_preserves_explicit_no_connec
     assert model["explicit_no_connects"] == [{"reference": "U1", "pin": "2"}]
 
 
+def test_legacy_project_rules_cannot_be_ignored_during_forward_generation(tmp_path, monkeypatch):
+    from circuit_weaver import schematic_pcb
+
+    source = tmp_path / "source.kicad_sch"
+    source.write_text("(kicad_sch)")
+    source.with_suffix(".pro").write_text("authored legacy rules")
+    monkeypatch.setattr(schematic_pcb, "_kicad_cli_path", lambda: pytest.fail("probe preceded source-rule validation"))
+    result = schematic_to_pcb(source, tmp_path / "review.kicad_pcb")
+    assert result["status"] == "error" and "conversion" in result["message"]
+    assert not (tmp_path / "review.kicad_pcb").exists()
+
+
+def test_overwrite_publishes_the_same_derived_project_settings_that_drc_validated(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    from circuit_weaver import schematic_pcb
+
+    source = tmp_path / "source.kicad_sch"
+    source.write_text("(kicad_sch)")
+    original_project = b'{"schematic":{"authored":"retained"}}'
+    source.with_suffix(".kicad_pro").write_bytes(original_project)
+    target = tmp_path / "review.kicad_pcb"
+    target.write_text("previous board")
+    target.with_suffix(".kicad_pro").write_bytes(original_project)
+    library = _fixture_library(tmp_path)
+    monkeypatch.setattr(schematic_pcb, "KiCadFootprintLibrary", lambda **kwargs: library)
+    monkeypatch.setattr(schematic_pcb, "_kicad_cli_path", lambda: Path("kicad-cli"))
+    monkeypatch.setattr(schematic_pcb, "find_kicad_python", lambda *args: "native-python")
+    validated = []
+
+    def run(command, **kwargs):
+        if "--format" in command:
+            _write_netlist(Path(command[command.index("--output") + 1]))
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        request = json.loads(kwargs["input"])
+        board = Path(request["board"])
+        board.write_text("(kicad_pcb)")
+        board.with_suffix(".kicad_pro").write_text(json.dumps({
+            "net_settings": {"classes": [{"name": "Default", "clearance": 0.127}]},
+            "schematic": {"native": "discarded"},
+        }))
+        return SimpleNamespace(returncode=0, stderr="", stdout="CW_SCHEMATIC_PCB_RESULT=" + json.dumps({
+            "status": "ok", "footprints": 1, "pads": 2, "nets": 1,
+        }))
+
+    def drc(board, **kwargs):
+        validated.append(board.with_suffix(".kicad_pro").read_bytes())
+        assert json.loads(validated[-1])["net_settings"]["classes"][0]["clearance"] == 0.127
+        return SimpleNamespace(status="ok", findings=[])
+
+    monkeypatch.setattr(schematic_pcb.subprocess, "run", run)
+    monkeypatch.setattr(schematic_pcb, "run_drc", drc)
+    result = schematic_to_pcb(source, target, overwrite=True, clearance_mm=0.127)
+    assert result["status"] == "ok", result
+    assert target.with_suffix(".kicad_pro").read_bytes() == validated[0]
+    assert json.loads(validated[0])["schematic"] == {"authored": "retained"}
+    assert source.with_suffix(".kicad_pro").read_bytes() == original_project
+
+
 @pytest.mark.parametrize("exclusion", [
     '<property name="exclude_from_board"/>',
     '<property name="exclude_from_bom"/><property name="exclude_from_board"/>',
