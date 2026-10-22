@@ -323,6 +323,12 @@ connectivity checks before publication.
 
 ## Repeat the sample corpus and scale benchmark
 
+Native placement reserves the union of each authored courtyard and its non-text
+footprint geometry. An undersized custom courtyard cannot hide protruding pads
+or body artwork. Reference fields are spaced separately. This conservative
+envelope does not repair invalid library artwork or replace native DRC; a board
+with remaining shorts, clearance or silkscreen errors is not published.
+
 Run the complete sample corpus, then the three larger connected compositions:
 
 ```sh

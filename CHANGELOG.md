@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Reserve native pad and body geometry as well as authored courtyards during automatic placement, preventing undersized custom courtyards from hiding physical overlaps. Preserve larger courtyards, asymmetric footprint origins and native DRC rejection.
 - Restore authored project and design-rule files after native board creation, preventing KiCad's fresh defaults from replacing source netclasses or rule severities before DRC. Preserve declared prototype clearance/drill assumptions only where the source permits them, and verify settings remain unchanged through validation.
 - Preserve numbered non-plated holes whose schematic pins are explicitly typed and annotated as no-connect. Accommodate KiCad clearing their bookkeeping numbers while verifying every hole's geometry and lack of net metadata before and after save/reload; connected pins remain blocking.
 - Preserve unconnected `Mechanical:MountingHole` and `Mechanical:Fiducial` footprints when their symbols have no pins. Verify every native pad, including unnumbered pads, remains unconnected through save/reload; retain exact electrical pin mapping and physical DRC checks.

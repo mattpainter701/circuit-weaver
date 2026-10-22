@@ -12,6 +12,15 @@ _SILK_EDGE_MARGIN_MM = 0.4
 _SILK_SEARCH_STEP_MM = 0.5
 
 
+def _placement_envelope(footprint, courtyard):
+    """Never let an undersized courtyard hide pads or other body geometry."""
+    boxes = [footprint.GetBoundingBox(False, False)]
+    if not courtyard.IsEmpty():
+        boxes.append(courtyard.BBox())
+    return (min(box.GetX() for box in boxes), min(box.GetY() for box in boxes),
+            max(box.GetRight() for box in boxes), max(box.GetBottom() for box in boxes))
+
+
 def _native_is_roundrect(pad, pcbnew):
     try:
         return int(pad.GetShape()) == int(pcbnew.PAD_SHAPE_ROUNDRECT)
@@ -322,7 +331,7 @@ def _inspect(board, pcbnew):
             row["local_y"] = pcbnew.ToMM(pad.GetPosition().y - position.y)
         courtyard_layer = pcbnew.B_CrtYd if footprint.GetLayer() == pcbnew.B_Cu else pcbnew.F_CrtYd
         courtyard = footprint.GetCourtyard(courtyard_layer)
-        box = courtyard.BBox() if not courtyard.IsEmpty() else footprint.GetBoundingBox(False, False)
+        left, top, right, bottom = _placement_envelope(footprint, courtyard)
         # Two-sided placement is permitted only when absence is explicit.
         opposite_courtyard_known, opposite_courtyard_present = _opposite_courtyard_state(
             footprint, pcbnew
@@ -340,16 +349,17 @@ def _inspect(board, pcbnew):
             native_footprint_is_smd = None
         # Enclose geometry about the footprint origin, including off-center
         # THT connectors; a width/height alone cannot describe such parts.
-        width = 2 * max(abs(box.GetX() - position.x), abs(box.GetRight() - position.x))
-        height = 2 * max(abs(box.GetY() - position.y), abs(box.GetBottom() - position.y))
-        # Keep the true courtyard shape available to placement optimizers.
+        width = 2 * max(abs(left - position.x), abs(right - position.x))
+        height = 2 * max(abs(top - position.y), abs(bottom - position.y))
+        # Retain the legacy courtyard field names for the conservative envelope.
+        # Authored courtyards can be smaller than the physical pads/body.
         # Width/height above intentionally remain origin-symmetric for older
         # consumers; off-center connectors can make those legacy values much
-        # larger than the actual courtyard rectangle.
-        courtyard_width = box.GetWidth()
-        courtyard_height = box.GetHeight()
-        courtyard_center_x = (box.GetX() + box.GetRight()) // 2 - position.x
-        courtyard_center_y = (box.GetY() + box.GetBottom()) // 2 - position.y
+        # larger than the actual envelope rectangle.
+        courtyard_width = right - left
+        courtyard_height = bottom - top
+        courtyard_center_x = (left + right) // 2 - position.x
+        courtyard_center_y = (top + bottom) // 2 - position.y
         footprint.SetOrientationDegrees(rotation)
         # pcbnew may rotate footprint fields as a side effect of changing the
         # footprint angle. Inspection must not alter their authored positions.
