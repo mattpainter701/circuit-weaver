@@ -189,24 +189,27 @@ def _extract_metrics(
     params = params or {}
 
     if sim_type == "tran":
-        # Look for output voltage traces (V(vout), V(out), V(3v3), etc.)
-        for name, values in traces.items():
-            name_lower = name.lower()
-            if not values:
-                continue
-
-            if any(kw in name_lower for kw in ("vout", "v_out", "3v3", "3p3", "1v8", "5v")):
-                # Compute ripple: skip first 20% (startup transient)
-                start_idx = max(1, len(values) // 5)
-                steady = values[start_idx:]
+        selector = params.get("output_trace")
+        if selector is None:
+            # Backward-compatible convenience for legacy callers only. Explicit
+            # selectors always use exact equality below.
+            selected = [
+                (name, values)
+                for name, values in traces.items()
+                if any(token in name.casefold() for token in ("vout", "v_out", "3v3", "3p3", "1v8", "5v"))
+            ][:1]
+        else:
+            selected = [
+                (name, values) for name, values in traces.items() if name.casefold() == str(selector).casefold()
+            ]
+        if (selector is None or selector) and len(selected) == 1 and selected[0][0].casefold().startswith("v("):
+            name, values = selected[0]
+            if len(values) >= 5 and all(math.isfinite(complex(value).real) for value in values):
+                # Ignore startup only when the caller supplied a selected output.
+                steady = values[max(1, len(values) // 5) :]
                 if steady:
-                    vmin = min(steady)
-                    vmax = max(steady)
-                    ripple_mv = (vmax - vmin) * 1000
-                    avg = sum(steady) / len(steady)
-                    metrics[f"{name}_ripple_mv"] = round(ripple_mv, 2)
-                    metrics[f"{name}_avg_v"] = round(avg, 4)
-                break
+                    metrics[f"{name}_ripple_mv"] = round((max(steady) - min(steady)) * 1000, 2)
+                    metrics[f"{name}_avg_v"] = round(sum(steady) / len(steady), 6)
 
         # Time axis info
         time_trace = traces.get("time", [])
@@ -263,7 +266,9 @@ def _extract_metrics(
         # Report all node voltages/currents
         for name, values in traces.items():
             if values:
-                metrics[name] = round(values[-1], 6)
+                value = complex(values[-1])
+                if math.isfinite(value.real) and math.isfinite(value.imag):
+                    metrics[name] = round(value.real, 9)
 
     return {
         name: value

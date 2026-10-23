@@ -39,6 +39,126 @@ def _make_component(ref, mpn="", category="", description=""):
 
 
 class TestPlanSimulations:
+    def test_explicit_voltage_and_current_targets_select_exact_vectors_with_units(self):
+        result = SimulationResult(
+            status="ok",
+            sim_type="op",
+            evidence_verified=True,
+            traces={"v(out)": [3.3], "v(out_aux)": [9.0], "i(vsupply)": [-0.02]},
+        )
+        _verify_targets(
+            result,
+            {
+                "rail": {
+                    "metric": "voltage",
+                    "trace": "v(out)",
+                    "unit": "V",
+                    "comparator": "between",
+                    "min": 3.2,
+                    "max": 3.4,
+                },
+                "load": {
+                    "metric": "current",
+                    "trace": "i(vsupply)",
+                    "unit": "A",
+                    "comparator": "abs_le",
+                    "value": 0.03,
+                },
+                "ambiguous": {"metric": "voltage", "trace": "v(out", "unit": "V", "comparator": "ge", "value": 0},
+            },
+            "U1",
+            [],
+        )
+        assert result.target_checks == {"rail": "passed", "load": "passed", "ambiguous": "unverified"}
+
+    def test_explicit_target_unknown_unit_trace_and_nonfinite_are_unverified(self):
+        result = SimulationResult(
+            status="ok",
+            sim_type="op",
+            evidence_verified=True,
+            traces={"v(out)": [float("nan")]},
+        )
+        _verify_targets(
+            result,
+            {
+                "unit": {"metric": "voltage", "trace": "v(out)", "unit": "mV", "comparator": "ge", "value": 0},
+                "trace": {"metric": "voltage", "trace": "v(out2)", "unit": "V", "comparator": "ge", "value": 0},
+                "nonfinite": {"metric": "voltage", "trace": "v(out)", "unit": "V", "comparator": "ge", "value": 0},
+                "impossible": {
+                    "metric": "voltage",
+                    "trace": "v(out)",
+                    "unit": "V",
+                    "comparator": "between",
+                    "min": 4,
+                    "max": 3,
+                },
+            },
+            "U1",
+            [],
+        )
+        assert result.target_checks == {
+            "unit": "unverified",
+            "trace": "unverified",
+            "nonfinite": "unverified",
+            "impossible": "unverified",
+        }
+
+    def test_boolean_explicit_limits_are_not_numeric_engineering_bounds(self):
+        result = SimulationResult(
+            status="ok", sim_type="op", evidence_verified=True, traces={"v(out)": [1.0]}
+        )
+        _verify_targets(
+            result,
+            {
+                "boolean_value": {
+                    "metric": "voltage",
+                    "trace": "v(out)",
+                    "unit": "V",
+                    "comparator": "ge",
+                    "value": True,
+                },
+                "boolean_window": {
+                    "metric": "voltage",
+                    "trace": "v(out)",
+                    "unit": "V",
+                    "comparator": "between",
+                    "min": False,
+                    "max": 2.0,
+                },
+            },
+            "U1",
+            [],
+        )
+        assert result.target_checks == {"boolean_value": "unverified", "boolean_window": "unverified"}
+
+    def test_dc_sweep_requires_explicit_endpoint_sample(self):
+        result = SimulationResult(
+            status="ok", sim_type="dc", evidence_verified=True, traces={"v(out)": [0.0, 1.0, 2.0]}
+        )
+        target = {"metric": "voltage", "trace": "v(out)", "unit": "V", "comparator": "between", "min": 1.9, "max": 2.1}
+        _verify_targets(result, {"without_endpoint": target}, "U1", [])
+        assert result.target_checks["without_endpoint"] == "unverified"
+        _verify_targets(result, {"endpoint": {**target, "sample": "endpoint"}}, "U1", [])
+        assert result.target_checks["endpoint"] == "passed"
+
+    def test_explicit_targets_are_limited_to_supported_analysis_kinds(self):
+        voltage = {"metric": "voltage", "trace": "v(out)", "unit": "V", "comparator": "ge", "value": 0}
+        ripple = {"metric": "ripple", "trace": "v(out)", "unit": "mV", "comparator": "le", "value": 100}
+        ac = SimulationResult(
+            status="ok",
+            sim_type="ac",
+            evidence_verified=True,
+            traces={"v(out)": [complex(1, 3)]},
+        )
+        _verify_targets(ac, {"ac_voltage": voltage, "ac_ripple": ripple}, "U1", [])
+        assert ac.target_checks == {"ac_voltage": "unverified", "ac_ripple": "unverified"}
+
+    def test_operating_point_target_requires_one_real_sample(self):
+        target = {"metric": "voltage", "trace": "v(out)", "unit": "V", "comparator": "ge", "value": 0}
+        result = SimulationResult(status="ok", sim_type="op", evidence_verified=True, traces={"v(out)": [1.0, 2.0]})
+        _verify_targets(result, {"op_voltage": target}, "U1", [])
+        assert result.target_checks["op_voltage"] == "unverified"
+
     def test_detects_power_regulators(self):
         components = [
             _make_component("U1", mpn="TPS62300", category="buck", description="3.3V buck converter"),
@@ -151,6 +271,18 @@ class TestScoreSimulationConfidence:
             assert result.target_checks["ripple_mv"] == "unverified"
             assert score_simulation_confidence([result])[0] == 0.0
 
+    def test_legacy_boolean_limit_is_not_numeric(self):
+        result = SimulationResult(
+            status="ok",
+            sim_type="tran",
+            evidence_verified=True,
+            metrics={"v(out)_ripple_mv": 0.5},
+        )
+        _verify_targets(result, {"ripple_mv": True}, "U1", [])
+
+        assert result.target_checks["ripple_mv"] == "unverified"
+        assert score_simulation_confidence([result])[0] == 0.0
+
     def test_ambiguous_or_untyped_ripple_targets_are_unverified(self):
         for targets, metrics in (
             ({"ripple": 3000}, {"v(out)_ripple_mv": 1000.0}),
@@ -238,9 +370,7 @@ class TestRunDesignSimulations:
         def run_fake(_path, *, sim_type, analysis_params):
             assert sim_type == "ac"
             assert analysis_params == spec["simulation"]["analyses"][0]["analysis_params"]
-            return SimulationResult(
-                status="ok", sim_type="ac", evidence_verified=True, metrics={"bandwidth_hz": 1500}
-            )
+            return SimulationResult(status="ok", sim_type="ac", evidence_verified=True, metrics={"bandwidth_hz": 1500})
 
         with patch("circuit_weaver.spice_runner.run_simulation", side_effect=run_fake):
             report = run_design_simulations(components, plan, output_dir=tmp_path / "sims")

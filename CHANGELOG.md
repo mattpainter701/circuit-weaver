@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Keep explicitly selected circuit directories separate from unrelated ancestor state. Preserve recorded source/output ownership and canonical generated output folders, and checkpoint separately requested native outputs in their own directory.
+- Add explicit adoption of existing circuit directories without rewriting their sources, plus shared bounded routing controls. Keep untracked `open` inspection read-only and preserve hash-based resume checks.
+- Add local library bundle plan/apply across CLI, Python and MCP with source hashes, user-declared provenance/license, preserved project tables, conflict checks and rollback.
+- Add exact unit-bearing voltage/current/ripple targets and structured PULSE sources, with generic active-device simulation benchmarks and isolated negative controls. Route dense schematic connections around all symbol bodies before falling back to same-net labels.
 - Add explicit, structured SPICE testbenches with declared sources, sweep settings, trace selectors and engineering limits. Include repeatable IoT, SDR IQ, transmitter-filter, radar IF-bank and industrial-input passive benchmarks with analytic checks and negative controls.
 - Scale native schematic import timeouts within hard limits and reuse unaffected schematic page layouts during root hierarchy splitting. Correct the AD9528 package binding and retain foreign-net guards when routing crowded power labels.
 - Add connected BLE sensor, SDR clock-carrier and 1,202-part relay stress fixtures alongside clearly labeled comparison designs; distinguish CAD asset access, pin-net checks, electrical simulation and routing evidence.

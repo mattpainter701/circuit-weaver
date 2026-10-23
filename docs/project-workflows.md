@@ -19,13 +19,28 @@ circuit-weaver discover --root <working-directory> --json
 circuit-weaver open <absolute-project-or-source-path> --json
 ```
 
-`start` creates or initializes a selected project directory, optionally from
+`start` creates a draft in an empty selected directory, optionally from
 a JSON or YAML specification:
 
 ```text
 circuit-weaver start <absolute-project-dir> --name sensor --json
 circuit-weaver start <absolute-project-dir> --spec <spec.yaml> --json
 ```
+
+`open` inspects an existing untracked circuit without writing. Use
+`circuit-weaver adopt <existing-circuit-dir> --json` (Python/MCP
+`adopt_project`) to explicitly record source baselines before planning native stages.
+Adoption preserves source bytes and records their hashes; it does not claim
+that a previously created board has passed build, placement, routing or DRC.
+The native runner can also initialize state when invoked directly; adoption
+provides a deliberate, separately reviewable source inventory.
+
+An explicitly selected circuit directory takes precedence over unrelated
+ancestor manifests or project files. Recorded source/artifact/checkpoint
+ownership still identifies files belonging to a parent project. The canonical
+`output/` directory inherits its managed parent unless it has its own project
+state or `design.yaml`. Separate native output directories receive their own
+checkpoints instead of changing unrelated ancestor projects.
 
 Interactive CLI use begins by running `circuit-weaver` with no subcommand. It
 shows the runtime and discovered project choices before asking which workflow
@@ -39,6 +54,10 @@ The canonical stages are `validate`, `generate`, `build`, `place`, `route`, and
 and plan hash; it does not execute stages or preflight tool availability. The
 workflow runner records stage boundaries and input/output hashes. On restart it
 checks those hashes and continues at the first invalid or incomplete stage.
+Generation tracks project-local CAD tables, symbols and footprints; previews
+also track contained project 3D assets. Changes invalidate the affected saved
+plan. External/global model files are checked during rendering but are not
+part of this local-asset resume inventory.
 Cancellation is requested immediately and observed at the next stage boundary.
 
 ```text
@@ -60,6 +79,22 @@ completed routed board, or manufacturing readiness. Native or assembled stages
 must report their actual evidence and remain incomplete when required tools or
 artifacts are absent.
 
+The shared runner accepts these routing controls in `options_json` through
+CLI, Python and MCP. They are included in checkpoint option hashes.
+
+| Option | Native routing flag | Accepted values |
+| --- | --- | --- |
+| `route_timeout` | `--timeout` | Positive seconds |
+| `route_max_passes` | `--max-passes` | Integer 0–9,999; 0 leaves the pass count unlimited |
+| `route_optimization_threads` | `--optimization-threads` | Integer 0–1,024; 0 disables optimization threads |
+| `route_attempts` | `--attempts` | Integer 1–32 |
+| `route_effort` | `--effort` | `fast`, `medium` or `high` |
+
+For a bounded exploratory run, use `route_timeout: 300`,
+`route_max_passes: 8` and `route_optimization_threads: 0`. Completion still
+requires the native connectivity and DRC gates; limits can leave a board
+incomplete.
+
 `clearance_mm` and `minimum_drill_mm` are explicit prototype assumptions for
 native board construction. They do not weaken authored project rules or bypass
 physical DRC gates; use them only when those assumptions are appropriate for
@@ -72,6 +107,7 @@ The same functions are available from `circuit_weaver.project_workflow`:
 ```python
 from circuit_weaver.project_workflow import (
     cancel_workflow,
+    adopt_project,
     open_project,
     plan_workflow,
     resume_workflow,
@@ -104,7 +140,7 @@ server, then configure the MCP client separately:
 ```
 
 The MCP server exposes `runtime_info`, the read-only `library_access` audit,
-`start_project`, `open_project`,
+`start_project`, `open_project`, `adopt_project`,
 `plan_workflow`, `run_workflow`, `workflow_status`, `resume_workflow`, and
 `cancel_workflow`, in addition to the original validation, generation,
 discovery, research, and manufacturing-readiness tools. `resume_workflow`
@@ -167,7 +203,7 @@ simulation:
         bandwidth_hz_max: 1605
 ```
 
-The source contract supports only structured voltage/current sources with
+The source contract supports structured voltage/current sources with
 finite numeric `dc` and/or `ac` values and endpoints on named, connected nets
 (or ground aliases). Analysis kinds are `ac`, `tran`, `op`, and `dc`; parameter
 and trace selectors are validated before SPICE execution. Bandwidth targets use
@@ -179,3 +215,74 @@ ambiguous, or unsupported targets also remain unverified. A verified passive
 AC result establishes only that the supplied netlist generated fresh parsed
 results and its stated bandwidth bounds passed; it does not validate an IC
 model, package fit, board layout, RF behavior, or manufacturing readiness.
+
+Structured voltage sources also accept `pulse: {v1, v2, delay, rise, fall,
+width, period}` with finite numeric values and nonnegative timing. The period
+must be positive and at least the width. A PULSE source cannot also specify
+DC/AC values. Transient `output_trace` explicitly selects the node for the
+steady-window ripple metric.
+
+Exact trace targets can declare a physical unit and comparator:
+
+```yaml
+target_metrics:
+  output_rail:
+    metric: voltage
+    trace: v(VOUT)
+    unit: V
+    comparator: between
+    min: 3.2
+    max: 3.4
+```
+
+Supported metrics are voltage, current and ripple; use `V`, `A` and `mV`
+respectively. `between` uses `min`/`max`; `le` and `ge` use `value`. The
+`abs_between`, `abs_le` and `abs_ge` comparators check magnitude. Matching uses
+the exact trace name, ignoring case. Missing/ambiguous traces, unsupported
+units, malformed limits and nonfinite values cannot verify a target.
+Operating-point targets check their sole sample. DC sweep targets must state
+`sample: endpoint`; this checks the final sample only and does not qualify the
+entire sweep. Other DC sample policies remain unverified.
+
+Run `python -m benchmarks.diverse_systems.active_suite --output <new-dir>`
+from the repository for the authored generic op-amp/diode benchmarks. These
+exercise supply/load cases and bad pin-map/limit controls; they do not establish
+manufacturer model fidelity, RF performance, stability or hardware operation.
+
+## Local library onboarding
+
+Use `library-access` first to distinguish missing assets from missing functional
+support. For local authored or vendor-supplied assets, the bundle API plans
+contained copies and project table additions before applying them:
+
+```text
+circuit-weaver library-bundle plan manifest.json --project-root <project> --json
+circuit-weaver library-bundle apply saved-plan.json --project-root <project> --json
+```
+
+Save the complete first response as `saved-plan.json`. The corresponding Python
+functions in `circuit_weaver.library_bundle` are
+`plan_library_bundle(project_root, manifest)` and
+`apply_library_bundle(project_root, plan)`. MCP takes explicit absolute project
+paths: `plan_library_bundle(project_root, manifest_json)` and
+`apply_library_bundle(project_root, plan_json)`. JSON arguments are objects
+encoded as strings.
+
+```json
+{"version":1,"assets":[
+  {"kind":"symbol_library","source":"/absolute/vendor/parts.kicad_sym","nickname":"VendorParts","provenance":"vendor download, revision/date recorded by caller","license":"vendor terms reviewed by caller"},
+  {"kind":"footprint_library","source":"/absolute/vendor/Packages.pretty","nickname":"VendorPackages","provenance":"vendor download, revision/date recorded by caller","license":"vendor terms reviewed by caller"}
+]}
+```
+
+Model and SPICE entries use `kind: model` or `spice`, a local `source`, and a
+`destination` below `libraries/`. SPICE entries additionally require explicit
+`subckt` and `pin_order` metadata. File presence and declared metadata do not
+verify a model or pin mapping. Provenance and license strings are user
+assertions. The importer performs no downloads, creates no functional builder,
+and makes no sourcing, electrical or package-fit claim.
+
+Plans bind source bytes and existing tables with SHA-256, preserve unrelated
+table entries and literal `${KIPRJMOD}` paths, reject stale or conflicting
+state, and roll back touched assets if apply fails. Native validation and
+engineering inspection still follow asset import.

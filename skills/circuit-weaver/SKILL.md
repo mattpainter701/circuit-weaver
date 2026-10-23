@@ -48,6 +48,7 @@ Use the shared project lifecycle commands:
 ```text
 circuit-weaver start <absolute-project-dir> [--spec <yaml>] [--name <name>] --json
 circuit-weaver open <absolute-project-or-source-path> --json
+circuit-weaver adopt <absolute-existing-circuit-dir> --json
 circuit-weaver workflow plan <absolute-project-dir> [--stages validate generate build place route preview] --json
 circuit-weaver workflow run <absolute-project-dir> [--stages ...] --json
 circuit-weaver workflow status <absolute-project-dir> --json
@@ -65,6 +66,10 @@ the Python/MCP `resume_workflow` execute the verified saved workflow from its
 first incomplete stage. The legacy top-level `resume` command prints a plan by
 default; add `--execute` only when the user asked to continue execution.
 Reconcile status and file hashes before retrying work.
+`open` leaves untracked native circuits unchanged. When the user asks to continue
+one, `adopt` / Python or MCP `adopt_project` records a deliberate source baseline
+without replacing sources. The native runner can also initialize tracking
+directly. Select and plan the applicable stages.
 Stages are checkpointed and resumable. Cancellation takes effect at a stage
 boundary. A successful stage means only what its evidence records: planning,
 preview, or placement does not claim a completed native KiCad build or route.
@@ -72,7 +77,7 @@ Never imply manufacture approval from a workflow status.
 
 For MCP, call `runtime_info` first and use the same explicit interpreter to
 launch `python -m circuit_weaver.mcp_server`. Invoke `start_project`,
-`open_project`, `plan_workflow`, `run_workflow`, `workflow_status`,
+`open_project`, `adopt_project`, `plan_workflow`, `run_workflow`, `workflow_status`,
 `resume_workflow`, and `cancel_workflow` with explicit absolute project paths.
 `resume_workflow` executes the verified saved plan; call `plan_workflow` for a
 non-executing plan. Pass specs and options as JSON objects and stage selections
@@ -91,6 +96,14 @@ not validate pinout, package fit, electrical behavior, or RF performance. A
 missing functional builder or SPICE contract remains a separate engineering
 gap; library availability alone does not qualify RF, radar, SDR, or transmitter
 circuits.
+
+For user-supplied local assets, use `library-bundle plan <manifest.json>
+--project-root <dir> --json` (Python/MCP `plan_library_bundle`) and review the
+SHA-bound destinations before `library-bundle apply <plan.json>` (Python/MCP
+`apply_library_bundle`). Preserve the returned plan JSON exactly. Imports stay
+inside project `libraries/` and preserve unrelated library table entries.
+Provenance and license fields are user assertions; an imported symbol, model,
+or declared SPICE pin order still needs engineering verification.
 
 For `simulate`, report the returned status and evidence rather than treating a
 successful ngspice process as acceptance. `verified` requires fresh parsed
@@ -993,7 +1006,8 @@ Current phase: placement_review
 Next actions: deterministic commands/inspections for this state
 ```
 
-`resume` reports a restart plan and never executes it. Use `log-status` and
+`resume` reports a restart plan by default; `resume --execute` and
+`workflow resume` execute the saved verified plan. Use `log-status` and
 `log-view` only as supporting diagnostics after durable state is reconciled.
 
 ### Offer Actions

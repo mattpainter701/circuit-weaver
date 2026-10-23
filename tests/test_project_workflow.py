@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from circuit_weaver import project_workflow as workflow
-from circuit_weaver.project_state import load_project_state
+from circuit_weaver.project_state import file_sha256, load_project_state, project_state_path
 
 
 def _project(tmp_path: Path) -> Path:
@@ -43,6 +43,180 @@ def test_start_project_refuses_existing_files_and_keeps_cwd_paths_portable(tmp_p
         json.loads((Path(created["project_dir"]) / ".circuit-weaver" / "project.json").read_text())["name"]
         == "Relative"
     )
+
+
+def test_open_native_project_advertises_read_only_adoption(tmp_path: Path):
+    root = tmp_path / "native"
+    root.mkdir()
+    schematic = root / "controller.kicad_sch"
+    schematic.write_text("(kicad_sch)", encoding="utf-8")
+
+    opened = workflow.open_project(root)
+
+    assert opened["ok"] is True
+    assert opened["summary"]["read_only"] is True
+    assert opened["next_actions"] == ["adopt_project"]
+    assert not project_state_path(root).exists()
+
+
+def test_adopt_project_records_hashes_without_rewriting_sources_and_is_idempotent(tmp_path: Path):
+    root = tmp_path / "legacy-project"
+    root.mkdir()
+    spec = root / "design.yaml"
+    board = root / "prototype.kicad_pcb"
+    spec.write_text("project: Legacy\ndigital: []\n", encoding="utf-8")
+    board.write_text("(kicad_pcb)", encoding="utf-8")
+    original = {path: path.read_bytes() for path in (spec, board)}
+
+    adopted = workflow.adopt_project(root, name="Adopted Legacy")
+
+    assert adopted["ok"] is True
+    assert adopted["adopted"] is True
+    state = load_project_state(root)
+    assert state is not None
+    assert state.name == "Adopted Legacy"
+    assert state.kind == "design"
+    assert state.current_phase == "adopted"
+    assert {item["path"] for item in state.sources} == {"design.yaml", "prototype.kicad_pcb"}
+    assert {item["path"]: item["sha256"] for item in state.sources} == {
+        "design.yaml": file_sha256(spec),
+        "prototype.kicad_pcb": file_sha256(board),
+    }
+    assert {path: path.read_bytes() for path in original} == original
+    before = state.to_dict()
+
+    repeated = workflow.adopt_project(root, name="Must Not Rename")
+
+    assert repeated["ok"] is True
+    assert repeated["adopted"] is False
+    assert load_project_state(root).to_dict() == before
+
+
+def test_adopt_project_rejects_unsupported_ambiguous_and_nested_state_targets(tmp_path: Path):
+    unsupported = tmp_path / "empty"
+    unsupported.mkdir()
+    assert workflow.adopt_project(unsupported)["error"]["code"] == "unsupported_target"
+
+    ambiguous = tmp_path / "ambiguous"
+    ambiguous.mkdir()
+    (ambiguous / "first.yaml").write_text("project: First", encoding="utf-8")
+    (ambiguous / "second.yaml").write_text("project: Second", encoding="utf-8")
+    assert workflow.adopt_project(ambiguous)["error"]["code"] == "ambiguous_spec"
+
+    outer = _project(tmp_path)
+    nested = outer / "legacy-child"
+    nested.mkdir()
+    child_board = nested / "board.kicad_pcb"
+    child_board.write_text("(kicad_pcb)", encoding="utf-8")
+    child_adoption = workflow.adopt_project(nested)
+    assert child_adoption["ok"] is True
+    assert project_state_path(nested).is_file()
+
+    parent = tmp_path / "contains-stateful-child"
+    parent.mkdir()
+    child = parent / "managed"
+    assert workflow.start_project(child, {"project": "Managed"})["ok"]
+    (parent / "board.kicad_pcb").write_text("(kicad_pcb)", encoding="utf-8")
+    result = workflow.adopt_project(parent)
+    assert result["ok"] is False
+    assert result["error"]["code"] == "ambiguous_project"
+
+
+def test_adopt_project_prefers_explicit_child_boundary_over_unclaimed_parent_marker(tmp_path: Path):
+    root = tmp_path / "native-root"
+    root.mkdir()
+    (root / "board.kicad_pro").write_text("{}", encoding="utf-8")
+    nested = root / "hardware"
+    nested.mkdir()
+    (nested / "controller.kicad_sch").write_text("(kicad_sch)", encoding="utf-8")
+
+    result = workflow.adopt_project(nested)
+
+    assert result["ok"] is True
+    assert result["project_dir"] == str(nested.resolve())
+    assert project_state_path(nested).is_file()
+
+
+def test_adopt_project_ignores_unrelated_ancestor_manifest_for_direct_board_project(tmp_path: Path):
+    from circuit_weaver.project_state import ProjectState, save_project_state
+
+    aggregator = tmp_path / "automation_validation_results"
+    aggregator.mkdir()
+    aggregator_state = ProjectState(name="Unrelated Aggregator", kind="native")
+    save_project_state(aggregator, aggregator_state)
+    (aggregator / "routed-noopt.kicad_pro").write_text("{}", encoding="utf-8")
+    project = aggregator / "python-project"
+    project.mkdir()
+    (project / "prototype.kicad_pcb").write_text("(kicad_pcb)", encoding="utf-8")
+
+    opened = workflow.open_project(project)
+    assert opened["ok"] is True
+    assert opened["project_dir"] == str(project.resolve())
+    assert opened["summary"]["read_only"] is True
+    assert not project_state_path(project).exists()
+
+    adopted = workflow.adopt_project(project)
+
+    assert adopted["ok"] is True
+    assert adopted["project_dir"] == str(project.resolve())
+    assert project_state_path(project).is_file()
+    assert load_project_state(aggregator).to_dict() == aggregator_state.to_dict()
+
+
+def test_adopt_project_rejects_child_recorded_by_parent_state(tmp_path: Path):
+    from circuit_weaver.project_state import ProjectState, save_project_state
+
+    parent = tmp_path / "recorded-owner"
+    child = parent / "board"
+    child.mkdir(parents=True)
+    board = child / "controller.kicad_pcb"
+    board.write_text("(kicad_pcb)", encoding="utf-8")
+    parent.mkdir(exist_ok=True)
+    owner = ProjectState(
+        name="Recorded Owner",
+        kind="native",
+        sources=[{"path": str(board.resolve()), "sha256": file_sha256(board)}],
+    )
+    save_project_state(parent, owner)
+
+    result = workflow.adopt_project(child)
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "state_conflict"
+    assert result["error"]["choices"] == [str(parent.resolve())]
+    assert not project_state_path(child).exists()
+
+
+def test_adopt_project_serializes_with_workflow_lock_and_rechecks_state(tmp_path: Path, monkeypatch):
+    root = tmp_path / "native"
+    root.mkdir()
+    (root / "board.kicad_pcb").write_text("(kicad_pcb)", encoding="utf-8")
+
+    with workflow._RunLock(root):
+        busy = workflow.adopt_project(root)
+    assert busy["ok"] is False
+    assert busy["error"]["code"] == "workflow_busy"
+    assert not project_state_path(root).exists()
+
+    class RacingLock:
+        def __init__(self, locked_root):
+            assert locked_root == root
+
+        def __enter__(self):
+            from circuit_weaver.project_state import save_project_state
+
+            save_project_state(root, workflow.ProjectState(name="Created While Waiting", kind="native"))
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    monkeypatch.setattr(workflow, "_RunLock", RacingLock)
+    raced = workflow.adopt_project(root, name="Must Not Replace")
+
+    assert raced["ok"] is True
+    assert raced["adopted"] is False
+    assert load_project_state(root).name == "Created While Waiting"
 
 
 def test_resume_rejects_changed_source_inputs(tmp_path: Path, monkeypatch):
@@ -96,6 +270,79 @@ def test_append_only_generation_logs_are_not_later_stage_inputs(tmp_path: Path, 
 
     resumed = workflow.resume_workflow(root)
     assert resumed["ok"] is True
+
+
+def test_generate_checkpoint_tracks_project_tables_symbols_and_footprints(tmp_path: Path, monkeypatch):
+    root = _project(tmp_path)
+    tracked = [
+        root / "fp-lib-table",
+        root / "sym-lib-table",
+        root / "Custom.pretty" / "part.kicad_mod",
+        root / "Custom.kicad_sym",
+    ]
+    tracked[0].write_text("footprint table", encoding="utf-8")
+    tracked[1].write_text("symbol table", encoding="utf-8")
+    tracked[2].parent.mkdir()
+    tracked[2].write_text("footprint", encoding="utf-8")
+    tracked[3].write_text("symbol", encoding="utf-8")
+    expected = {path.resolve() for path in tracked}
+    assert expected.issubset({Path(path).resolve() for path in workflow._stage_inputs(root, "generate", [])})
+
+    generated_cad = []
+
+    def fake_generate(project, stage, options, prior):
+        output_dir = project / "output"
+        (output_dir / "Generated.pretty").mkdir(parents=True, exist_ok=True)
+        generated = [
+            output_dir / "generated.kicad_sch",
+            output_dir / "sym-lib-table",
+            output_dir / "fp-lib-table",
+            output_dir / "Generated.kicad_sym",
+            output_dir / "Generated.pretty" / "part.kicad_mod",
+        ]
+        for path in generated:
+            path.write_text("generated", encoding="utf-8")
+        generated_cad.extend(generated[1:])
+        return {"status": "ok"}, [str(path) for path in generated]
+
+    monkeypatch.setattr(workflow, "_execute_stage", fake_generate)
+    assert workflow.run_workflow(root, stages=["generate"])["ok"] is True
+    generate_inputs = {Path(path).resolve() for path in workflow._stage_inputs(root, "generate", [])}
+    assert not ({path.resolve() for path in generated_cad} & generate_inputs)
+    assert workflow.resume_workflow(root)["ok"] is True
+    tracked[0].write_text("updated footprint table", encoding="utf-8")
+    resumed = workflow.resume_workflow(root)
+    assert resumed["ok"] is False
+    assert resumed["error"]["code"] == "needs_replan"
+
+
+def test_preview_checkpoint_tracks_contained_models_and_ignores_receipts(tmp_path: Path, monkeypatch):
+    root = tmp_path / "native-preview"
+    root.mkdir()
+    board = root / "prototype.kicad_pcb"
+    board.write_text("(kicad_pcb)", encoding="utf-8")
+    model = root / "libraries" / "models" / "package.step"
+    model.parent.mkdir(parents=True)
+    model.write_text("step model", encoding="utf-8")
+    receipt_model = root / "libraries" / ".circuit-weaver-receipts" / "ignored.wrl"
+    receipt_model.parent.mkdir(parents=True)
+    receipt_model.write_text("receipt", encoding="utf-8")
+
+    stage_inputs = {Path(path).resolve() for path in workflow._stage_inputs(root, "preview", [])}
+    assert model.resolve() in stage_inputs
+    assert receipt_model.resolve() not in stage_inputs
+
+    def fake_preview(project, stage, options, prior):
+        output = project / "preview.svg"
+        output.write_text("preview", encoding="utf-8")
+        return {"status": "ok"}, [str(output)]
+
+    monkeypatch.setattr(workflow, "_execute_stage", fake_preview)
+    assert workflow.run_workflow(root, stages=["preview"])["ok"] is True
+    model.write_text("changed step model", encoding="utf-8")
+    resumed = workflow.resume_workflow(root)
+    assert resumed["ok"] is False
+    assert resumed["error"]["code"] == "needs_replan"
 
 
 def test_native_only_build_can_be_planned_without_a_yaml_spec(tmp_path: Path):
@@ -155,6 +402,57 @@ def test_build_rule_overrides_must_be_finite_and_positive(tmp_path: Path):
         result = workflow.plan_workflow(root, stages=["validate"], options=options)
         assert result["ok"] is False
         assert result["error"]["code"] == "invalid_options"
+
+
+def test_route_controls_are_validated_and_forwarded_without_changing_timeout_bounds(tmp_path: Path, monkeypatch):
+    root = tmp_path / "route-controls"
+    root.mkdir()
+    (root / "placed.kicad_pcb").write_text("(kicad_pcb)", encoding="utf-8")
+    for options in (
+        {"route_max_passes": -1},
+        {"route_max_passes": 10000},
+        {"route_max_passes": True},
+        {"route_optimization_threads": -1},
+        {"route_optimization_threads": 1025},
+        {"route_optimization_threads": False},
+        {"route_attempts": 0},
+        {"route_attempts": 33},
+        {"route_effort": "unbounded"},
+    ):
+        result = workflow.plan_workflow(root, stages=["route"], options=options)
+        assert result["ok"] is False
+        assert result["error"]["code"] == "invalid_options"
+
+    captured: list[str] = []
+
+    def fake_cli(stage, args, cwd, timeout):
+        captured.extend(args)
+        Path(args[args.index("--output") + 1]).write_text("(session)", encoding="utf-8")
+        Path(args[args.index("--routed-board") + 1]).write_text("(kicad_pcb)", encoding="utf-8")
+        return {"status": "ok"}
+
+    monkeypatch.setattr(workflow, "_cli", fake_cli)
+    result = workflow._execute_stage(
+        root,
+        "route",
+        {
+            "route_max_passes": 250,
+            "route_optimization_threads": 2,
+            "route_attempts": 3,
+            "route_effort": "high",
+            "route_timeout": 17,
+        },
+        [],
+    )
+
+    for flag, value in (
+        ("--max-passes", "250"),
+        ("--optimization-threads", "2"),
+        ("--attempts", "3"),
+        ("--effort", "high"),
+    ):
+        assert captured[captured.index(flag) + 1] == value
+    assert result[0]["status"] == "ok"
 
 
 def test_resume_rejects_changed_checkpoint_artifact(tmp_path: Path, monkeypatch):
@@ -241,6 +539,31 @@ def test_native_cli_child_does_not_inherit_transport_stdin(tmp_path: Path, monke
 
     assert result == {"status": "ok"}
     assert calls[0][1]["stdin"] is subprocess.DEVNULL
+
+
+def test_nonzero_native_cli_keeps_structured_error_ahead_of_large_inventory(tmp_path: Path, monkeypatch):
+    inventory = ["model-entry"] * 5000
+    payload = json.dumps(
+        {
+            "status": "error",
+            "error": {"code": "preview_failed", "message": "model preview failed before inventory export"},
+            "models": inventory,
+        }
+    )
+    monkeypatch.setattr(
+        workflow.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stdout=payload, stderr=""),
+    )
+
+    try:
+        workflow._cli("preview", ["preview-pcb"], tmp_path, 30)
+    except workflow.WorkflowError as exc:
+        assert exc.code == "preview_failed"
+        assert "model preview failed before inventory export" in str(exc)
+        assert len(str(exc)) < 200
+    else:
+        raise AssertionError("nonzero native exit was treated as success")
 
 
 def test_run_stage_uses_exact_root_and_ignores_nested_project(tmp_path: Path):

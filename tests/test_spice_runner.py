@@ -353,6 +353,18 @@ write results.raw
         # Ripple should be (3.32 - 3.28) * 1000 = 40 mV (from steady state)
         assert metrics["V(vout)_ripple_mv"] > 0
 
+    def test_tran_explicit_output_trace_is_selected_exactly(self):
+        traces = {
+            "time": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+            "V(vout)": [0, 0, 3.28, 3.29, 3.30, 3.30, 3.30, 3.30, 3.30, 3.30],
+            "V(vout_aux)": [0, 0, 3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7],
+        }
+        selected = _extract_metrics(traces, "tran", {"output_trace": "V(vout_aux)"})
+        missing = _extract_metrics(traces, "tran", {"output_trace": "V(vout_auxiliary)"})
+        assert selected["V(vout_aux)_ripple_mv"] == pytest.approx(700.0)
+        assert "V(vout)_ripple_mv" not in selected
+        assert not any(name.endswith("_ripple_mv") for name in missing)
+
     def test_tran_time_duration(self):
         traces = {"time": [0, 1e-6, 2e-6]}
         metrics = _extract_metrics(traces, "tran")

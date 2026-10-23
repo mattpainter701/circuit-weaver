@@ -29,6 +29,10 @@ def add_parsers(subparsers) -> None:
     opening = subparsers.add_parser("open", help="Discover or open a project from a circuit directory")
     opening.add_argument("project", nargs="?", default=".")
     opening.add_argument("--json", dest="json_output", action="store_true")
+    adopt = subparsers.add_parser("adopt", help="Track an existing circuit without replacing source files")
+    adopt.add_argument("project", nargs="?", default=".")
+    adopt.add_argument("--name")
+    adopt.add_argument("--json", dest="json_output", action="store_true")
     runtime = subparsers.add_parser("runtime-info", help="Identify the exact CLI, skill and MCP runtime")
     runtime.add_argument("--json", dest="json_output", action="store_true")
     runtime.add_argument("--audit-external", action="store_true")
@@ -36,6 +40,13 @@ def add_parsers(subparsers) -> None:
     libraries.add_argument("query", nargs="?", default="")
     libraries.add_argument("--project-root", default=".")
     libraries.add_argument("--json", dest="json_output", action="store_true")
+    bundle = subparsers.add_parser("library-bundle", help="Plan or apply a local project library bundle")
+    bundle_actions = bundle.add_subparsers(dest="bundle_action", required=True)
+    for name in ("plan", "apply"):
+        action = bundle_actions.add_parser(name)
+        action.add_argument("document", help="Manifest JSON for plan; saved plan JSON for apply")
+        action.add_argument("--project-root", default=".")
+        action.add_argument("--json", dest="json_output", action="store_true")
     workflow = subparsers.add_parser("workflow", help="Plan, execute and resume checkpointed prototype work")
     actions = workflow.add_subparsers(dest="workflow_action", required=True)
     for name in ("plan", "run", "status", "resume", "cancel"):
@@ -53,6 +64,13 @@ def add_parsers(subparsers) -> None:
 def dispatch(args) -> dict[str, Any] | None:
     from . import project_workflow as workflow
 
+    if args.command == "library-bundle":
+        from .library_bundle import apply_library_bundle, plan_library_bundle
+
+        document = json.loads(Path(args.document).read_text(encoding="utf-8-sig"))
+        operation = plan_library_bundle if args.bundle_action == "plan" else apply_library_bundle
+        result = operation(Path(args.project_root).resolve(), document)
+        return result
     if args.command == "library-access":
         from .library_access import audit_library_access
 
@@ -72,6 +90,8 @@ def dispatch(args) -> dict[str, Any] | None:
         return workflow.start_project(args.project, spec, name=args.name)
     if args.command == "open":
         return workflow.open_project(args.project)
+    if args.command == "adopt":
+        return workflow.adopt_project(args.project, name=args.name)
     if args.command == "resume" and getattr(args, "execute", False):
         return workflow.resume_workflow(args.project, options=args.options_json)
     if args.command != "workflow":
@@ -142,7 +162,7 @@ def native_stage(
     root = (
         source_root
         if project_state_path(source_root).is_file() and destination.is_relative_to(source_root)
-        else resolve_project_root(destination.parent)
+        else destination.parent
     )
     inputs = [source]
     if stage == "place" and options.get("design"):

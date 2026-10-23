@@ -192,32 +192,80 @@ def write_json_atomic(path: str | Path, payload: dict[str, Any]) -> None:
     _atomic_write_json(Path(path), payload)
 
 
-def _has_project_marker(directory: Path) -> bool:
-    if project_state_path(directory).is_file() or (directory / "design.yaml").is_file():
+def _has_strong_circuit_boundary(directory: Path) -> bool:
+    """Identify an explicit spec or native KiCad project boundary."""
+    if (directory / "design.yaml").is_file():
         return True
     try:
-        return any(directory.glob("*.kicad_pro"))
+        return any(path.is_file() for path in directory.glob("*.kicad_pro"))
     except OSError:
         return False
+
+
+def _has_local_circuit_boundary(directory: Path) -> bool:
+    """Identify a directly rooted circuit, excluding state manifests alone."""
+    if _has_strong_circuit_boundary(directory):
+        return True
+    for pattern in ("*.kicad_pcb", "*.kicad_sch"):
+        try:
+            if any(path.is_file() for path in directory.glob(pattern)):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def resolve_project_root(target: str | Path = ".") -> Path:
     """Resolve a file or directory to its nearest Circuit Weaver project root.
 
-    Existing manifests win, followed by ``design.yaml`` and KiCad project
-    markers.  If no marker exists, a directory resolves to itself and a file
-    resolves to its parent.  The latter makes the function useful while a new
-    import project is being initialized.
+    Exact manifests and manifests with recorded ownership win. A direct
+    circuit boundary then takes precedence over unrelated ancestor manifests.
+    If no marker exists, a directory resolves to itself and a file resolves
+    to its parent.
     """
 
     candidate = _absolute(target)
     start = candidate.parent if candidate.is_file() or (not candidate.exists() and candidate.suffix) else candidate
 
-    for directory in (start, *start.parents):
-        if project_state_path(directory).is_file():
+    if project_state_path(start).is_file():
+        return start
+
+    # A parent can own native files under output/ or another directory, but
+    # only when its durable state names the requested path as a source,
+    # artifact, or checkpoint input/output.
+    for directory in start.parents:
+        if not project_state_path(directory).is_file():
+            continue
+        state = _load_project_state_file(project_state_path(directory))
+        if state is not None and _state_matches_lookup_target(
+            directory, state, candidate if candidate.is_file() else start, is_file=candidate.is_file()
+        ):
             return directory
-    for directory in (start, *start.parents):
-        if _has_project_marker(directory):
+
+    # The conventional generated ``output/`` directory belongs to its parent
+    # project when that parent has state or a canonical design spec. Do not
+    # apply this convention to arbitrary child directories.
+    if (
+        start.name.casefold() == "output"
+        and not project_state_path(start).exists()
+        and not (start / "design.yaml").is_file()
+        and (
+            project_state_path(start.parent).is_file()
+            or (start.parent / "design.yaml").is_file()
+        )
+    ):
+        return start.parent
+
+    # An explicitly selected direct circuit boundary wins over unclaimed
+    # ancestor markers. A parent state may still own it through the recorded
+    # source/artifact/checkpoint evidence checked above.
+    if _has_local_circuit_boundary(start):
+        return start
+
+    # Fall back to the nearest ancestor boundary only when the selected
+    # directory contains no supported circuit input of its own.
+    for directory in start.parents:
+        if _has_strong_circuit_boundary(directory) or _has_local_circuit_boundary(directory):
             return directory
     return start
 
@@ -323,18 +371,33 @@ def _descendant_project_state_roots(start: Path) -> list[Path]:
     return sorted(found, key=lambda root: str(root).casefold())
 
 
-def _state_source_paths(root: Path, state: ProjectState) -> set[Path]:
-    """Return normalized generation-source paths referenced by one manifest."""
+def _state_owned_paths(root: Path, state: ProjectState) -> set[Path]:
+    """Return normalized source/artifact/checkpoint paths in one manifest."""
 
     values: set[str] = set()
     workflow_source = str((state.workflow.get("generate") or {}).get("source", "")).strip()
     if workflow_source:
         values.add(workflow_source)
     for record in state.sources:
-        if record.get("role") == "generation_source":
-            value = str(record.get("path", "")).strip()
-            if value:
-                values.add(value)
+        value = str(record.get("path", "")).strip()
+        if value:
+            values.add(value)
+    for record in state.artifacts:
+        value = str(record.get("path", "")).strip()
+        if value:
+            values.add(value)
+
+    runner = state.workflow.get("runner") or {}
+    for checkpoint in (runner.get("stages") or {}).values():
+        for group in ("inputs", "outputs"):
+            for record in checkpoint.get(group, []):
+                value = str(record.get("path", "")).strip()
+                if value:
+                    values.add(value)
+
+    generated_output = str((state.workflow.get("generate") or {}).get("output_dir", "")).strip()
+    if generated_output:
+        values.add(generated_output)
 
     resolved: set[Path] = set()
     for value in values:
@@ -346,10 +409,10 @@ def _state_source_paths(root: Path, state: ProjectState) -> set[Path]:
 
 
 def _state_matches_lookup_target(root: Path, state: ProjectState, target: Path, *, is_file: bool) -> bool:
-    sources = _state_source_paths(root, state)
+    owned_paths = _state_owned_paths(root, state)
     if is_file:
-        return target in sources
-    return any(source.parent == target for source in sources)
+        return target in owned_paths
+    return any(path == target or path.parent == target for path in owned_paths)
 
 
 def _ambiguous_state_error(target: Path, roots: list[Path]) -> AmbiguousProjectStateError:
@@ -377,6 +440,13 @@ def resolve_project_state_root(target: str | Path = ".") -> Path:
 
     if project_state_path(start).is_file():
         return start
+
+    # An explicit directory with its own supported circuit input must not be
+    # redirected into a generated child merely because that child's source
+    # happens to live in this directory. Resolve canonical ``output/`` and
+    # recorded ancestor ownership through the shared root resolver.
+    if not is_file and _has_local_circuit_boundary(start):
+        return resolve_project_root(start)
 
     descendants = _descendant_project_state_roots(start)
     if descendants:
@@ -407,7 +477,13 @@ def resolve_project_state_root(target: str | Path = ".") -> Path:
         # the only saved project below the same parent.
 
     for directory in start.parents:
-        if project_state_path(directory).is_file():
+        manifest = project_state_path(directory)
+        if not manifest.is_file():
+            continue
+        state = _load_project_state_file(manifest)
+        if state is not None and _state_matches_lookup_target(
+            directory, state, candidate if is_file else start, is_file=is_file
+        ):
             return directory
     return resolve_project_root(candidate)
 
@@ -514,12 +590,22 @@ def record_generation_state(
     if phase not in {"running", "generated", "failed"}:
         raise ValueError(f"Unsupported generation phase: {phase}")
 
-    root = _absolute(project_root) if project_root is not None else resolve_project_root(project_dir)
     output = _absolute(output_dir)
+    spec = _absolute(spec_path) if spec_path is not None else None
+    root = _absolute(project_root) if project_root is not None else resolve_project_root(project_dir)
+    if (
+        project_root is None
+        and spec is not None
+        and output.is_relative_to(spec.parent)
+        and (
+            project_state_path(spec.parent).is_file()
+            or (spec.parent / "design.yaml").is_file()
+        )
+    ):
+        root = spec.parent
     if project_root is not None and not output.is_relative_to(root):
         raise ValueError("Generation output must be inside its explicit project root")
     state = ensure_project_state(root, name=project_name)
-    spec = _absolute(spec_path) if spec_path is not None else None
 
     if spec is not None:
         source_record = _portable_file_record(root, spec, kind="design_spec")

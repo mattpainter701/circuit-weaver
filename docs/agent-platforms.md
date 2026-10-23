@@ -65,11 +65,13 @@ pip install "circuit-weaver[mcp]"
 circuit-weaver-mcp
 ```
 
-The 14-tool server retains the focused tools `validate_design`, `generate_artifacts`,
+The 17-tool server retains the focused tools `validate_design`, `generate_artifacts`,
 `discover_projects`, `research_component`, and `manufacturing_readiness`, plus
 `runtime_info`, the read-only `library_access` audit, and the shared project lifecycle tools `start_project`,
-`open_project`, `plan_workflow`, `run_workflow`, `workflow_status`,
-`resume_workflow`, and `cancel_workflow`. The lifecycle tools require explicit
+`open_project`, `adopt_project`, `plan_workflow`, `run_workflow`, `workflow_status`,
+`resume_workflow`, and `cancel_workflow`. `plan_library_bundle` and
+`apply_library_bundle` expose the hash-bound local asset import workflow.
+The lifecycle tools require explicit
 absolute project paths; specs and options are JSON objects and stage selections
 are JSON arrays. Calls are synchronous request/response operations: a run tool
 returns after its selected stages finish or fail. `resume_workflow` executes the

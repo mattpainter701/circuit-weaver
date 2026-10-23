@@ -74,6 +74,8 @@ Verification is conservative: a capability only claims the evidence level its pu
 | `register-ic` | experimental | CLI: `register-ic` | `static-parse` → `static-parse` | `command-contract`, `static-parse` | 0.32.1 |
 | `resolve-symbol` | experimental | CLI: `resolve-symbol` | not applicable (operational) | `command-contract` | 0.33.0 |
 | `library-access` | experimental | CLI: `library-access`; Python: `circuit_weaver.library_access:audit_library_access`; MCP: `library_access`; Skill: `circuit-weaver` | not applicable (operational) | `command-contract` | 0.38.0 |
+| `adopt` | experimental | CLI: `adopt`; Python: `circuit_weaver.project_workflow:adopt_project`; MCP: `adopt_project`; Skill: `circuit-weaver` | not applicable (operational) | `command-contract` | 0.38.0 |
+| `library-bundle` | experimental | CLI: `library-bundle`; Python: `circuit_weaver.library_bundle:plan_library_bundle`; MCP: `plan_library_bundle; apply_library_bundle`; Skill: `circuit-weaver` | not applicable (operational) | `command-contract` | 0.38.0 |
 | `export-jlcpcb` | review_only | CLI: `export-jlcpcb`; Skill: `circuit-weaver` | `static-parse` → `static-parse` | `command-contract`, `static-parse` | 0.32.1 |
 | `export-gerbers` | review_only | CLI: `export-gerbers`; Skill: `circuit-weaver` | `static-parse` → `static-parse` | `command-contract`, `static-parse` | 0.32.1 |
 | `cost-bom` | experimental | CLI: `cost-bom`; Skill: `circuit-weaver` | `static-parse` → `static-parse` | `command-contract`, `static-parse` | 0.32.1 |

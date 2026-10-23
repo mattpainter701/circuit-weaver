@@ -138,9 +138,9 @@ def plan_simulations(
                 raise ValueError(f"spec.simulation.analyses[{index}] params, sources, and targets have invalid shapes")
             allowed_params = {
                 "ac": {"variation", "points", "fstart", "fstop", "input_trace", "output_trace"},
-                "tran": {"step", "stop", "start"},
-                "dc": {"source", "start", "stop", "step"},
-                "op": set(),
+                "tran": {"step", "stop", "start", "output_trace"},
+                "dc": {"source", "start", "stop", "step", "output_trace"},
+                "op": {"output_trace"},
             }[kind]
             unknown_params = set(analysis_params) - allowed_params
             if unknown_params:
@@ -148,6 +148,7 @@ def plan_simulations(
                     f"spec.simulation.analyses[{index}] has unsupported {kind} parameters: {sorted(unknown_params)}"
                 )
             if kind == "ac":
+
                 def normalized_node(name: str) -> str:
                     if name.casefold() in {"gnd", "ground", "vss", "0"}:
                         return "0"
@@ -175,10 +176,19 @@ def plan_simulations(
                             f"spec.simulation.analyses[{index}].analysis_params.{trace_key} "
                             "must reference a connected non-ground net"
                         )
-                if analysis_params.get("input_trace", "v(in)").casefold() == analysis_params.get(
-                    "output_trace", "v(out)"
-                ).casefold():
+                if (
+                    analysis_params.get("input_trace", "v(in)").casefold()
+                    == analysis_params.get("output_trace", "v(out)").casefold()
+                ):
                     raise ValueError(f"spec.simulation.analyses[{index}] input_trace and output_trace must differ")
+            if kind in {"op", "dc", "tran"} and "output_trace" in analysis_params:
+                trace = analysis_params["output_trace"]
+                match = re.fullmatch(r"[vi]\([^()\s]+\)", trace, re.IGNORECASE) if isinstance(trace, str) else None
+                if not match:
+                    raise ValueError(
+                        f"spec.simulation.analyses[{index}].analysis_params.output_trace "
+                        "must be v(node) or i(source)"
+                    )
             plan.signal_sims.append(
                 {
                     "ref": ref,
@@ -506,6 +516,9 @@ def _verify_targets(
         return
     for key, target in targets.items():
         normalized_key = str(key).strip().lower()
+        if isinstance(target, dict):
+            _verify_explicit_trace_target(result, str(key), target, ref, recommendations)
+            continue
         ripple_targets = {"ripple_mv", "ripple_max_mv"}
         bandwidth_min_targets = {"bandwidth_min_hz", "bandwidth_hz_min"}
         bandwidth_max_targets = {"bandwidth_max_hz", "bandwidth_hz_max"}
@@ -533,12 +546,12 @@ def _verify_targets(
             continue
         if len(matches) != 1:
             result.target_checks[str(key)] = "unverified"
-            recommendations.append(
-                f"{ref}: target {key} is unverified because its simulation metric is ambiguous"
-            )
+            recommendations.append(f"{ref}: target {key} is unverified because its simulation metric is ambiguous")
             continue
         metric_name, measured = matches[0]
         try:
+            if isinstance(target, bool):
+                raise TypeError("boolean is not a numeric engineering limit")
             target_value = float(target)
             measured_value = float(measured)
         except (TypeError, ValueError):
@@ -562,3 +575,117 @@ def _verify_targets(
         result.target_checks[str(key)] = "passed" if passed else "failed"
         if not passed:
             recommendations.append(f"{ref}: {metric_name}={measured_value:g} does not meet target {target_value:g}")
+
+
+def _verify_explicit_trace_target(
+    result: SimulationResult, key: str, target: dict[str, Any], ref: str, recommendations: list[str]
+) -> None:
+    """Verify a unit-bearing voltage/current bound against one exact raw vector."""
+    allowed = {"metric", "trace", "unit", "comparator", "value", "min", "max", "sample"}
+    metric, trace, unit, comparator = (target.get(name) for name in ("metric", "trace", "unit", "comparator"))
+    expected_units = {"voltage": "V", "current": "A", "ripple": "mV"}
+    if (
+        set(target) - allowed
+        or not isinstance(metric, str)
+        or not isinstance(unit, str)
+        or not isinstance(comparator, str)
+        or metric not in expected_units
+        or unit != expected_units.get(metric)
+    ):
+        result.target_checks[key] = "unverified"
+        recommendations.append(f"{ref}: target {key} has an unsupported metric or unit schema")
+        return
+    # ``bool`` is an ``int`` subclass in Python, but a JSON true/false value
+    # is not a meaningful engineering limit. Reject it before float coercion.
+    numeric_bounds = ("min", "max") if comparator in {"between", "abs_between"} else ("value",)
+    if any(isinstance(target.get(bound), bool) for bound in numeric_bounds if bound in target):
+        result.target_checks[key] = "unverified"
+        recommendations.append(f"{ref}: target {key} has a boolean engineering limit")
+        return
+    if not isinstance(trace, str) or not re.fullmatch(r"(?:v\([^()\s]+\)|i\([^()\s]+\))", trace, re.IGNORECASE):
+        result.target_checks[key] = "unverified"
+        recommendations.append(f"{ref}: target {key} must select one exact voltage or source-current trace")
+        return
+    if (metric in {"voltage", "ripple"}) != trace.lower().startswith("v("):
+        result.target_checks[key] = "unverified"
+        recommendations.append(f"{ref}: target {key} trace type does not match its metric")
+        return
+    allowed_analyses = {"ripple": {"tran"}, "voltage": {"op", "dc"}, "current": {"op", "dc"}}
+    if result.sim_type not in allowed_analyses[metric]:
+        result.target_checks[key] = "unverified"
+        recommendations.append(f"{ref}: target {key} is unsupported for {result.sim_type or 'unknown'} analysis")
+        return
+    if not result.evidence_verified:
+        result.target_checks[key] = "unverified"
+        recommendations.append(f"{ref}: target {key} has no fresh parsed simulation evidence")
+        return
+    if metric == "ripple":
+        if "sample" in target:
+            result.target_checks[key] = "unverified"
+            recommendations.append(f"{ref}: ripple target {key} does not accept a sample selector")
+            return
+        metric_name = f"{trace}_ripple_mv".casefold()
+        matches = [value for name, value in result.metrics.items() if name.casefold() == metric_name]
+    else:
+        matches = [values for name, values in result.traces.items() if name.casefold() == trace.casefold()]
+        if result.sim_type == "dc" and target.get("sample") != "endpoint":
+            result.target_checks[key] = "unverified"
+            recommendations.append(f"{ref}: DC sweep target {key} must explicitly select sample='endpoint'")
+            return
+        if result.sim_type != "dc" and "sample" in target:
+            result.target_checks[key] = "unverified"
+            recommendations.append(f"{ref}: target {key} sample selector is only valid for a DC sweep")
+            return
+        if result.sim_type == "op" and any(len(values) != 1 for values in matches):
+            result.target_checks[key] = "unverified"
+            recommendations.append(f"{ref}: operating-point target {key} requires exactly one sample")
+            return
+        if any(not values for values in matches):
+            result.target_checks[key] = "unverified"
+            recommendations.append(f"{ref}: target {key} trace has no samples")
+            return
+        if result.sim_type == "op" and any(complex(values[0]).imag != 0 for values in matches):
+            result.target_checks[key] = "unverified"
+            recommendations.append(f"{ref}: operating-point target {key} requires a real-valued sample")
+            return
+        matches = [complex(values[-1]).real for values in matches if values]
+    if len(matches) != 1:
+        result.target_checks[key] = "unverified"
+        recommendations.append(f"{ref}: target {key} trace is missing or ambiguous")
+        return
+    measured = float(matches[0])
+    if not math.isfinite(measured):
+        result.target_checks[key] = "unverified"
+        recommendations.append(f"{ref}: target {key} measured value is non-finite")
+        return
+    try:
+        expected_target_keys = {"metric", "trace", "unit", "comparator", "min", "max"}
+        if result.sim_type == "dc" and metric != "ripple":
+            expected_target_keys.add("sample")
+        if comparator in {"between", "abs_between"} and set(target) == expected_target_keys:
+            low, high = float(target["min"]), float(target["max"])
+            observed = abs(measured) if comparator == "abs_between" else measured
+            valid_window = low <= high and (not comparator.startswith("abs_") or low >= 0)
+            if not math.isfinite(low) or not math.isfinite(high) or not valid_window:
+                raise ValueError
+            passed = low <= observed <= high
+        elif comparator in {"le", "ge", "abs_le", "abs_ge"} and set(target) == expected_target_keys - {
+            "min",
+            "max",
+        } | {"value"}:
+            limit = float(target["value"])
+            observed = abs(measured) if comparator.startswith("abs_") else measured
+            direction = comparator.removeprefix("abs_")
+            valid_limit = not comparator.startswith("abs_") or limit >= 0
+            if not math.isfinite(limit) or not valid_limit:
+                raise ValueError
+            passed = observed <= limit if direction == "le" else observed >= limit
+        else:
+            raise ValueError
+    except (TypeError, ValueError):
+        result.target_checks[key] = "unverified"
+        recommendations.append(f"{ref}: target {key} has an invalid comparator or finite numeric bound")
+        return
+    result.target_checks[key] = "passed" if passed else "failed"
+    if not passed:
+        recommendations.append(f"{ref}: {trace}={measured:g} {unit} does not meet target {key}")

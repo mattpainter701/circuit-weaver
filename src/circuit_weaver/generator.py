@@ -814,6 +814,16 @@ def _stub_marker_clear(
 ) -> bool:
     """True when the stub endpoint and its net-marker glyph avoid every box."""
     wx, wy = _stub_endpoint(cx, cy, pin_angle, length)
+    return _marker_glyph_clear((wx, wy), pin_angle, boxes)
+
+
+def _marker_glyph_clear(
+    endpoint: tuple[float, float],
+    pin_angle: int,
+    boxes: list[tuple[float, float, float, float]],
+) -> bool:
+    """True when a marker placed at an endpoint avoids every symbol body."""
+    wx, wy = endpoint
     if pin_angle in (0, 180):
         reach = -_STUB_MARKER_REACH if pin_angle == 0 else _STUB_MARKER_REACH
         gx1, gx2 = sorted((wx, wx + reach))
@@ -955,9 +965,15 @@ def _marker_route_avoiding_foreign_nets(
         length = _avoid_foreign_net_anchors(
             net_name, cx, cy, pin_angle, desired, net_anchors, route_state
         )
-        return [start, _stub_endpoint(cx, cy, pin_angle, length)]
+        endpoint = _stub_endpoint(cx, cy, pin_angle, length)
+        straight = [start, endpoint]
+        blockers = [box for box in (body_boxes or []) if not _point_in_box(box, *start)]
+        if _marker_glyph_clear(endpoint, pin_angle, blockers) and all(
+            _polyline_is_clear(straight, box) for box in blockers
+        ):
+            return straight
     except ValueError:
-        pass
+        blockers = [box for box in (body_boxes or []) if not _point_in_box(box, *start)]
 
     if pin_angle in (0, 180):
         forward = (1 if pin_angle == 180 else -1, 0)
@@ -971,7 +987,6 @@ def _marker_route_avoiding_foreign_nets(
         for anchor_net, anchor_x, anchor_y in (net_anchors or [])
         if anchor_net and anchor_net != net_name
     ]
-    blockers = [box for box in (body_boxes or []) if not _point_in_box(box, *start)]
     candidates: list[tuple[tuple[float, int, int], tuple[float, float]]] = []
     for forward_adjust in range(3):
         distance = snap(desired + forward_adjust * _STUB_STEP)
@@ -991,6 +1006,8 @@ def _marker_route_avoiding_foreign_nets(
                 candidates.append(((forward_adjust + side_steps, side_steps, side_sign), endpoint))
 
     for _score, endpoint in sorted(candidates, key=lambda item: item[0]):
+        if not _marker_glyph_clear(endpoint, pin_angle, blockers):
+            continue
         path = _orthogonal_grid_route(start, endpoint, blockers, route_state, net_name)
         if path is None:
             continue
@@ -1697,32 +1714,10 @@ def _route_local_connection(
             _reserve_route(channel_best, route_state, net_name)
             return
 
-    # Relax: allow crossing sibling passive bodies but never the parent IC.
-    if len(blockers) > 1 and expanded_box is not None:
-        relaxed_candidates = list(candidates)
-        if route_state is not None:
-            # Dense connectors can have foreign-net pins immediately above
-            # and below the local endpoint.  A short L-route cannot escape
-            # that pin column, while a wider U-channel can.  Keep searching
-            # those electrically safe channels when only presentation
-            # keep-outs (nearby passive bodies) are being relaxed.
-            relaxed_candidates.extend(
-                _perimeter_channel_candidates(start, end, expanded_box, route_state)
-            )
-        best = _pick_best(relaxed_candidates, [expanded_box])
-        if best is not None:
-            _logger.warning(
-                "local route (%.2f,%.2f)->(%.2f,%.2f) could not clear nearby passives; "
-                "emitting a route that may cross a passive body",
-                start[0],
-                start[1],
-                end[0],
-                end[1],
-            )
-            _emit_polyline(best, wires)
-            _reserve_route(best, route_state, net_name)
-            return
-
+    # Search the full visibility grid before falling back to a net marker.
+    # Relaxing sibling-body keep-outs here produced electrically valid wires
+    # that ran through passive symbols. A named marker preserves net identity
+    # while keeping the drawing clear when no corridor exists.
     if route_state is not None:
         grid_route = _orthogonal_grid_route(start, end, blockers, route_state, net_name)
         if grid_route is not None:
@@ -1735,21 +1730,13 @@ def _route_local_connection(
             [start, (end[0], start[1]), end],
             [start, (start[0], end[1]), end],
         ],
-        [],
+        blockers,
     )
     if direct is None:
         raise ValueError(
-            f"Cannot route local net {net_name!r} without contacting a reserved foreign net"
+            f"Cannot route local net {net_name!r} without crossing a symbol body "
+            "or contacting a reserved foreign net"
         )
-    _logger.warning(
-        "local route %s (%.2f,%.2f)->(%.2f,%.2f) has no clear path; falling back to a "
-        "direct wire that may cross symbol bodies",
-        net_name,
-        start[0],
-        start[1],
-        end[0],
-        end[1],
-    )
     _emit_polyline(direct, wires)
     _reserve_route(direct, route_state, net_name)
 
@@ -3528,10 +3515,10 @@ def _render_sheet(
                 obstacle=obstacle, route_state=route_state, obstacles=obstacles,
             )
         except ValueError as exc:
-            if "without contacting a reserved foreign net" not in str(exc):
+            if "Cannot route local net" not in str(exc):
                 raise
-            # Keep the foreign-net guard intact. A same-sheet net label is an
-            # electrically exact connection when dense pins leave no clear wire corridor.
+            # Keep foreign-net guards intact. A same-sheet net label is an
+            # electrically exact connection when dense geometry leaves no clear corridor.
             _logger.warning(
                 "local route for %s has no electrically clear corridor; using a net label", net_name
             )

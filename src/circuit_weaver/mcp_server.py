@@ -346,6 +346,7 @@ def _workflow_tool_impl(
                 raise ValueError("stages_json must contain only stage names")
             calls = {
                 "open_project": lambda: project_workflow.open_project(project),
+                "adopt_project": lambda: project_workflow.adopt_project(project, name=name or None),
                 "plan_workflow": lambda: project_workflow.plan_workflow(project, stages=stages, options=options),
                 "run_workflow": lambda: project_workflow.run_workflow(
                     project,
@@ -392,6 +393,21 @@ def _workflow_tool(
         options_json=options_json,
         resume=resume,
     )
+
+
+def _library_bundle_tool(operation: str, project_root: str, document_json: str) -> str:
+    """Share the local-only plan/apply contract without relying on server cwd."""
+    try:
+        from .library_bundle import apply_library_bundle, plan_library_bundle
+
+        root = _absolute_workflow_path(project_root, "project_root")
+        document = _workflow_json(document_json, field="document_json", expected=dict)
+        if operation not in {"plan", "apply"}:
+            raise ValueError("operation must be plan or apply")
+        function = plan_library_bundle if operation == "plan" else apply_library_bundle
+        return json.dumps(_call_without_stdout(function, root, document))
+    except (ValueError, TypeError, OSError) as exc:
+        return _error_json("library_bundle_failed", str(exc))
 
 
 def _create_app() -> Any:
@@ -483,6 +499,24 @@ def _create_app() -> Any:
     def open_project(target: str) -> Any:
         """Open or resume project discovery from an explicit absolute path."""
         return _as_mcp_tool_result(_workflow_tool("open_project", target))
+
+    @mcp.tool()
+    async def adopt_project(target: str, name: str = "") -> Any:
+        """Initialize tracking for existing sources; preserve their exact contents."""
+        payload = await asyncio.to_thread(_workflow_tool, "adopt_project", target, name=name)
+        return _as_mcp_tool_result(payload)
+
+    @mcp.tool()
+    async def plan_library_bundle(project_root: str, manifest_json: str) -> Any:
+        """Dry-run local CAD/model imports with provenance, hashes and conflict checks."""
+        payload = await asyncio.to_thread(_library_bundle_tool, "plan", project_root, manifest_json)
+        return _as_mcp_tool_result(payload)
+
+    @mcp.tool()
+    async def apply_library_bundle(project_root: str, plan_json: str) -> Any:
+        """Apply a saved local bundle plan after freshness checks; roll back on failure."""
+        payload = await asyncio.to_thread(_library_bundle_tool, "apply", project_root, plan_json)
+        return _as_mcp_tool_result(payload)
 
     @mcp.tool()
     def plan_workflow(target: str, stages_json: str = "", options_json: str = "") -> Any:

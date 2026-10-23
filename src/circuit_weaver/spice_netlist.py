@@ -225,10 +225,10 @@ def _format_testbench_sources(sources: list[dict[str, Any]] | None, components: 
     for index, source in enumerate(sources):
         if not isinstance(source, dict):
             raise ValueError(f"simulation source {index} must be an object")
-        allowed = {"ref", "type", "positive", "negative", "dc", "ac"}
+        allowed = {"ref", "type", "positive", "negative", "dc", "ac", "pulse"}
         if set(source) - allowed or not {"ref", "type", "positive", "negative"}.issubset(source):
             raise ValueError(
-                f"simulation source {index} requires ref/type/positive/negative and accepts only dc/ac values"
+                f"simulation source {index} requires ref/type/positive/negative and accepts dc/ac or structured pulse"
             )
         ref = source["ref"]
         source_type = source["type"]
@@ -278,6 +278,31 @@ def _format_testbench_sources(sources: list[dict[str, Any]] | None, components: 
             if not math.isfinite(number):
                 raise ValueError(f"simulation source {ref} {field} value must be finite numeric")
             values.extend([field.upper(), format(number, ".17g")])
+        pulse = source.get("pulse")
+        if pulse is not None:
+            if source_type.upper() != "V" or not isinstance(pulse, dict):
+                raise ValueError(f"simulation source {ref} pulse is supported only for voltage sources")
+            pulse_fields = ("v1", "v2", "delay", "rise", "fall", "width", "period")
+            if set(pulse) != set(pulse_fields):
+                raise ValueError(f"simulation source {ref} pulse requires exactly {', '.join(pulse_fields)}")
+            pulse_values = []
+            for field in pulse_fields:
+                value = pulse[field]
+                if isinstance(value, bool):
+                    raise ValueError(f"simulation source {ref} pulse {field} must be finite numeric")
+                try:
+                    number = float(value)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"simulation source {ref} pulse {field} must be finite numeric") from exc
+                if not math.isfinite(number) or (field not in {"v1", "v2"} and number < 0):
+                    raise ValueError(f"simulation source {ref} pulse {field} is outside its valid range")
+                pulse_values.append(format(number, ".17g"))
+            if float(pulse["period"]) <= 0 or float(pulse["width"]) > float(pulse["period"]):
+                raise ValueError(f"simulation source {ref} pulse period must be positive and width <= period")
+            if values:
+                raise ValueError(f"simulation source {ref} cannot combine pulse with dc/ac values")
+            lines.append(f"{ref} {positive} {negative} PULSE({ ' '.join(pulse_values) })")
+            continue
         if not values:
             raise ValueError(f"simulation source {ref} must specify dc and/or ac")
         lines.append(f"{ref} {positive} {negative} " + " ".join(values))

@@ -27,11 +27,14 @@ from . import dispatcher
 from .project_state import (
     AmbiguousProjectStateError,
     ProjectState,
+    _descendant_project_state_roots,
     _load_project_state_file,
     file_sha256,
     get_project_state_summary,
     load_project_state,
+    manufacturing_artwork_kind,
     project_state_path,
+    resolve_project_root,
     resolve_project_state_root,
     save_project_state,
 )
@@ -46,6 +49,8 @@ _CHILD_ENV = "CIRCUIT_WEAVER_WORKFLOW_CHILD"
 # worker execution, DRC validation and publication together.
 _STAGE_TIMEOUTS = {"build": 900, "place": 300, "route": 1800, "preview": 180}
 _APPEND_ONLY_OUTPUTS = {"design.log", "circuit-weaver.log"}
+_PROJECT_INPUT_SUFFIXES = {".kicad_pro", ".kicad_sch", ".kicad_pcb", ".zip", ".yaml", ".yml", ".json"}
+_PROJECT_MODEL_SUFFIXES = {".step", ".stp", ".wrl", ".wrz", ".iges", ".igs", ".obj", ".stl", ".ply"}
 
 
 class WorkflowError(RuntimeError):
@@ -226,8 +231,7 @@ def open_project(target: str | Path = ".") -> dict[str, Any]:
                 sorted(
                     str(path.resolve())
                     for path in root.iterdir()
-                    if path.is_file()
-                    and path.suffix.casefold() in {".kicad_pro", ".kicad_sch", ".kicad_pcb", ".gbr", ".zip"}
+                    if path.is_file() and _is_adoptable_input(path)
                 )
                 if root.is_dir()
                 else ([str(root)] if root.is_file() else [])
@@ -242,6 +246,7 @@ def open_project(target: str | Path = ".") -> dict[str, Any]:
                 project_dir=str(root if root.is_dir() else root.parent),
                 summary={"kind": "native", "files": files, "read_only": True},
                 choices=files,
+                next_actions=["adopt_project"],
             )
         summary = get_project_state_summary(root)
         run = _runner(state)
@@ -254,6 +259,151 @@ def open_project(target: str | Path = ".") -> dict[str, Any]:
         )
     except Exception as exc:
         return _result(False, "error", error=_error(exc), choices=getattr(exc, "choices", None))
+
+
+def adopt_project(target: str | Path, name: str | None = None) -> dict[str, Any]:
+    """Create durable Circuit Weaver state for an existing spec or KiCad project.
+
+    Adoption records hashes and sizes for direct project inputs. It never edits
+    those files. Existing exact state is returned unchanged, making retries safe.
+    Native planning and execution also initialize state automatically; adoption
+    is useful when an explicit baseline of existing source hashes is wanted.
+    """
+    try:
+        candidate = Path(target).expanduser().resolve(strict=False)
+        if candidate.is_file():
+            root = candidate.parent
+            if not _is_adoptable_input(candidate):
+                raise WorkflowError("unsupported_target", f"Unsupported project file: {candidate}")
+        elif candidate.is_dir():
+            root = candidate
+        else:
+            raise WorkflowError(
+                "unsupported_target", f"Project target must be an existing directory or file: {candidate}"
+            )
+
+        state_path = project_state_path(root)
+        if state_path.is_file():
+            existing = open_project(root)
+            return {**existing, "adopted": False, "message": "Project already has durable state"}
+        _require_adoption_root(candidate, root)
+
+        with _RunLock(root):
+            # Adoption and workflow initialization must serialize. Another
+            # operation may have created the state while this call waited.
+            if state_path.is_file():
+                existing = open_project(root)
+                return {**existing, "adopted": False, "message": "Project already has durable state"}
+            if state_path.exists():
+                raise WorkflowError(
+                    "state_conflict", f"Project state path already exists and is not a manifest: {state_path}"
+                )
+            _require_adoption_root(candidate, root)
+            descendants = _descendant_project_state_roots(root)
+            if descendants:
+                choices = [str(path) for path in descendants]
+                raise WorkflowError(
+                    "ambiguous_project",
+                    "Target contains existing project state; adopt a specific project directory",
+                    choices,
+                )
+
+            files = sorted(
+                (path for path in root.iterdir() if path.is_file() and _is_adoptable_input(path)),
+                key=lambda path: path.name.casefold(),
+            )
+            specs = [path for path in files if path.suffix.casefold() in {".yaml", ".yml", ".json"}]
+            canonical_spec = root / "design.yaml"
+            if canonical_spec.is_file():
+                spec = canonical_spec
+            elif len(specs) == 1:
+                spec = specs[0]
+            elif len(specs) > 1:
+                raise WorkflowError(
+                    "ambiguous_spec",
+                    f"Multiple project specs found in {root}; name one design.yaml",
+                    [str(path) for path in specs],
+                )
+            else:
+                spec = None
+            if spec is not None:
+                files = [path for path in files if path not in specs or path == spec]
+            if not files:
+                raise WorkflowError("unsupported_target", f"No supported project inputs found in {root}")
+
+            project_name = root.name or "project"
+            if name is not None:
+                if not isinstance(name, str) or not name.strip():
+                    raise WorkflowError("invalid_name", "name must be a nonempty string")
+                project_name = name.strip()
+            sources = []
+            for path in files:
+                if path == spec:
+                    kind = "design_spec"
+                elif path.suffix.casefold() == ".kicad_pro":
+                    kind = "kicad_project"
+                elif path.suffix.casefold() == ".kicad_sch":
+                    kind = "schematic"
+                elif path.suffix.casefold() == ".kicad_pcb":
+                    kind = "pcb"
+                elif path.suffix.casefold() == ".zip":
+                    kind = "archive"
+                else:
+                    kind = manufacturing_artwork_kind(path) or "project_source"
+                stat = path.stat()
+                record = {
+                    "path": path.relative_to(root).as_posix(),
+                    "role": "generation_source" if path == spec else "project_input",
+                    "kind": kind,
+                    "size": stat.st_size,
+                    "sha256": file_sha256(path),
+                }
+                sources.append(record)
+
+            state = ProjectState(
+                name=project_name,
+                kind="design" if spec is not None else "native",
+                status="open",
+                current_phase="adopted",
+                next_actions=["plan_workflow"],
+                sources=sources,
+                workflow={
+                    "adoption": {
+                        "status": "adopted",
+                        "input_snapshot": _snapshot(root, [root / item["path"] for item in sources]),
+                    }
+                },
+            )
+            save_project_state(root, state)
+        return _result(
+            True,
+            "adopted",
+            adopted=True,
+            project_dir=str(root),
+            name=project_name,
+            sources=sources,
+            next_actions=["plan_workflow"],
+        )
+    except Exception as exc:
+        return _result(False, "error", error=_error(exc), choices=getattr(exc, "choices", None))
+
+
+def _require_adoption_root(candidate: Path, root: Path) -> None:
+    resolved_root = resolve_project_root(candidate)
+    if resolved_root == root:
+        return
+    state_owner = project_state_path(resolved_root)
+    code = "state_conflict" if state_owner.exists() else "ambiguous_project"
+    raise WorkflowError(
+        code,
+        f"Target is inside a project rooted at {resolved_root}; adopt that project root instead",
+        [str(resolved_root)],
+    )
+
+
+def _is_adoptable_input(path: Path) -> bool:
+    suffix = path.suffix.casefold()
+    return suffix in _PROJECT_INPUT_SUFFIXES or manufacturing_artwork_kind(path) is not None
 
 
 def _normalize_stages(stages: list[str] | tuple[str, ...] | None) -> list[str]:
@@ -280,6 +430,21 @@ def _normalize_options(options: dict[str, Any] | None) -> dict[str, Any]:
         value = normalized[key]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise WorkflowError("invalid_options", f"{key} must be a finite positive number")
+    for key, minimum, maximum in (
+        ("route_max_passes", 0, 9999),
+        ("route_optimization_threads", 0, 1024),
+        ("route_attempts", 1, 32),
+    ):
+        if key not in normalized:
+            continue
+        value = normalized[key]
+        if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+            raise WorkflowError("invalid_options", f"{key} must be an integer from {minimum} through {maximum}")
+    if "route_effort" in normalized:
+        if not isinstance(normalized["route_effort"], str) or normalized["route_effort"] not in {
+            "fast", "medium", "high"
+        }:
+            raise WorkflowError("invalid_options", "route_effort must be fast, medium, or high")
     return normalized
 
 
@@ -296,6 +461,11 @@ def _plan_data(root: Path, stages: list[str], options: dict[str, Any]) -> dict[s
 def plan_workflow(
     target: str | Path = ".", *, stages: list[str] | None = None, options: dict[str, Any] | None = None
 ) -> dict[str, Any]:
+    """Persist a plan, initializing state for manifestless native projects.
+
+    Workflow execution can initialize the same native state automatically;
+    callers may use :func:`adopt_project` first to record source hash baselines.
+    """
     try:
         root = _root(target)
         normalized_stages = _normalize_stages(stages)
@@ -452,16 +622,30 @@ def _cli(stage: str, args: list[str], cwd: Path, timeout: int) -> dict[str, Any]
         raise WorkflowError("stage_timeout", f"{stage} exceeded its {timeout}s timeout") from exc
     except OSError as exc:
         raise WorkflowError("stage_launch_failed", str(exc)) from exc
-    if proc.returncode:
-        raise WorkflowError(
-            "stage_failed", proc.stderr[-4000:] or proc.stdout[-4000:] or f"{stage} exited {proc.returncode}"
-        )
     try:
         result = json.loads(proc.stdout)
     except json.JSONDecodeError as exc:
+        if proc.returncode:
+            raise WorkflowError(
+                "stage_failed", proc.stderr[-4000:] or proc.stdout[-4000:] or f"{stage} exited {proc.returncode}"
+            ) from exc
         raise WorkflowError("invalid_stage_output", f"{stage} returned no machine-readable result") from exc
     if not isinstance(result, dict):
+        if proc.returncode:
+            raise WorkflowError(
+                "stage_failed", proc.stderr[-4000:] or proc.stdout[-4000:] or f"{stage} exited {proc.returncode}"
+            )
         raise WorkflowError("invalid_stage_output", f"{stage} returned a non-object result")
+    if proc.returncode:
+        error = result.get("error")
+        if isinstance(error, dict):
+            code = error.get("code") or result.get("code") or "stage_failed"
+            message = error.get("message") or error.get("reason") or result.get("message") or result.get("reason")
+        else:
+            code = result.get("code") or "stage_failed"
+            message = error or result.get("message") or result.get("reason") or result.get("detail")
+        message = message or proc.stderr[-4000:] or f"{stage} exited {proc.returncode}"
+        raise WorkflowError(str(code), f"{stage} failed: {message}")
     return result
 
 
@@ -575,8 +759,16 @@ def _execute_stage(
                 str(routed_board),
                 "--timeout",
                 str(min(max(float(options.get("route_timeout", 300)), 1), 1800)),
-                *_tool_args(options, "freerouting_path", "kicad_cli_path", "kicad_python_path"),
             ]
+            for key, flag in (
+                ("route_max_passes", "--max-passes"),
+                ("route_optimization_threads", "--optimization-threads"),
+                ("route_attempts", "--attempts"),
+                ("route_effort", "--effort"),
+            ):
+                if key in options:
+                    args.extend([flag, str(options[key])])
+            args.extend(_tool_args(options, "freerouting_path", "kicad_cli_path", "kicad_python_path"))
             result = _cli(
                 stage, args, root, min(max(int(options.get("route_timeout", 300)) + 30, 60), _STAGE_TIMEOUTS[stage])
             )
@@ -792,7 +984,9 @@ def _stage_inputs(root: Path, stage: str, completed_outputs: list[str]) -> list[
     paths: list[str | Path] = []
     if _stage_requires_spec(stage):
         paths.append(_spec_path(root))
-    if stage == "build":
+    if stage == "generate":
+        paths.extend(_custom_footprint_inputs(root, include_output=False))
+    elif stage == "build":
         if _project_has_spec(root):
             paths.append(_spec_path(root))
         schematic = _root_schematic(root)
@@ -807,6 +1001,8 @@ def _stage_inputs(root: Path, stage: str, completed_outputs: list[str]) -> list[
             paths.extend(_existing_sidecars(board))
             if stage == "place" and _project_has_spec(root):
                 paths.append(_spec_path(root))
+            if stage == "preview":
+                paths.extend(_project_model_inputs(root))
         except WorkflowError:
             raise
     paths.extend(completed_outputs)
@@ -830,15 +1026,46 @@ def _hierarchical_schematic_inputs(root: Path, selected_root: Path) -> list[Path
     )
 
 
-def _custom_footprint_inputs(root: Path) -> list[Path]:
-    paths = [*root.glob("fp-lib-table"), *(root / "output").glob("fp-lib-table")]
-    paths.extend(root.glob("sym-lib-table"))
-    paths.extend((root / "output").glob("sym-lib-table"))
-    for base in (root, root / "output"):
+def _custom_footprint_inputs(root: Path, *, include_output: bool = True) -> list[Path]:
+    bases = (root, root / "output") if include_output else (root,)
+    paths = [path for base in bases for path in base.glob("fp-lib-table")]
+    paths.extend(path for base in bases for path in base.glob("sym-lib-table"))
+    for base in bases:
         if base.is_dir():
-            paths.extend(path for path in base.rglob("*.kicad_mod") if path.is_file())
-            paths.extend(path for path in base.rglob("*.kicad_sym") if path.is_file())
+            for pattern in ("*.kicad_mod", "*.kicad_sym"):
+                for path in base.rglob(pattern):
+                    if not path.is_file() or path.is_symlink():
+                        continue
+                    try:
+                        relative = path.relative_to(root)
+                        resolved = path.resolve(strict=False)
+                    except (OSError, ValueError):
+                        continue
+                    if not relative.parts or relative.parts[0].casefold() == ".circuit-weaver":
+                        continue
+                    if not include_output and relative.parts[0].casefold() == "output":
+                        continue
+                    if resolved.is_relative_to(root):
+                        paths.append(path)
     return sorted(set(paths), key=lambda path: str(path).casefold())
+
+
+def _project_model_inputs(root: Path) -> list[Path]:
+    receipt_dir = (root / "libraries" / ".circuit-weaver-receipts").resolve(strict=False)
+    lock_paths = {
+        (root / ".circuit-weaver-library-bundle.lock").resolve(strict=False),
+        (root / ".circuit-weaver" / _LOCK_NAME).resolve(strict=False),
+    }
+    paths: list[Path] = []
+    for path in root.rglob("*"):
+        if not path.is_file() or path.is_symlink() or path.suffix.casefold() not in _PROJECT_MODEL_SUFFIXES:
+            continue
+        resolved = path.resolve(strict=False)
+        if resolved in lock_paths or resolved.is_relative_to(receipt_dir):
+            continue
+        if resolved.is_relative_to(root):
+            paths.append(path)
+    return sorted(paths, key=lambda path: str(path).casefold())
 
 
 def _existing_sidecars(path: Path) -> list[Path]:

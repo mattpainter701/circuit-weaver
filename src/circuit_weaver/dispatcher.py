@@ -4494,7 +4494,7 @@ def main() -> None:
     verify_p.add_argument("plan", help="Signed repair plan JSON")
     verify_p.add_argument("--output", "-o", help="Write the verification result JSON")
     args = parser.parse_args()
-    if args.command in {"start", "open", "workflow", "runtime-info", "library-access"} or (
+    if args.command in {"start", "open", "adopt", "workflow", "runtime-info", "library-access", "library-bundle"} or (
             args.command == "resume" and args.execute):
         from .workflow_cli import dispatch as dispatch_workflow
 

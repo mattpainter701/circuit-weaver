@@ -194,6 +194,21 @@ class TestExportSpiceNetlist:
         assert "VTEST VIN 0 DC 0 AC 1" in content
         assert ".ac dec 40 10 100k" in content
 
+    def test_structured_pulse_source_is_rendered_and_validated(self, tmp_path):
+        components = [_make_passive("R1", "1k", "VIN", "VOUT")]
+        source = {
+            "ref": "VTEST",
+            "type": "V",
+            "positive": "VIN",
+            "negative": "GND",
+            "pulse": {"v1": 0, "v2": 3.3, "delay": 0, "rise": 1e-9, "fall": 1e-9, "width": 1e-6, "period": 2e-6},
+        }
+        out = export_spice_netlist(components, tmp_path / "pulse.cir", sources=[source])
+        assert "VTEST VIN 0 PULSE(0 3.2999999999999998 0 1.0000000000000001e-09" in out.read_text()
+        source["pulse"]["period"] = 0
+        with pytest.raises(ValueError, match="period must be positive"):
+            export_spice_netlist(components, tmp_path / "bad-pulse.cir", sources=[source])
+
     def test_explicit_source_rejects_unconnected_or_colliding_nodes(self, tmp_path):
         import pytest
 

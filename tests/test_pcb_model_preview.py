@@ -7,6 +7,8 @@ import zlib
 from pathlib import Path
 from types import SimpleNamespace
 
+import yaml
+
 from circuit_weaver import pcb_model_preview
 
 
@@ -209,20 +211,43 @@ def test_unset_custom_model_alias_does_not_fall_back_to_kicad_roots(tmp_path, mo
     assert resolved_standard == model.resolve()
 
 
-def test_exact_bundled_model_is_dimensioned_and_hash_bound(tmp_path, monkeypatch):
+def test_exact_bundled_models_are_dimensioned_and_hash_bound(tmp_path, monkeypatch):
     root = Path(pcb_model_preview.__file__).with_name("model_assets")
     registry = json.loads((root / "inventory.json").read_text(encoding="utf-8"))
-    assert registry["models"]
-    for relative, metadata in registry["models"].items():
+    expected_models = {
+        "Package_DFN_QFN.3dshapes/TDFN-8-1EP_2x2mm_P0.5mm_EP0.8x1.2mm.step": {
+            "body_mm": [2.0, 2.0, 0.75],
+            "pins": 8,
+            "pitch_mm": 0.5,
+            "exposed_pad_mm": [0.8, 1.2],
+            "generator_part": "TDFN-8-1EP_2x2mm_P0.5mm_EP0.8x1.30mm",
+        },
+        "Package_CSP.3dshapes/LFCSP-72-1EP_10x10mm_P0.5mm_EP5.3x5.3mm.step": {
+            "body_mm": [10.0, 10.0, 1.0],
+            "pins": 72,
+            "pitch_mm": 0.5,
+            "exposed_pad_mm": [5.3, 5.3],
+            "generator_part": "LFCSP-72-1EP_10x10mm_Pitch0.5mm_EP5.3x5.3mm_ThermalVias",
+            "overall_height_mm": {
+                "minimum": 0.8,
+                "nominal": 0.85,
+                "maximum": 1.0,
+                "model_uses": "maximum",
+            },
+        },
+    }
+    assert set(registry["models"]) == set(expected_models)
+    for relative, expected_metadata in expected_models.items():
+        metadata = registry["models"][relative]
         expected = (root / metadata["file"]).resolve()
         assert pcb_model_preview._bundled_model(relative) == expected
         assert metadata["sha256"] == _sha256(expected)
-        assert metadata["body_mm"] == [2.0, 2.0, 0.75]
-        assert metadata["pins"] == 8 and metadata["pitch_mm"] == 0.5
-        assert metadata["exposed_pad_mm"] == [0.8, 1.2]
+        for field, value in expected_metadata.items():
+            assert metadata[field] == value
         assert metadata["generator_commit"] == "a903a695bf4e69905e9e56548f44dd46cdc1130e"
-        assert "ISO-10303-21" in expected.read_text(encoding="utf-8")
-        assert "Creative Commons" in expected.read_text(encoding="utf-8")
+        model_text = expected.read_text(encoding="utf-8")
+        assert "ISO-10303-21" in model_text
+        assert "Creative Commons" in model_text
         for major in (8, 9, 10):
             alias = f"KICAD{major}_3DMODEL_DIR"
             monkeypatch.delenv(alias, raising=False)
@@ -233,9 +258,49 @@ def test_exact_bundled_model_is_dimensioned_and_hash_bound(tmp_path, monkeypatch
             assert pcb_model_preview._resolve_model_path(raw, tmp_path, {}) is None
             standard_root = tmp_path / "installed-kicad-models"
             monkeypatch.setenv(alias, str(standard_root))
-            assert pcb_model_preview._resolve_model_path(raw, tmp_path, {alias: [standard_root]}) == expected
-        assert pcb_model_preview._resolve_model_path("${CUSTOM}/" + relative, tmp_path, {}) is None
+            assert pcb_model_preview._resolve_model_path(
+                raw, tmp_path, {alias: [standard_root]}
+            ) == expected
+        assert pcb_model_preview._resolve_model_path(
+            "${CUSTOM}/" + relative, tmp_path, {}
+        ) is None
+
+    lfcsp_key = next(key for key in expected_models if key.startswith("Package_CSP."))
+    lfcsp_metadata = registry["models"][lfcsp_key]
+    assert lfcsp_metadata["generator_overlay_sha256"] == (
+        "d4ef9e656f4e39b3b860cdd3f7987ebd6b41a25f7d9ba544a10fb0625063a60c"
+    )
+    assert lfcsp_metadata["generator_upstream_yaml_sha256"] == (
+        "40909fbf9fd790ba343fc63a73130bacf7a6a51d09c4da5c2a604d64ac85fb3a"
+    )
+    assert lfcsp_metadata["generator_archive_sha256"] == (
+        "3462285efb398d9a3c1c324660e407c8fb3ae552bfdcab018c1aea66607d9e16"
+    )
+    assert (
+        "not manufacturer CAD or an AD9528-specific package fit"
+        in lfcsp_metadata["representation"]
+    )
+    assert "9.65/9.75/9.85" in lfcsp_metadata["ad9528_specific_geometry_note"]
+    assert "0.75/0.85/1.00" in lfcsp_metadata["height_revision_note"]
+    overlay_path = root / lfcsp_metadata["generator_overlay_asset"]
+    assert _sha256(overlay_path) == lfcsp_metadata["generator_overlay_asset_sha256"]
+    overlay = yaml.safe_load(overlay_path.read_text(encoding="utf-8"))
+    overlay_part = lfcsp_metadata["generator_part"]
+    assert set(overlay) == {overlay_part}
+    assert overlay[overlay_part]["overall_height"] == {
+        "minimum": 0.8,
+        "nominal": 0.85,
+        "maximum": 1.0,
+    }
+    assert overlay[overlay_part]["size_source"][-1] == {
+        "url": (
+            "https://www.analog.com/media/jp/technical-documentation/data-sheets/"
+            "AD9528_jp.pdf"
+        ),
+        "page": 66,
+    }
     assert pcb_model_preview._bundled_model("Package_DFN_QFN.3dshapes/unknown.step") is None
+    assert pcb_model_preview._bundled_model("Package_CSP.3dshapes/unknown.step") is None
     monkeypatch.setattr(pcb_model_preview, "_sha256", lambda _path: "tampered")
     assert pcb_model_preview._bundled_model(next(iter(registry["models"]))) is None
 

@@ -112,6 +112,28 @@ def test_child_command_leaves_checkpoint_to_parent(tmp_path, monkeypatch):
     assert not (tmp_path / ".circuit-weaver").exists()
 
 
+def test_separate_native_output_does_not_mutate_unrelated_ancestor_manifest(tmp_path):
+    parent = tmp_path / "aggregator"
+    parent.mkdir()
+    parent_state = save_project_state(parent, ProjectState(name="Unrelated existing design"))
+    parent_before = parent_state.read_bytes()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "input.kicad_pcb"
+    source.write_text("native input")
+    output_dir = parent / "review"
+    output_dir.mkdir()
+    output = output_dir / "board.svg"
+
+    def action():
+        output.write_text("<svg/>")
+        return {"status": "ok"}
+
+    assert native_stage("preview", source, output, {}, action)["status"] == "ok"
+    assert parent_state.read_bytes() == parent_before
+    assert (output_dir / ".circuit-weaver/project.json").is_file()
+
+
 def test_native_success_without_output_is_not_reported_success(tmp_path):
     source = tmp_path / "input.kicad_pcb"
     source.write_text("source", encoding="utf-8")
