@@ -11,7 +11,8 @@ This is the first executed wave of the [suite roadmap](suite-enhancement-roadmap
 | 438-part DAC carrier | Native placement passed after rejecting the first candidate and accepting the second with no remaining conflicts. Routing reached 269 open items after its first pass, then produced no verified usable session within the 300-second routing limit. The workflow remained failed and published no routed board. Total owned-job runtime was approximately 443 seconds, with a 1.06 GB peak job memory counter. |
 | Active electrical suite | Five ngspice 47 cases passed: two nominal supply/load combinations, an under-supply control, a diode operating point and a same-topology swapped-pin control. Generic authored models are explicitly distinguished from manufacturer-qualified behavior. |
 | Passive electrical regression | Ten cases passed, including all channel vectors of the 640-channel/1,280-passive IF network, analytic transfer functions and intentional mismatch controls. |
-| Directory lifecycle and library imports | The source CLI/Python/real stdio MCP trial passed 16 operations with 17 registered MCP tools: start/open/run/resume, source-preserving adoption, planned local imports, apply and exact replay. Fresh exact-wheel verification remains a release check. |
+| Directory lifecycle and library imports | Both source and fresh-installed CLI/Python/real stdio MCP trials passed 16 operations with 17 registered MCP tools: start/open/run/resume, source-preserving adoption, planned local imports, apply and exact replay. The generated IoT schematic reported zero ERC errors and 26 warnings; this is not warning-free schematic approval. |
+| Committed package and fresh runtime | A wheel and sdist built from code commit `fd7c878` installed in a new venv with MCP 1.30.0. All 221 package files matched committed source, wheel and installation. The installed package also passed all five generic active SPICE cases and rendered the routed SDR assembly with all 236 models resolved. This is an unreleased local candidate, not a new PyPI version. |
 
 The final focused local batches passed 355 tests: 130 project/lifecycle checks, 51 schematic/layout checks and 174 electrical/library/MCP/model checks. Ruff, generated capability documentation and the electrical benchmark baseline passed. The freshly regenerated SDR board also retained all 8 analog-channel and 74 signal-path contracts. These are focused local checks, not a new full cross-platform CI run.
 
@@ -28,3 +29,9 @@ The native SDR router session records 994 traces, 231 vias and approximately 13.
 - Final review also rejected source paths through symlinked ancestors, prevented a matching descendant state from overriding a directly selected circuit directory, and rejected boolean values in legacy scalar simulation targets.
 
 Native jobs run serially with the existing 2 GiB reserve and 2.5 GiB cap. Small Python batches use a 1 GiB reserve and 384 MiB cap when needed. Supervisor records prove owned descendants were reaped. GitHub Actions budget and fresh green final-head CI remain external merge/release gates.
+
+The retained fresh-install evidence is `candidate01/proof.json`,
+`fresh-surfaces01/proof.json`, `fresh-active01/active-suite-report.json` and
+`fresh-preview01-job/stdout.log`. The preview itself is
+`fresh-assembled01/board-preview.svg`. These paths are relative to the local
+evidence root above; native source boards were unchanged.
