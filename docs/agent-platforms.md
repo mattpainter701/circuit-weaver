@@ -65,9 +65,9 @@ pip install "circuit-weaver[mcp]"
 circuit-weaver-mcp
 ```
 
-The 13-tool server retains the focused tools `validate_design`, `generate_artifacts`,
+The 14-tool server retains the focused tools `validate_design`, `generate_artifacts`,
 `discover_projects`, `research_component`, and `manufacturing_readiness`, plus
-`runtime_info` and the shared project lifecycle tools `start_project`,
+`runtime_info`, the read-only `library_access` audit, and the shared project lifecycle tools `start_project`,
 `open_project`, `plan_workflow`, `run_workflow`, `workflow_status`,
 `resume_workflow`, and `cancel_workflow`. The lifecycle tools require explicit
 absolute project paths; specs and options are JSON objects and stage selections
@@ -76,6 +76,9 @@ returns after its selected stages finish or fail. `resume_workflow` executes the
 verified saved workflow; `plan_workflow` inspects without executing.
 `cancel_workflow` records a request that the runner observes at a stage
 boundary. The MCP server does not run the conversational design wizard.
+`library_access` requires an absolute `project_root` when one is supplied and
+reports local KiCad asset availability separately from functional and SPICE
+support; it does not qualify electrical behavior or RF performance.
 Installing skills does not configure an MCP client. See
 [`project-workflows.md`](project-workflows.md) for the lifecycle API and
 checkpoint behavior.

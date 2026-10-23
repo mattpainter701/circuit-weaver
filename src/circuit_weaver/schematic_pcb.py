@@ -27,6 +27,23 @@ from .pcb_handoff import _pcb_output_lock, _publish_staged_transaction
 
 _SHEET_FILE_RE = re.compile(r'\(property\s+"Sheetfile"\s+"([^"\\]*(?:\\.[^"\\]*)*)"', re.IGNORECASE)
 _PINLESS_PHYSICAL_SYMBOLS = {("Mechanical", "MountingHole"), ("Mechanical", "Fiducial")}
+_NATIVE_BUILD_BASE_TIMEOUT_SECONDS = 90
+_NATIVE_BUILD_MAX_TIMEOUT_SECONDS = 600
+
+
+def _native_build_timeout_seconds(component_count: int, sheet_count: int) -> int:
+    """Return a hard-capped KiCad timeout scaled to the exported design size."""
+    if (
+        isinstance(component_count, bool)
+        or not isinstance(component_count, int)
+        or component_count < 0
+        or isinstance(sheet_count, bool)
+        or not isinstance(sheet_count, int)
+        or sheet_count < 1
+    ):
+        raise ValueError("Native build component and sheet counts must be nonnegative and positive integers")
+    scaled = _NATIVE_BUILD_BASE_TIMEOUT_SECONDS + math.ceil(component_count * 0.25) + 3 * (sheet_count - 1)
+    return min(_NATIVE_BUILD_MAX_TIMEOUT_SECONDS, scaled)
 
 
 def _annotation_errors_present(output: str) -> bool:
@@ -564,6 +581,8 @@ def schematic_to_pcb(
             staged_project = staging / "project"
             staged_project.mkdir()
             staged_schematic, source_snapshot = _copy_schematic_project(source, staged_project)
+            sheet_count = max(1, sum(path.suffix.lower() == ".kicad_sch" for path in source_snapshot))
+            netlist_export_timeout = _native_build_timeout_seconds(0, sheet_count)
             netlist = staging / "schematic.net.xml"
             command = [
                 cli,
@@ -576,7 +595,9 @@ def schematic_to_pcb(
                 str(netlist),
                 str(staged_schematic),
             ]
-            exported = subprocess.run(command, capture_output=True, text=True, timeout=90)
+            exported = subprocess.run(
+                command, capture_output=True, text=True, timeout=netlist_export_timeout
+            )
             if exported.returncode != 0 or not netlist.is_file():
                 detail = (exported.stderr or exported.stdout).strip()[-1500:]
                 raise RuntimeError(f"KiCad schematic netlist export failed: {detail or 'no netlist produced'}")
@@ -589,6 +610,7 @@ def schematic_to_pcb(
             footprint_library = KiCadFootprintLibrary(project_root=source.parent)
             model = _parse_netlist(netlist, footprint_library)
             _pack_components(model["components"], float(width_mm), float(height_mm), footprint_library)
+            worker_timeout = _native_build_timeout_seconds(len(model["components"]), sheet_count)
             staged_board = staging / target.name
             staged_project_file = staged_board.with_suffix(".kicad_pro")
             staged_rules_file = staged_board.with_suffix(".kicad_dru")
@@ -613,7 +635,7 @@ def schematic_to_pcb(
                 input=json.dumps(request, ensure_ascii=True),
                 capture_output=True,
                 text=True,
-                timeout=90,
+                timeout=worker_timeout,
             )
             worker = _worker_result(result)
             if worker["status"] != "ok":
@@ -672,6 +694,11 @@ def schematic_to_pcb(
                     if physical_only_components else "exact_number_match"
                 ),
                 "pcbnew_round_trip": "passed",
+                "native_timeouts_seconds": {
+                    "netlist_export": netlist_export_timeout,
+                    "pcbnew_worker": worker_timeout,
+                    "hard_cap_per_process": _NATIVE_BUILD_MAX_TIMEOUT_SECONDS,
+                },
                 "physical_drc": {
                     "status": drc.status,
                     "non_connect_blockers": 0,

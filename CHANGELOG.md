@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Add explicit, structured SPICE testbenches with declared sources, sweep settings, trace selectors and engineering limits. Include repeatable IoT, SDR IQ, transmitter-filter, radar IF-bank and industrial-input passive benchmarks with analytic checks and negative controls.
+- Scale native schematic import timeouts within hard limits and reuse unaffected schematic page layouts during root hierarchy splitting. Correct the AD9528 package binding and retain foreign-net guards when routing crowded power labels.
+- Add connected BLE sensor, SDR clock-carrier and 1,202-part relay stress fixtures alongside clearly labeled comparison designs; distinguish CAD asset access, pin-net checks, electrical simulation and routing evidence.
+- Add a read-only `library-access` CLI, Python API, and MCP audit that reports KiCad symbol/footprint/model roots and provenance separately from curated functional templates and project SPICE bindings. Exact symbols can resolve generic package/model assets without implying electrical or RF qualification.
+- Require explicit SPICE subcircuit and pin-order contracts, fresh parsed output, and supported explicit project targets before reporting simulations as verified. Distinguish verified, failed, and unverified simulation outcomes in reports and CLI exit codes.
 - Share project start/open, planning, execution and verified resume across the CLI, Python API, MCP server and agent skill. Record real stage outcomes and artifact hashes, reject changed inputs and conflicting outputs, and expose responsive status and boundary cancellation without reporting unfinished native work as complete.
 - Restore directory-based terminal discovery and report the exact package, interpreter, bundled skill and MCP launch command. Safely migrate recognized legacy skills while preserving customized installations, and audit client configuration without revealing secret arguments.
 - Reserve native pad and body geometry as well as authored courtyards during automatic placement, preventing undersized custom courtyards from hiding physical overlaps. Preserve larger courtyards, asymmetric footprint origins and native DRC rejection.

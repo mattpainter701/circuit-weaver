@@ -7,6 +7,7 @@ projects and choose new/open in an interactive terminal. For automation:
 
 ```bash
 circuit-weaver runtime-info --json
+circuit-weaver library-access ADF4351 --project-root ./rf-project --json
 circuit-weaver start ./sensor --spec ./sensor.yaml --json
 circuit-weaver open ./sensor --json
 circuit-weaver workflow run ./sensor --stages validate generate --json
@@ -880,10 +881,27 @@ circuit-weaver simulate <spec.yaml> [-o <output_dir>] [--type <scope>] [--model-
 | `--model-dir` | Directory with SPICE models (default: auto-detect `spice_models/`) |
 | `--json` | Output results as JSON |
 
-**Exit codes:** 0 = success
+**Exit codes:** 0 = verified (fresh parsed evidence and explicit supported targets passed), 1 = failed, 2 = unverified (for example, no explicit target or missing simulation evidence). Inspect the JSON `status`, `coverage`, `target_checks`, and recommendations; a completed ngspice run alone does not establish design acceptance.
 
-Requires ngspice to be installed. If ngspice is not available, simulations are
-reported as "skipped" with a recommendation to install it.
+SPICE subcircuits require a readable model file and explicit `subckt` and
+`pin_order` metadata matching the component's connected pin numbers. A model
+file's presence alone is not electrical validation. Missing `ngspice` or
+models remain skipped/unverified and cannot be reported as verified.
+
+## library-access
+
+Audit local KiCad symbol, footprint, and 3D model access independently from
+Circuit Weaver's curated functional templates and project SPICE bindings.
+
+```bash
+circuit-weaver library-access [query] [--project-root <dir>] [--json]
+```
+
+The report labels library roots by provenance, bounds results, flags nickname
+collisions, and can resolve an exact symbol through its generic footprint and
+model references. Asset identity and file hashes do not establish pinout,
+package fit, electrical function, or simulation usability. This command is
+read-only; it does not fetch libraries or register an MCP client.
 
 ## confidence
 

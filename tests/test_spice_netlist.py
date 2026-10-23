@@ -1,6 +1,6 @@
 """Tests for SPICE netlist generation."""
 
-
+import pytest
 
 from circuit_weaver.component_db import ComponentDef
 from circuit_weaver.spice_netlist import (
@@ -43,8 +43,9 @@ class TestNormalizeNode:
         assert _normalize_node("VSS") == "0"
         assert _normalize_node("0") == "0"
 
-    def test_empty_is_ground(self):
-        assert _normalize_node("") == "0"
+    def test_empty_is_rejected_instead_of_silently_grounded(self):
+        with pytest.raises(ValueError, match="cannot be treated as ground"):
+            _normalize_node("")
 
     def test_regular_net(self):
         assert _normalize_node("VDD_3V3") == "VDD_3V3"
@@ -59,6 +60,11 @@ class TestParseValue:
     def test_simple_numeric(self):
         assert _parse_value("10k") == "10k"
         assert _parse_value("100") == "100"
+
+    def test_uppercase_m_is_mega_and_lowercase_m_stays_milli(self):
+        assert _parse_value("1M") == "1Meg"
+        assert _parse_value("1m") == "1m"
+        assert _parse_value("1MΩ") == "1Meg"
 
     def test_units_removed(self):
         assert _parse_value("100nF") == "100n"
@@ -130,6 +136,12 @@ class TestAnalysisCards:
         cards = _generate_analysis_cards("tran", {"step": "10n", "stop": "1m"})
         assert ".tran 10n 1m 0" in cards[0]
 
+    def test_rejects_analysis_card_injection(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="Unsafe or unsupported"):
+            _generate_analysis_cards("ac", {"fstart": "1\n.control"})
+
 
 class TestExportSpiceNetlist:
     def test_generates_cir_file(self, tmp_path):
@@ -144,6 +156,7 @@ class TestExportSpiceNetlist:
         assert "C1" in content
         assert ".tran" in content
         assert ".end" in content
+        assert "set filetype=ascii" in content
 
     def test_skips_components_without_models(self, tmp_path):
         ic = _make_passive("U1", "TPS62300", "VIN", "VOUT")
@@ -158,8 +171,82 @@ class TestExportSpiceNetlist:
     def test_ac_analysis(self, tmp_path):
         components = [_make_passive("R1", "1k", "IN", "OUT")]
         out = export_spice_netlist(
-            components, tmp_path / "test.cir",
+            components,
+            tmp_path / "test.cir",
             analysis_type="ac",
         )
         content = out.read_text()
         assert ".ac" in content
+
+    def test_explicit_voltage_testbench_source(self, tmp_path):
+        components = [
+            _make_passive("R1", "1k", "VIN", "VOUT"),
+            _make_passive("C1", "100n", "VOUT", "GND"),
+        ]
+        out = export_spice_netlist(
+            components,
+            tmp_path / "testbench.cir",
+            analysis_type="ac",
+            analysis_params={"variation": "dec", "points": 40, "fstart": "10", "fstop": "100k"},
+            sources=[{"ref": "VTEST", "type": "V", "positive": "VIN", "negative": "GND", "dc": 0, "ac": 1}],
+        )
+        content = out.read_text()
+        assert "VTEST VIN 0 DC 0 AC 1" in content
+        assert ".ac dec 40 10 100k" in content
+
+    def test_explicit_source_rejects_unconnected_or_colliding_nodes(self, tmp_path):
+        import pytest
+
+        components = [_make_passive("R1", "1k", "IN?", "OUT")]
+        with pytest.raises(ValueError, match="unconnected net"):
+            export_spice_netlist(
+                components,
+                tmp_path / "floating.cir",
+                sources=[{"ref": "VTEST", "type": "V", "positive": "MISSING", "negative": "OUT", "ac": 1}],
+            )
+        colliding = [
+            _make_passive("R1", "1k", "IN?", "OUT"),
+            _make_passive("R2", "1k", "IN_", "GND"),
+        ]
+        with pytest.raises(ValueError, match="normalize to the same SPICE node"):
+            export_spice_netlist(colliding, tmp_path / "collision.cir")
+        case_colliding = [
+            _make_passive("R1", "1k", "VIN", "OUT"),
+            _make_passive("R2", "1k", "vin", "GND"),
+        ]
+        with pytest.raises(ValueError, match="normalize to the same SPICE node"):
+            export_spice_netlist(case_colliding, tmp_path / "case-collision.cir")
+
+    def test_one_megohm_one_picofarad_export_uses_mega_suffix(self, tmp_path):
+        components = [
+            _make_passive("R1", "1M", "IN", "OUT"),
+            _make_passive("C1", "1pF", "OUT", "GND"),
+        ]
+        out = export_spice_netlist(components, tmp_path / "rc.cir")
+        content = out.read_text()
+        assert "R1 IN OUT 1Meg" in content
+        assert "C1 OUT 0 1p" in content
+
+    def test_path_only_ic_model_is_reported_as_unsupported(self, tmp_path):
+        ic = _make_passive("U1", "TPS62300", "VIN", "VOUT")
+        ic.source_ref = "U1"
+        ic.mpn = "TPS62300"
+        out = export_spice_netlist(
+            [ic], tmp_path / "model.cir", model_manifest={"TPS62300": str(tmp_path / "model.lib")}
+        )
+        assert "Skipped U1" in out.read_text()
+
+    def test_model_instance_uses_explicit_pin_order_and_subckt_name(self, tmp_path):
+        ic = _make_passive("U1", "TPS62300", "VIN", "VOUT")
+        ic.source_ref = "U1"
+        ic.mpn = "TPS62300"
+        model = tmp_path / "model.lib"
+        model.write_text(".subckt device VIN VOUT\nR1 VIN VOUT 1k\n.ends device\n")
+        out = export_spice_netlist(
+            [ic],
+            tmp_path / "model.cir",
+            model_manifest={"TPS62300": {"path": str(model), "subckt": "device", "pin_order": ["1", "2"]}},
+        )
+        content = out.read_text()
+        assert "XU1 VIN VOUT device" in content
+        assert f'.include "{model}"' in content

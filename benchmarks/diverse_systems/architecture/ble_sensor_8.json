@@ -1,0 +1,63 @@
+{
+  "architecture": "nRF52840 BLE sensor node with connected multichannel acquisition",
+  "assumptions": [
+    "Nordic P0.13-P0.16 are firmware-configured as SPI signals.",
+    "Crystal load network follows the existing Nordic sample assumptions; production tolerance needs separate validation.",
+    "The ANT-to-SMA connection is a test port, not an antenna match or radio-performance claim."
+  ],
+  "board_mm": {
+    "height": 135,
+    "width": 180
+  },
+  "case_id": "ble_sensor_8",
+  "comparison_fixture_reuse": false,
+  "counts": {
+    "measured": null,
+    "minimum": 140,
+    "target": 160
+  },
+  "excluded_claims": [
+    "No BLE range, antenna, RF compliance, firmware, or wireless-security claim."
+  ],
+  "functional_blocks": [
+    "nRF52840-QIAA BLE MCU",
+    "32 MHz crystal Y1",
+    "Eight-channel MCP3208 acquisition",
+    "SPI DAC and analog setpoint outputs",
+    "I2C environmental sensor",
+    "Direct ANT test port to SMA J90"
+  ],
+  "native_contract": "contracts/ble_sensor_8.json",
+  "pin_net_assertions": [
+    {
+      "function": "P0.13",
+      "mcu": "U4",
+      "pad": "AD8",
+      "signal": "SPI_SCK"
+    },
+    {
+      "function": "P0.14",
+      "mcu": "U4",
+      "pad": "AC9",
+      "signal": "SPI_MOSI"
+    },
+    {
+      "function": "P0.15",
+      "mcu": "U4",
+      "pad": "AD10",
+      "signal": "SPI_MISO"
+    },
+    {
+      "function": "P0.16",
+      "mcu": "U4",
+      "pad": "AC11",
+      "signal": "ADC_CS_N"
+    },
+    {
+      "function": "ANT to SMA-EDGE J90",
+      "mcu": "U4",
+      "pad": "H23",
+      "signal": "RF_IN"
+    }
+  ]
+}

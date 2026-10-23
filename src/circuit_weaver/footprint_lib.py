@@ -13,6 +13,7 @@ import json
 import os
 import platform
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -33,6 +34,122 @@ _KICAD_FOOTPRINT_PATHS = {
         Path("/usr/local/share/kicad/footprints"),
     ],
 }
+
+
+def _global_kicad_table_paths(filename: str) -> list[Path]:
+    """Return existing per-user KiCad library table files, newest first."""
+    candidates: list[Path] = []
+    if os.name == "nt":
+        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+        config_roots = [base / "kicad", base / "KiCad"]
+    elif platform.system() == "Darwin":
+        config_roots = [Path.home() / "Library" / "Preferences" / "kicad"]
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+        config_roots = [base / "kicad"]
+    for root in config_roots:
+        candidates.extend(root / version / filename for version in ("10.0", "9.0", "8.0"))
+    seen: set[str] = set()
+    existing: list[Path] = []
+    for candidate in candidates:
+        if candidate.is_file():
+            resolved = candidate.resolve()
+            key = os.path.normcase(str(resolved))
+            if key not in seen:
+                seen.add(key)
+                existing.append(resolved)
+    return existing
+
+
+def _expand_library_table_uri(uri: str, table_path: Path, project_root: Path | None = None) -> Path | None:
+    """Expand local KiCad library-table variables without evaluating expressions."""
+    value = uri
+    if "${KIPRJMOD}" in value:
+        if project_root is None:
+            return None
+        value = value.replace("${KIPRJMOD}", str(project_root))
+    for match in re.findall(r"\$\{([^}]+)\}", value):
+        replacement = os.environ.get(match)
+        if replacement is None and match in {
+            "KICAD_FOOTPRINT_DIR",
+            "KICAD10_FOOTPRINT_DIR",
+            "KICAD9_FOOTPRINT_DIR",
+            "KICAD8_FOOTPRINT_DIR",
+        }:
+            version = re.search(r"KICAD(\d+)_", match)
+            replacement = next(
+                (
+                    str(root)
+                    for root in _KICAD_FOOTPRINT_PATHS.get(platform.system(), [])
+                    if (
+                        version is None
+                        or f"{version.group(1)}.0" in str(root)
+                        or len(_KICAD_FOOTPRINT_PATHS.get(platform.system(), [])) == 1
+                    )
+                ),
+                None,
+            )
+        if replacement is None and re.fullmatch(r"KICAD(?:8|9|10)_SYMBOL_DIR", match):
+            version = re.search(r"KICAD(\d+)_", match).group(1)
+            if os.name == "nt":
+                replacement = f"C:/Program Files/KiCad/{version}.0/share/kicad/symbols"
+            elif platform.system() == "Darwin":
+                replacement = "/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols"
+            else:
+                replacement = "/usr/share/kicad/symbols"
+        if replacement is None:
+            return None
+        value = value.replace("${" + match + "}", replacement)
+    if "$" in value:
+        return None
+    candidate = Path(value).expanduser()
+    if not candidate.is_absolute():
+        candidate = table_path.parent / candidate
+    try:
+        return candidate.resolve(strict=False)
+    except (OSError, RuntimeError):
+        return None
+
+
+def _global_library_table_entries(filename: str, root_name: str) -> dict[str, Path]:
+    """Read user-global KiCad libraries, following bounded ``type=Table`` links."""
+    libraries: dict[str, Path] = {}
+    visited: set[Path] = set()
+
+    def visit(table_path: Path, depth: int) -> None:
+        if depth > 4 or table_path in visited or not table_path.is_file():
+            return
+        visited.add(table_path)
+        try:
+            if table_path.stat().st_size > 1024 * 1024:
+                return
+            tree = _parse_kicad_sexp(table_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError):
+            return
+        if not tree or tree[0] != root_name:
+            return
+        for entry in tree[1:]:
+            if not isinstance(entry, list) or not entry or entry[0] != "lib":
+                continue
+            try:
+                nickname = _direct_string(entry, "name")
+                kind = _direct_string(entry, "type")
+                uri = _direct_string(entry, "uri")
+            except ValueError:
+                continue
+            if not nickname or not kind or not uri:
+                continue
+            target = _expand_library_table_uri(uri, table_path)
+            if target is None:
+                continue
+            if kind == "Table":
+                visit(target, depth + 1)
+            elif kind == "KiCad" and target.exists():
+                libraries.setdefault(nickname, target)
+
+    for table in _global_kicad_table_paths(filename):
+        visit(table, 0)
+    return libraries
 
 
 def _parse_kicad_sexp(text: str) -> list:
@@ -132,8 +249,9 @@ def _project_library_uri(project_root: Path, nickname: str) -> Path | None:
         raise ValueError(f"could not read KiCad footprint library table: {exc}") from exc
     if not tree or tree[0] != "fp_lib_table":
         raise ValueError("invalid KiCad footprint library table root")
-    matches = [x for x in tree[1:] if isinstance(x, list) and x and x[0] == "lib"
-               and _direct_string(x, "name") == nickname]
+    matches = [
+        x for x in tree[1:] if isinstance(x, list) and x and x[0] == "lib" and _direct_string(x, "name") == nickname
+    ]
     if len(matches) > 1:
         raise ValueError(f"duplicate footprint library nickname in project table: {nickname}")
     if not matches:
@@ -145,10 +263,15 @@ def _project_library_uri(project_root: Path, nickname: str) -> Path | None:
     prefix = "${KIPRJMOD}/"
     if not uri or not uri.startswith(prefix):
         raise ValueError(f"unsupported project footprint library URI for {nickname}: {uri!r}")
-    relative = uri[len(prefix):]
+    relative = uri[len(prefix) :]
     parts = relative.split("/")
-    if (not relative or "\\" in relative or any(x in {"", ".", ".."} for x in parts)
-            or ":" in relative or "${" in relative):
+    if (
+        not relative
+        or "\\" in relative
+        or any(x in {"", ".", ".."} for x in parts)
+        or ":" in relative
+        or "${" in relative
+    ):
         raise ValueError(f"unsafe project footprint library URI for {nickname}: {uri!r}")
     root = project_root.resolve(strict=True)
     library = root.joinpath(*parts).resolve(strict=False)
@@ -174,16 +297,53 @@ class FootprintGeometry:
 class KiCadFootprintLibrary:
     """Resolve KiCad footprint references against local `.pretty` libraries."""
 
-    def __init__(self, root: str | Path | None = None, *, project_root: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        root: str | Path | Iterable[str | Path] | None = None,
+        *,
+        project_root: str | Path | None = None,
+    ) -> None:
         self._roots = self._default_roots(root)
         self._project_root = Path(project_root).resolve() if project_root is not None else None
+        self._global_libraries = _global_library_table_entries("fp-lib-table", "fp_lib_table")
+        self._project_libraries = self._project_libraries_from_table()
         self._geometry_cache: dict[tuple[str, str, str], FootprintGeometry] = {}
 
+    def _project_libraries_from_table(self) -> dict[str, Path]:
+        if self._project_root is None:
+            return {}
+        table = self._project_root / "fp-lib-table"
+        if not table.is_file() or table.stat().st_size > 1024 * 1024:
+            return {}
+        try:
+            tree = _parse_kicad_sexp(table.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError):
+            return {}
+        if not tree or tree[0] != "fp_lib_table":
+            return {}
+        libraries: dict[str, Path] = {}
+        for item in tree[1:]:
+            if not isinstance(item, list) or not item or item[0] != "lib":
+                continue
+            try:
+                nickname = _direct_string(item, "name")
+                if not nickname:
+                    continue
+                path = _project_library_uri(self._project_root, nickname)
+            except (OSError, RuntimeError, ValueError):
+                continue
+            if path is not None:
+                libraries[nickname] = path
+        return libraries
+
     @staticmethod
-    def _default_roots(root: str | Path | None) -> list[Path]:
+    def _default_roots(root: str | Path | Iterable[str | Path] | None) -> list[Path]:
         roots: list[Path] = []
         if root:
-            roots.append(Path(root))
+            if isinstance(root, (str, Path)):
+                roots.append(Path(root))
+            else:
+                roots.extend(Path(path) for path in root)
         for name in (
             "KICAD_FOOTPRINT_DIR",
             "KICAD10_FOOTPRINT_DIR",
@@ -210,6 +370,16 @@ class KiCadFootprintLibrary:
     def roots(self) -> list[Path]:
         return list(self._roots)
 
+    @property
+    def global_libraries(self) -> dict[str, Path]:
+        """User-global nickname-to-library locations read from KiCad tables."""
+        return dict(self._global_libraries)
+
+    @property
+    def project_libraries(self) -> dict[str, Path]:
+        """Project-local nickname-to-library locations read from KiCad tables."""
+        return dict(self._project_libraries)
+
     def footprint_exists(self, footprint: str) -> bool:
         """Return True when ``Lib:Footprint`` exists locally."""
         if not footprint or ":" not in footprint:
@@ -234,6 +404,10 @@ class KiCadFootprintLibrary:
                 if not candidate.is_relative_to(self._project_root):
                     raise ValueError("project footprint file escapes project root")
                 return candidate if candidate.is_file() else None
+        global_library = self._global_libraries.get(lib)
+        if global_library is not None:
+            candidate = global_library / f"{name}.kicad_mod"
+            return candidate if candidate.is_file() else None
         rel = Path(f"{lib}.pretty") / f"{name}.kicad_mod"
         for root in self._roots:
             candidate = root / rel
@@ -283,9 +457,14 @@ class KiCadFootprintLibrary:
         if courtyard_points:
             width, height = _bounds(courtyard_points)
             xs, ys = zip(*courtyard_points)
-            geometry = FootprintGeometry(width, height, "courtyard", digest,
-                                         center_x_mm=(min(xs) + max(xs)) / 2,
-                                         center_y_mm=(min(ys) + max(ys)) / 2)
+            geometry = FootprintGeometry(
+                width,
+                height,
+                "courtyard",
+                digest,
+                center_x_mm=(min(xs) + max(xs)) / 2,
+                center_y_mm=(min(ys) + max(ys)) / 2,
+            )
             self._geometry_cache[cache_key] = geometry
             return geometry
 
@@ -302,23 +481,49 @@ class KiCadFootprintLibrary:
             raise ValueError(f"footprint {footprint} has neither courtyard geometry nor measurable pads")
         width, height = _bounds(pad_points)
         xs, ys = zip(*pad_points)
-        geometry = FootprintGeometry(width, height, "pads", digest,
-                                     center_x_mm=(min(xs) + max(xs)) / 2,
-                                     center_y_mm=(min(ys) + max(ys)) / 2)
+        geometry = FootprintGeometry(
+            width, height, "pads", digest, center_x_mm=(min(xs) + max(xs)) / 2, center_y_mm=(min(ys) + max(ys)) / 2
+        )
         self._geometry_cache[cache_key] = geometry
         return geometry
 
-    def find(self, query: str) -> list[str]:
+    def find(self, query: str, *, limit: int | None = None) -> list[str]:
         """Find local footprint refs whose name contains ``query``."""
         q = query.lower().strip()
         if not q:
             return []
         matches: list[str] = []
+        seen: set[str] = set()
+        for nickname, library in self._project_libraries.items():
+            for mod in sorted(library.glob("*.kicad_mod")):
+                if q in mod.stem.lower():
+                    reference = f"{nickname}:{mod.stem}"
+                    if reference not in seen:
+                        seen.add(reference)
+                        matches.append(reference)
+                    if limit is not None and len(matches) >= limit:
+                        return matches
         for root in self._roots:
             for pretty in sorted(root.glob("*.pretty")):
                 for mod in sorted(pretty.glob("*.kicad_mod")):
                     if q in mod.stem.lower():
-                        matches.append(f"{pretty.stem}:{mod.stem}")
+                        reference = f"{pretty.stem}:{mod.stem}"
+                        if reference in seen:
+                            continue
+                        seen.add(reference)
+                        matches.append(reference)
+                        if limit is not None and len(matches) >= limit:
+                            return matches
+        for nickname, library in self._global_libraries.items():
+            for mod in sorted(library.glob("*.kicad_mod")):
+                if q in mod.stem.lower():
+                    reference = f"{nickname}:{mod.stem}"
+                    if reference in seen:
+                        continue
+                    seen.add(reference)
+                    matches.append(reference)
+                    if limit is not None and len(matches) >= limit:
+                        return matches
         return matches
 
 
@@ -429,11 +634,13 @@ def curated_footprint_alternatives(mpn: str, fp_lib: KiCadFootprintLibrary | Non
         footprint = str(candidate.get("footprint", "")).strip()
         if fp_lib is not None and fp_lib.roots and not fp_lib.footprint_exists(footprint):
             continue
-        out.append({
-            "mpn": str(candidate.get("mpn", "")).strip(),
-            "footprint": footprint,
-            "reason": str(candidate.get("reason", "")).strip(),
-        })
+        out.append(
+            {
+                "mpn": str(candidate.get("mpn", "")).strip(),
+                "footprint": footprint,
+                "reason": str(candidate.get("reason", "")).strip(),
+            }
+        )
     return out
 
 

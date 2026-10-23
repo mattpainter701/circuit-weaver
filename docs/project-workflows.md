@@ -103,7 +103,8 @@ server, then configure the MCP client separately:
 <absolute-python> -m circuit_weaver.mcp_server
 ```
 
-The MCP server exposes `runtime_info`, `start_project`, `open_project`,
+The MCP server exposes `runtime_info`, the read-only `library_access` audit,
+`start_project`, `open_project`,
 `plan_workflow`, `run_workflow`, `workflow_status`, `resume_workflow`, and
 `cancel_workflow`, in addition to the original validation, generation,
 discovery, research, and manufacturing-readiness tools. `resume_workflow`
@@ -117,7 +118,64 @@ JSON objects; `stages_json` must be an array of stage-name strings. Tool errors
 are returned as MCP errors, and workflow progress printed by engine functions
 is suppressed so it cannot corrupt the JSON-RPC stream.
 
+`library_access(query, project_root)` accepts an optional query and requires
+`project_root` to be absolute when provided. It preserves the distinction
+between local symbol/footprint/model assets, curated functional templates, and
+project SPICE bindings. A resolved asset does not imply package fit, a working
+functional builder, a validated SPICE contract, or RF qualification.
+
 Installing the package, installing its agent skill, and registering an MCP
 client entry are separate operations. Use the interpreter reported by
 `runtime_info` for both the CLI and server, then configure that absolute
 interpreter path in the chosen MCP client's own settings.
+
+## Explicit SPICE testbenches
+
+`circuit-weaver simulate <spec.yaml> --json` accepts optional explicit
+analyses under `simulation.analyses`. This is useful for passive circuits and
+other designs where the engineer must provide the stimulus and acceptance
+limits; the simulator never invents source drive or target limits. For example,
+this 1 kΩ / 100 nF low-pass testbench uses a 1 V AC input and a 1.58–1.605 kHz
+bandwidth window:
+
+```yaml
+project: Explicit_RC_Testbench
+passives:
+  - ref: R1
+    value: 1k
+    footprint: Resistor_SMD:R_0603_1608Metric
+    pin_nets_extra: {"1": VIN, "2": VOUT}
+  - ref: C1
+    value: 100nF
+    footprint: Capacitor_SMD:C_0603_1608Metric
+    pin_nets_extra: {"1": VOUT, "2": GND}
+simulation:
+  analyses:
+    - ref: RC_LOWPASS
+      kind: ac
+      analysis_params:
+        variation: dec
+        points: 100
+        fstart: 1
+        fstop: 1000000
+        input_trace: v(VIN)
+        output_trace: v(VOUT)
+      sources:
+        - {ref: VTEST, type: V, positive: VIN, negative: GND, dc: 0, ac: 1}
+      target_metrics:
+        bandwidth_hz_min: 1580
+        bandwidth_hz_max: 1605
+```
+
+The source contract supports only structured voltage/current sources with
+finite numeric `dc` and/or `ac` values and endpoints on named, connected nets
+(or ground aliases). Analysis kinds are `ac`, `tran`, `op`, and `dc`; parameter
+and trace selectors are validated before SPICE execution. Bandwidth targets use
+`bandwidth_hz_min` / `bandwidth_min_hz` and
+`bandwidth_hz_max` / `bandwidth_max_hz`; trace selectors must name connected
+voltage nodes such as `v(VIN)`. `target_metrics` may be omitted, but then the
+run remains unverified because no acceptance limit was checked. Unknown,
+ambiguous, or unsupported targets also remain unverified. A verified passive
+AC result establishes only that the supplied netlist generated fresh parsed
+results and its stated bandwidth bounds passed; it does not validate an IC
+model, package fit, board layout, RF behavior, or manufacturing readiness.

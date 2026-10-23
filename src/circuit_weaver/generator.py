@@ -60,7 +60,9 @@ from .primitives import (
     passive_pin_xy,
     pin_connection_point,
     place_component,
+    sexpr_global_label,
     sexpr_header,
+    sexpr_hierarchical_label,
     sexpr_no_connect,
     sexpr_pwr_flag_instance,
     sexpr_pwr_flag_lib_entry,
@@ -932,6 +934,99 @@ def _avoid_foreign_net_anchors(
     )
 
 
+def _marker_route_avoiding_foreign_nets(
+    net_name: str,
+    cx: float,
+    cy: float,
+    pin_angle: int,
+    desired: float,
+    net_anchors: list[tuple[str, float, float]] | None,
+    route_state: dict | None,
+    body_boxes: list[tuple[float, float, float, float]] | None = None,
+) -> list[tuple[float, float]]:
+    """Route a power marker stub around local foreign-net reservations.
+
+    The ordinary marker remains a straight stub. In dense pin fields, an
+    orthogonal detour can still connect the same pin to a nearby marker while
+    respecting reserved foreign routes, named anchors, and symbol bodies.
+    """
+    start = (snap(cx), snap(cy))
+    try:
+        length = _avoid_foreign_net_anchors(
+            net_name, cx, cy, pin_angle, desired, net_anchors, route_state
+        )
+        return [start, _stub_endpoint(cx, cy, pin_angle, length)]
+    except ValueError:
+        pass
+
+    if pin_angle in (0, 180):
+        forward = (1 if pin_angle == 180 else -1, 0)
+        side = (0, 1)
+    else:
+        forward = (0, 1 if pin_angle == 90 else -1)
+        side = (1, 0)
+
+    foreign_anchors = [
+        (anchor_x, anchor_y)
+        for anchor_net, anchor_x, anchor_y in (net_anchors or [])
+        if anchor_net and anchor_net != net_name
+    ]
+    blockers = [box for box in (body_boxes or []) if not _point_in_box(box, *start)]
+    candidates: list[tuple[tuple[float, int, int], tuple[float, float]]] = []
+    for forward_adjust in range(3):
+        distance = snap(desired + forward_adjust * _STUB_STEP)
+        for side_steps in range(1, 9):
+            for side_sign in (-1, 1):
+                endpoint = (
+                    snap(start[0] + forward[0] * distance + side[0] * side_sign * side_steps * _STUB_STEP),
+                    snap(start[1] + forward[1] * distance + side[1] * side_sign * side_steps * _STUB_STEP),
+                )
+                anchor_clear = all(
+                    abs(endpoint[0] - ax) > _FOREIGN_NET_ANCHOR_CLEARANCE + 0.01
+                    or abs(endpoint[1] - ay) > _FOREIGN_NET_ANCHOR_CLEARANCE + 0.01
+                    for ax, ay in foreign_anchors
+                )
+                if not anchor_clear:
+                    continue
+                candidates.append(((forward_adjust + side_steps, side_steps, side_sign), endpoint))
+
+    for _score, endpoint in sorted(candidates, key=lambda item: item[0]):
+        path = _orthogonal_grid_route(start, endpoint, blockers, route_state, net_name)
+        if path is None:
+            continue
+        if any(
+            _segment_passes_anchor_clearance(first, second, anchor, 0.01)
+            for first, second in zip(path, path[1:])
+            for anchor in foreign_anchors
+        ):
+            continue
+        return path
+
+    raise ValueError(
+        f"Cannot place {net_name} marker at ({cx:.2f}, {cy:.2f}) "
+        "without contacting a different-net anchor or reserved route"
+    )
+
+
+def _segment_passes_anchor_clearance(
+    first: tuple[float, float],
+    second: tuple[float, float],
+    anchor: tuple[float, float],
+    clearance: float,
+) -> bool:
+    """Return whether an orthogonal segment enters an anchor keep-out box."""
+    ax, ay = anchor
+    if abs(first[0] - second[0]) < 0.01:
+        return abs(first[0] - ax) <= clearance and min(first[1], second[1]) - clearance <= ay <= max(
+            first[1], second[1]
+        ) + clearance
+    if abs(first[1] - second[1]) < 0.01:
+        return abs(first[1] - ay) <= clearance and min(first[0], second[0]) - clearance <= ax <= max(
+            first[0], second[0]
+        ) + clearance
+    return False
+
+
 def _detour_wires_around_bodies(
     wires: list[str],
     body_boxes: list[tuple[float, float, float, float]],
@@ -1093,6 +1188,29 @@ def _emit_polyline(points: list[tuple[float, float]], wires: list[str]) -> None:
         if abs(x1 - x2) < 0.01 and abs(y1 - y2) < 0.01:
             continue
         wires.append(sexpr_wire(x1, y1, x2, y2))
+
+
+def _emit_routed_label(
+    route: list[tuple[float, float]],
+    net_name: str,
+    wires: list[str],
+    labels: list[str],
+    label_emitter,
+    shape: str = "bidirectional",
+) -> None:
+    """Emit an explicit net label at the end of a safe orthogonal route."""
+    _emit_polyline(route, wires)
+    first, last = route[-2], route[-1]
+    if abs(first[1] - last[1]) < 0.01:
+        label_angle = 0 if last[0] < first[0] else 180
+    else:
+        label_angle = 90 if last[1] < first[1] else 270
+    label_sexpr = (
+        sexpr_hierarchical_label
+        if label_emitter is connect_pin_to_hierarchical_label
+        else sexpr_global_label
+    )
+    labels.append(label_sexpr(last[0], last[1], net_name, label_angle, shape))
 
 
 def _polyline_segments(
@@ -1657,7 +1775,7 @@ def _render_passive_net_endpoint(
     """Render a passive pin endpoint symbolically via a short stub and net marker."""
     if body_boxes:
         wire_len = _clear_stub_length(pin_x, pin_y, pin_angle, wire_len, body_boxes)
-    wire_len = _avoid_foreign_net_anchors(
+    route = _marker_route_avoiding_foreign_nets(
         net_name,
         pin_x,
         pin_y,
@@ -1665,13 +1783,13 @@ def _render_passive_net_endpoint(
         wire_len,
         net_anchors,
         route_state,
+        body_boxes,
     )
-    endpoint = _stub_endpoint(pin_x, pin_y, pin_angle, wire_len)
-    route_points = [(snap(pin_x), snap(pin_y)), endpoint]
+    endpoint = route[-1]
     if _is_power_net(net_name):
         wx, wy = endpoint
-        wires.append(sexpr_wire(pin_x, pin_y, wx, wy))
-        _reserve_route(route_points, route_state, net_name)
+        _emit_polyline(route, wires)
+        _reserve_route(route, route_state, net_name)
         from .primitives import sexpr_power_instance
 
         power_instances.append(
@@ -1688,8 +1806,14 @@ def _render_passive_net_endpoint(
         power_lib_names.add(net_name)
         return
 
-    label_fn(net_name)(pin_x, pin_y, pin_angle, net_name, wires, labels, wire_len=wire_len)
-    _reserve_route(route_points, route_state, net_name)
+    if len(route) == 2 and (
+        abs(route[1][0] - route[0][0]) < 0.01 or abs(route[1][1] - route[0][1]) < 0.01
+    ):
+        safe_len = abs(route[1][0] - route[0][0]) + abs(route[1][1] - route[0][1])
+        label_fn(net_name)(pin_x, pin_y, pin_angle, net_name, wires, labels, wire_len=safe_len)
+    else:
+        _emit_routed_label(route, net_name, wires, labels, label_fn(net_name))
+    _reserve_route(route, route_state, net_name)
 
 
 # A "local" wire that has to travel farther than this is not local: drawing
@@ -2017,6 +2141,33 @@ def _root_sheet_height_for_ports(max_pins: int) -> float:
     return snap(max(base_sheet_h, needed_h))
 
 
+def _splice_relaid_out_split(
+    allocations: list,
+    layouts: list[SheetLayout],
+    index: int,
+    child_allocations: list,
+    child_layouts: list[SheetLayout],
+) -> tuple[list, list[SheetLayout]]:
+    """Replace one allocation/layout pair while retaining untouched layouts.
+
+    Root-sheet port splitting changes the partition, but does not invalidate
+    the physical layouts for other pages. Keep the two parallel sequences
+    aligned and only replace the split page's children.
+    """
+    if len(allocations) != len(layouts):
+        raise ValueError("Sheet allocation/layout sequences are out of sync")
+    if len(child_allocations) != len(child_layouts):
+        raise ValueError("Split child allocation/layout sequences are out of sync")
+    if index < 0 or index >= len(allocations):
+        raise IndexError(f"Split allocation index {index} is out of range")
+
+    new_allocations = allocations[:index] + child_allocations + allocations[index + 1 :]
+    new_layouts = layouts[:index] + child_layouts + layouts[index + 1 :]
+    for allocation, layout in zip(new_allocations, new_layouts):
+        layout.name = allocation.name
+    return new_allocations, new_layouts
+
+
 def _pick_root_sheet_geometry(sheet_count: int, sheet_w: float, sheet_h: float):
     x_margin = snap(30)
     y_start = snap(40)
@@ -2189,9 +2340,9 @@ def generate_from_components(
 
         initial_ref_state = _snapshot_ref_state()
 
-        def _layout_with_bounded_splits(allocations):
+        def _layout_with_bounded_splits(allocations, *, starting_ref_state=None):
             """Lay out allocations, splitting any child page that exceeds A0."""
-            _restore_ref_state(initial_ref_state)
+            _restore_ref_state(initial_ref_state if starting_ref_state is None else starting_ref_state)
             pending = list(allocations)
             layouts_for_allocations = []
             split_rounds = 0
@@ -2284,9 +2435,32 @@ def generate_from_components(
                         halves[0].name,
                         halves[1].name,
                     )
-                    sheets = list(sheets)
-                    sheets[split_index : split_index + 1] = halves
-                    sheets, layouts = _layout_with_bounded_splits(sheets)
+                    # Every active sheet has already consumed anonymous
+                    # sidecar references. Seed the new child layouts from the
+                    # current global state so their generated refs cannot
+                    # collide with cached layouts; allow their explicit BOM
+                    # refs to be claimed again because those components are
+                    # being re-laid out as children of the split allocation.
+                    ref_counters, used_refs, _claimed_refs = _snapshot_ref_state()
+                    child_start_state = (
+                        ref_counters,
+                        used_refs,
+                        initial_ref_state[2],
+                    )
+                    child_allocations, child_layouts = _layout_with_bounded_splits(
+                        halves,
+                        starting_ref_state=child_start_state,
+                    )
+                    sheets, layouts = _splice_relaid_out_split(
+                        sheets,
+                        layouts,
+                        split_index,
+                        child_allocations,
+                        child_layouts,
+                    )
+                    ensure_unique_sheet_names(sheets)
+                    for allocation, layout in zip(sheets, layouts):
+                        layout.name = allocation.name
                     use_hierarchy = hierarchical and len(sheets) > 1
                     root_split_rounds += 1
 
@@ -3167,15 +3341,6 @@ def _render_sheet(
                 cx, cy = pin_connection_point(placed.x, placed.y, px, py, pangle, plen)
                 wlen = pin_stub_lengths.get(pin_num, _safe_label_stub_length(px, py, pangle, body_rects))
                 wlen = _clear_stub_length(cx, cy, pangle, wlen, sheet_body_boxes)
-                wlen = _avoid_foreign_net_anchors(
-                    net_name,
-                    cx,
-                    cy,
-                    pangle,
-                    wlen,
-                    reserved_net_anchors,
-                    endpoint_route_state,
-                )
                 signal_pin_coords.setdefault(net_name, []).append((cx, cy, pangle, ptype, wlen))
                 ic_signal_pin_coords.setdefault(net_name, []).append((cx, cy, pangle, ptype))
                 ic_pin_points.setdefault(net_name, []).append((cx, cy))
@@ -3188,7 +3353,7 @@ def _render_sheet(
                 cx, cy = pin_connection_point(placed.x, placed.y, px, py, pangle, plen)
                 wire_len = pin_stub_lengths.get(pin_num, _safe_label_stub_length(px, py, pangle, body_rects))
                 wire_len = _clear_stub_length(cx, cy, pangle, wire_len, sheet_body_boxes)
-                wire_len = _avoid_foreign_net_anchors(
+                marker_route = _marker_route_avoiding_foreign_nets(
                     net_name,
                     cx,
                     cy,
@@ -3196,18 +3361,15 @@ def _render_sheet(
                     wire_len,
                     reserved_net_anchors,
                     endpoint_route_state,
+                    sheet_body_boxes,
                 )
 
                 # Create and reserve the power stub before any later named
                 # stub is selected.  Every marker path participates in the
                 # same sheet-wide electrical keep-out map.
-                wx, wy = _stub_endpoint(cx, cy, pangle, wire_len)
-                wires.append(sexpr_wire(cx, cy, wx, wy))
-                _reserve_route(
-                    [(snap(cx), snap(cy)), (wx, wy)],
-                    endpoint_route_state,
-                    net_name,
-                )
+                wx, wy = marker_route[-1]
+                _emit_polyline(marker_route, wires)
+                _reserve_route(marker_route, endpoint_route_state, net_name)
 
                 # Add power symbol instance at stub endpoint
                 from .primitives import sexpr_power_instance
@@ -3299,7 +3461,7 @@ def _render_sheet(
         ptype: str,
         desired_len: float,
     ) -> None:
-        safe_len = _avoid_foreign_net_anchors(
+        route = _marker_route_avoiding_foreign_nets(
             net_name,
             cx,
             cy,
@@ -3307,23 +3469,26 @@ def _render_sheet(
             desired_len,
             reserved_net_anchors,
             endpoint_route_state,
+            sheet_body_boxes,
         )
         shape = _pin_type_to_label_shape(ptype)
-        _label_fn(net_name)(
-            cx,
-            cy,
-            pangle,
-            net_name,
-            wires,
-            labels,
-            wire_len=safe_len,
-            shape=shape,
-        )
-        _reserve_route(
-            [(snap(cx), snap(cy)), _stub_endpoint(cx, cy, pangle, safe_len)],
-            endpoint_route_state,
-            net_name,
-        )
+        if len(route) == 2 and (
+            abs(route[1][0] - route[0][0]) < 0.01 or abs(route[1][1] - route[0][1]) < 0.01
+        ):
+            safe_len = abs(route[1][0] - route[0][0]) + abs(route[1][1] - route[0][1])
+            _label_fn(net_name)(
+                cx,
+                cy,
+                pangle,
+                net_name,
+                wires,
+                labels,
+                wire_len=safe_len,
+                shape=shape,
+            )
+        else:
+            _emit_routed_label(route, net_name, wires, labels, _label_fn(net_name), shape)
+        _reserve_route(route, endpoint_route_state, net_name)
 
     for net_name, coords in signal_pin_coords.items():
         if not coords:

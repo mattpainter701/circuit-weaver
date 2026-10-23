@@ -1092,7 +1092,7 @@ async def mcp_smoke(spec: Path, output: Path, env: dict) -> dict:
                     "generate_artifacts", "validate_design", "discover_projects",
                     "research_component", "manufacturing_readiness", "runtime_info",
                     "start_project", "open_project", "plan_workflow", "run_workflow",
-                    "workflow_status", "resume_workflow", "cancel_workflow",
+                    "workflow_status", "resume_workflow", "cancel_workflow", "library_access",
                 }
                 require(required_tools <= set(names), "MCP inventory is missing required tools")
                 spec_json = json.dumps(yaml.safe_load(spec.read_text(encoding="utf-8")))

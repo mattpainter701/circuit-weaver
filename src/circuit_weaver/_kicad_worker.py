@@ -265,9 +265,25 @@ def _inspect(board, pcbnew):
         rotation = footprint.GetOrientationDegrees()
         reference_field = footprint.Reference()
         reference_size_mm = None
-        pads = [{"number": p.GetNumber(), "net": p.GetNetname(),
-                 "x": pcbnew.ToMM(p.GetPosition().x), "y": pcbnew.ToMM(p.GetPosition().y)}
-                for p in footprint.Pads()]
+        pads = []
+        for pad in footprint.Pads():
+            try:
+                layers = sorted(int(layer) for layer in pad.GetLayerSet().Seq())
+                copper_layers = sorted(set(layers) & known_copper_layer_id_set)
+                attribute = int(pad.GetAttribute())
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                layers = None
+                copper_layers = None
+                attribute = None
+            pads.append({
+                "number": pad.GetNumber(),
+                "net": pad.GetNetname(),
+                "x": pcbnew.ToMM(pad.GetPosition().x),
+                "y": pcbnew.ToMM(pad.GetPosition().y),
+                "layers": layers,
+                "copper_layers": copper_layers,
+                "attribute": attribute,
+            })
         pad_geometry = []
         for pad in footprint.Pads():
             try:

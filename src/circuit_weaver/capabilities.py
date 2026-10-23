@@ -162,6 +162,11 @@ CAPABILITIES: Final[tuple[CapabilityRecord, ...]] = (
     _record("scaffold", "scaffold", skill="circuit-weaver"),
     _record("register-ic", "register-ic", maturity="experimental"),
     _record("resolve-symbol", "resolve-symbol", maturity="experimental", since_version="0.33.0", **_NON_DESIGN),
+    _record(
+        "library-access", "library-access", maturity="experimental",
+        python="circuit_weaver.library_access:audit_library_access",
+        mcp="library_access", skill="circuit-weaver", since_version="0.38.0", **_NON_DESIGN,
+    ),
     _record("export-jlcpcb", "export-jlcpcb", maturity="review_only", skill="circuit-weaver"),
     _record("export-gerbers", "export-gerbers", maturity="review_only", skill="circuit-weaver"),
     _record("cost-bom", "cost-bom", maturity="experimental", skill="circuit-weaver"),

@@ -7,6 +7,7 @@ into a DesignSimulationReport with a confidence score.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -55,15 +56,34 @@ class DesignSimulationReport:
     grade: str = "F"
     summary: str = ""
     recommendations: list[str] = field(default_factory=list)
+    coverage: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def status(self) -> str:
+        if any(result.status in {"failed", "timeout"} for result in self.results):
+            return "failed"
+        if any(state == "failed" for result in self.results for state in result.target_checks.values()):
+            return "failed"
+        if not self.results or any(
+            result.status != "ok"
+            or not result.evidence_verified
+            or not result.target_checks
+            or any(state != "passed" for state in result.target_checks.values())
+            for result in self.results
+        ):
+            return "unverified"
+        return "verified"
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "status": self.status,
             "plan": self.plan.to_dict(),
             "results": [r.to_dict() for r in self.results],
             "confidence_score": round(self.confidence_score, 1),
             "grade": self.grade,
             "summary": self.summary,
             "recommendations": self.recommendations,
+            "coverage": self.coverage,
         }
 
 
@@ -86,6 +106,91 @@ def plan_simulations(
     """
     plan = SimulationPlan()
 
+    simulation_spec = (spec or {}).get("simulation") if isinstance(spec, dict) else None
+    if simulation_spec is not None and not isinstance(simulation_spec, dict):
+        raise ValueError("spec.simulation must be an object")
+    explicit_analyses = simulation_spec.get("analyses") if simulation_spec is not None else None
+    if explicit_analyses is not None:
+        if not isinstance(explicit_analyses, list):
+            raise ValueError("spec.simulation.analyses must be a list")
+    if explicit_analyses:
+        seen_analysis_ids: set[tuple[str, str]] = set()
+        for index, entry in enumerate(explicit_analyses):
+            if not isinstance(entry, dict):
+                raise ValueError(f"spec.simulation.analyses[{index}] must be an object")
+            unknown_fields = set(entry) - {"ref", "kind", "analysis_params", "sources", "target_metrics"}
+            if unknown_fields:
+                raise ValueError(f"spec.simulation.analyses[{index}] has unsupported fields: {sorted(unknown_fields)}")
+            ref = entry.get("ref")
+            kind = entry.get("kind")
+            analysis_params = entry.get("analysis_params", {})
+            sources = entry.get("sources", [])
+            targets = entry.get("target_metrics", {})
+            if not isinstance(ref, str) or not ref.strip() or not re.fullmatch(r"[A-Za-z0-9_-]+", ref):
+                raise ValueError(f"spec.simulation.analyses[{index}].ref must be a safe non-empty label")
+            if not isinstance(kind, str) or kind not in {"ac", "tran", "op", "dc"}:
+                raise ValueError(f"spec.simulation.analyses[{index}].kind must be ac, tran, op, or dc")
+            analysis_id = (ref.casefold(), kind)
+            if analysis_id in seen_analysis_ids:
+                raise ValueError(f"spec.simulation.analyses[{index}] duplicates ref/kind {ref!r}/{kind}")
+            seen_analysis_ids.add(analysis_id)
+            if not isinstance(analysis_params, dict) or not isinstance(sources, list) or not isinstance(targets, dict):
+                raise ValueError(f"spec.simulation.analyses[{index}] params, sources, and targets have invalid shapes")
+            allowed_params = {
+                "ac": {"variation", "points", "fstart", "fstop", "input_trace", "output_trace"},
+                "tran": {"step", "stop", "start"},
+                "dc": {"source", "start", "stop", "step"},
+                "op": set(),
+            }[kind]
+            unknown_params = set(analysis_params) - allowed_params
+            if unknown_params:
+                raise ValueError(
+                    f"spec.simulation.analyses[{index}] has unsupported {kind} parameters: {sorted(unknown_params)}"
+                )
+            if kind == "ac":
+                def normalized_node(name: str) -> str:
+                    if name.casefold() in {"gnd", "ground", "vss", "0"}:
+                        return "0"
+                    return re.sub(r"[^a-zA-Z0-9_]", "_", name)
+
+                known_nodes = {
+                    normalized_node(net).casefold()
+                    for comp in components
+                    for net in (comp.pin_nets or {}).values()
+                    if isinstance(net, str) and net.strip()
+                }
+                for trace_key in ("input_trace", "output_trace"):
+                    if trace_key not in analysis_params:
+                        continue
+                    trace = analysis_params[trace_key]
+                    match = re.fullmatch(r"v\(([^()\s]+)\)", trace, re.IGNORECASE) if isinstance(trace, str) else None
+                    if not match:
+                        raise ValueError(
+                            f"spec.simulation.analyses[{index}].analysis_params.{trace_key} "
+                            "must be a voltage trace v(node)"
+                        )
+                    node = normalized_node(match.group(1)).casefold()
+                    if node == "0" or node not in known_nodes:
+                        raise ValueError(
+                            f"spec.simulation.analyses[{index}].analysis_params.{trace_key} "
+                            "must reference a connected non-ground net"
+                        )
+                if analysis_params.get("input_trace", "v(in)").casefold() == analysis_params.get(
+                    "output_trace", "v(out)"
+                ).casefold():
+                    raise ValueError(f"spec.simulation.analyses[{index}] input_trace and output_trace must differ")
+            plan.signal_sims.append(
+                {
+                    "ref": ref,
+                    "category": "explicit_testbench",
+                    "analyses": [kind],
+                    "analysis_params": analysis_params,
+                    "sources": sources,
+                    "target_metrics": targets,
+                }
+            )
+        return plan
+
     for comp in components:
         ref = comp.source_ref or ""
         mpn = comp.mpn or ""
@@ -102,10 +207,10 @@ def plan_simulations(
                     "mpn": mpn,
                     "category": category or "power",
                     "analyses": ["tran", "ac"],
-                    "target_metrics": {
-                        "ripple_mv": 50.0,  # Max acceptable ripple
-                        "phase_margin_deg": 45.0,  # Min phase margin
-                    },
+                    # Targets must come from project requirements or validated
+                    # device constraints; generic ripple/margin values would
+                    # make unverified analyses look like design evidence.
+                    "target_metrics": {},
                 }
             )
             plan.thermal_sims.append(
@@ -148,8 +253,8 @@ def score_simulation_confidence(results: list[SimulationResult]) -> tuple[float,
     """Score 0-100 based on simulation outcomes.
 
     Factors:
-    - % of sims that ran successfully (not skipped/failed)
-    - % that produced metrics within target ranges
+    - % of analyses with fresh, parsed simulation evidence and explicit
+      project targets verified within range
     - Penalty for skipped sims (tool not available)
     - Penalty for failed sims (errors)
     """
@@ -157,9 +262,20 @@ def score_simulation_confidence(results: list[SimulationResult]) -> tuple[float,
         return 0.0, "F"
 
     total = len(results)
-    ok_count = sum(1 for r in results if r.status == "ok")
+    ok_count = sum(
+        1
+        for r in results
+        if r.status == "ok"
+        and r.evidence_verified
+        and r.target_checks
+        and all(state == "passed" for state in r.target_checks.values())
+    )
     skipped_count = sum(1 for r in results if r.status == "skipped")
-    failed_count = sum(1 for r in results if r.status in ("failed", "timeout"))
+    failed_count = sum(
+        1
+        for result in results
+        if result.status in ("failed", "timeout") or any(state == "failed" for state in result.target_checks.values())
+    )
 
     # Base score from success rate
     if total == skipped_count:
@@ -223,7 +339,7 @@ def run_design_simulations(
         plan = plan_simulations(components, spec=spec)
 
     # Resolve available SPICE models
-    model_manifest: dict[str, str] = {}
+    model_manifest: dict[str, str | dict[str, Any]] = {}
     if model_dir:
         manifest_path = Path(model_dir) / "manifest.json"
         if manifest_path.exists():
@@ -242,24 +358,14 @@ def run_design_simulations(
                 components,
                 netlist_path,
                 analysis_type=analysis,
+                analysis_params=sim_def.get("analysis_params"),
+                sources=sim_def.get("sources"),
                 model_manifest=model_manifest,
                 title=f"Power simulation: {ref} ({analysis})",
             )
-            result = run_simulation(netlist_path, sim_type=analysis)
+            result = run_simulation(netlist_path, sim_type=analysis, analysis_params=sim_def.get("analysis_params"))
             results.append(result)
-
-            if result.status == "ok":
-                # Check against targets
-                targets = sim_def.get("target_metrics", {})
-                for metric_key, target_val in targets.items():
-                    for rk, rv in result.metrics.items():
-                        if metric_key in rk:
-                            if "ripple" in metric_key and rv > target_val:
-                                recommendations.append(f"{ref}: Ripple {rv:.1f} mV exceeds target {target_val:.0f} mV")
-                            elif "phase_margin" in metric_key and rv < target_val:
-                                recommendations.append(
-                                    f"{ref}: Phase margin {rv:.1f} deg below minimum {target_val:.0f} deg"
-                                )
+            _verify_targets(result, sim_def.get("target_metrics", {}), ref, recommendations)
 
     # Run signal simulations
     for sim_def in plan.signal_sims:
@@ -271,11 +377,14 @@ def run_design_simulations(
                 components,
                 netlist_path,
                 analysis_type=analysis,
+                analysis_params=sim_def.get("analysis_params"),
+                sources=sim_def.get("sources"),
                 model_manifest=model_manifest,
                 title=f"Signal simulation: {ref} ({analysis})",
             )
-            result = run_simulation(netlist_path, sim_type=analysis)
+            result = run_simulation(netlist_path, sim_type=analysis, analysis_params=sim_def.get("analysis_params"))
             results.append(result)
+            _verify_targets(result, sim_def.get("target_metrics", {}), ref, recommendations)
 
     # Run thermal operating point simulations
     for sim_def in plan.thermal_sims:
@@ -291,19 +400,71 @@ def run_design_simulations(
         )
         result = run_simulation(netlist_path, sim_type="op")
         results.append(result)
+        _verify_targets(result, sim_def.get("target_metrics", {}), ref, recommendations)
 
     # Score
     confidence_score, grade = score_simulation_confidence(results)
 
     # Summary
-    ok = sum(1 for r in results if r.status == "ok")
+    verified_passed = sum(
+        1
+        for result in results
+        if result.status == "ok"
+        and result.evidence_verified
+        and result.target_checks
+        and all(state == "passed" for state in result.target_checks.values())
+    )
     skipped = sum(1 for r in results if r.status == "skipped")
-    failed = sum(1 for r in results if r.status in ("failed", "timeout"))
+    failed = sum(
+        1
+        for result in results
+        if result.status in ("failed", "timeout") or any(state == "failed" for state in result.target_checks.values())
+    )
+    unverified = len(results) - verified_passed - failed - skipped
     summary = (
         f"{len(results)} simulation(s) planned. "
-        f"{ok} passed, {failed} failed, {skipped} skipped. "
+        f"{verified_passed} verified, {unverified} unverified, {failed} failed, {skipped} skipped. "
         f"Confidence: {confidence_score}/100 ({grade})."
     )
+
+    unsupported = sorted({ref for result in results for ref in result.unsupported_components})
+    missing_models = {
+        (model["ref"], model["mpn"], model["reason"]) for result in results for model in result.missing_models
+    }
+    verified = sum(1 for result in results if result.evidence_verified)
+    target_verified = sum(
+        1
+        for result in results
+        if result.target_checks and all(value == "passed" for value in result.target_checks.values())
+    )
+    coverage = {
+        "planned_analyses": len(results),
+        "executed_analyses": sum(1 for result in results if result.status != "skipped"),
+        "fresh_parsed_analyses": verified,
+        "analyses_with_verified_targets": target_verified,
+        "unsupported_components": unsupported,
+        "missing_models": [{"ref": ref, "mpn": mpn, "reason": reason} for ref, mpn, reason in sorted(missing_models)],
+        "analyses": [
+            {
+                "sim_type": result.sim_type,
+                "status": result.status,
+                "evidence_verified": result.evidence_verified,
+                "target_checks": result.target_checks,
+                "unsupported_components": result.unsupported_components,
+                "missing_models": result.missing_models,
+            }
+            for result in results
+        ],
+        "confidence_basis": "fresh parsed results plus explicit verified project targets",
+    }
+    if unsupported:
+        recommendations.append(
+            "Electrical evidence is incomplete; add validated SPICE models for: " + ", ".join(unsupported)
+        )
+    if verified and not target_verified:
+        recommendations.append(
+            "Simulation ran, but no explicit project target was verified; electrical confidence remains unscored"
+        )
 
     if skipped == len(results) and len(results) > 0:
         recommendations.append("Install ngspice to enable circuit simulation (apt install ngspice)")
@@ -315,6 +476,7 @@ def run_design_simulations(
         grade=grade,
         summary=summary,
         recommendations=recommendations,
+        coverage=coverage,
     )
 
     # Log summary
@@ -330,3 +492,73 @@ def run_design_simulations(
         )
 
     return report
+
+
+def _verify_targets(
+    result: SimulationResult,
+    targets: dict[str, Any],
+    ref: str,
+    recommendations: list[str],
+) -> None:
+    """Record only checks with a recognized metric and explicit comparator."""
+    if not targets:
+        result.target_checks["project_targets"] = "unverified"
+        return
+    for key, target in targets.items():
+        normalized_key = str(key).strip().lower()
+        ripple_targets = {"ripple_mv", "ripple_max_mv"}
+        bandwidth_min_targets = {"bandwidth_min_hz", "bandwidth_hz_min"}
+        bandwidth_max_targets = {"bandwidth_max_hz", "bandwidth_hz_max"}
+        if normalized_key in ripple_targets:
+            # The runner reports per-node values such as
+            # ``v(out)_ripple_mv``. Accept only this explicit unit-bearing
+            # suffix and only when one node matches; choosing the first of
+            # several outputs would silently verify the wrong rail.
+            matches = [
+                (name, value)
+                for name, value in result.metrics.items()
+                if name.lower() == "ripple_mv" or name.lower().endswith("_ripple_mv")
+            ]
+        elif normalized_key in bandwidth_min_targets | bandwidth_max_targets:
+            # Bandwidth is a single aggregate metric. Substring matching can
+            # accidentally accept unrelated names such as ``input_bandwidth``.
+            matches = [(name, value) for name, value in result.metrics.items() if name.lower() == "bandwidth_hz"]
+        else:
+            matches = []
+        if not result.evidence_verified or not matches:
+            result.target_checks[str(key)] = "unverified"
+            recommendations.append(
+                f"{ref}: target {key} is unverified because the required simulation metric is missing"
+            )
+            continue
+        if len(matches) != 1:
+            result.target_checks[str(key)] = "unverified"
+            recommendations.append(
+                f"{ref}: target {key} is unverified because its simulation metric is ambiguous"
+            )
+            continue
+        metric_name, measured = matches[0]
+        try:
+            target_value = float(target)
+            measured_value = float(measured)
+        except (TypeError, ValueError):
+            result.target_checks[str(key)] = "unverified"
+            recommendations.append(f"{ref}: target {key} is not a numeric engineering limit")
+            continue
+        if not math.isfinite(target_value) or not math.isfinite(measured_value):
+            result.target_checks[str(key)] = "unverified"
+            recommendations.append(f"{ref}: target {key} or its measured metric is non-finite")
+            continue
+        if normalized_key in ripple_targets:
+            passed = measured_value <= target_value
+        elif normalized_key in bandwidth_min_targets:
+            passed = measured_value >= target_value
+        elif normalized_key in bandwidth_max_targets:
+            passed = measured_value <= target_value
+        else:
+            result.target_checks[str(key)] = "unverified"
+            recommendations.append(f"{ref}: no validated comparator exists for target {key}")
+            continue
+        result.target_checks[str(key)] = "passed" if passed else "failed"
+        if not passed:
+            recommendations.append(f"{ref}: {metric_name}={measured_value:g} does not meet target {target_value:g}")

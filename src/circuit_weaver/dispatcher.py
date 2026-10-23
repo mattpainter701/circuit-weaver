@@ -4494,7 +4494,7 @@ def main() -> None:
     verify_p.add_argument("plan", help="Signed repair plan JSON")
     verify_p.add_argument("--output", "-o", help="Write the verification result JSON")
     args = parser.parse_args()
-    if args.command in {"start", "open", "workflow", "runtime-info"} or (
+    if args.command in {"start", "open", "workflow", "runtime-info", "library-access"} or (
             args.command == "resume" and args.execute):
         from .workflow_cli import dispatch as dispatch_workflow
 
@@ -6203,7 +6203,8 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
                     for rec in report.recommendations:
                         print(f"  - {rec}")
                 print(f"\nSimulation output: {args.output}", file=sys.stderr)
-            raise SystemExit(0)
+            report_status = getattr(report, "status", "unverified")
+            raise SystemExit(0 if report_status == "verified" else 1 if report_status == "failed" else 2)
         except SystemExit:
             raise
         except Exception as exc:

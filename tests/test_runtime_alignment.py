@@ -19,8 +19,8 @@ def test_runtime_info_is_json_safe_and_uses_this_interpreter() -> None:
     assert payload["mcp"]["command"] == [str(Path(sys.executable).resolve()), "-m", "circuit_weaver.mcp_server"]
     assert payload["runtime"]["cli_command"] == [str(Path(sys.executable).resolve()), "-m", "circuit_weaver"]
     capabilities = payload["capabilities"]["mcp_tools"]
-    assert len(capabilities) >= 13
-    assert {"start_project", "run_workflow", "workflow_status", "cancel_workflow"}.issubset(
+    assert len(capabilities) >= 14
+    assert {"start_project", "run_workflow", "workflow_status", "cancel_workflow", "library_access"}.issubset(
         {item["name"] for item in capabilities}
     )
     assert all(item["signature"].startswith(item["name"] + "(") for item in capabilities)

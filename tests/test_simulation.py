@@ -6,6 +6,7 @@ from circuit_weaver.component_db import ComponentDef
 from circuit_weaver.simulation import (
     DesignSimulationReport,
     SimulationPlan,
+    _verify_targets,
     plan_simulations,
     run_design_simulations,
     score_simulation_confidence,
@@ -87,8 +88,12 @@ class TestPlanSimulations:
 class TestScoreSimulationConfidence:
     def test_all_ok(self):
         results = [
-            SimulationResult(status="ok", sim_type="tran"),
-            SimulationResult(status="ok", sim_type="ac"),
+            SimulationResult(
+                status="ok", sim_type="tran", evidence_verified=True, target_checks={"ripple_mv": "passed"}
+            ),
+            SimulationResult(
+                status="ok", sim_type="ac", evidence_verified=True, target_checks={"bandwidth_hz_min": "passed"}
+            ),
         ]
         score, grade = score_simulation_confidence(results)
         assert score == 100.0
@@ -104,7 +109,9 @@ class TestScoreSimulationConfidence:
 
     def test_mixed_results(self):
         results = [
-            SimulationResult(status="ok", sim_type="tran"),
+            SimulationResult(
+                status="ok", sim_type="tran", evidence_verified=True, target_checks={"ripple_mv": "passed"}
+            ),
             SimulationResult(status="failed", sim_type="ac"),
         ]
         score, grade = score_simulation_confidence(results)
@@ -114,6 +121,64 @@ class TestScoreSimulationConfidence:
         score, grade = score_simulation_confidence([])
         assert score == 0.0
         assert grade == "F"
+
+    def test_process_success_without_verified_targets_is_not_confidence(self):
+        results = [SimulationResult(status="ok", sim_type="tran", evidence_verified=True)]
+        score, grade = score_simulation_confidence(results)
+        assert score == 0.0
+        assert grade == "F"
+
+    def test_unverified_target_is_not_confidence(self):
+        results = [
+            SimulationResult(
+                status="ok", sim_type="tran", evidence_verified=True, target_checks={"ripple_mv": "unverified"}
+            )
+        ]
+        score, grade = score_simulation_confidence(results)
+        assert score == 0.0
+        assert grade == "F"
+
+    def test_nonfinite_target_or_metric_cannot_pass(self):
+        for target, measured in ((float("inf"), 1.0), (1.0, float("inf")), (float("nan"), 1.0)):
+            result = SimulationResult(
+                status="ok",
+                sim_type="tran",
+                evidence_verified=True,
+                metrics={"v(out)_ripple_mv": measured},
+            )
+            recommendations = []
+            _verify_targets(result, {"ripple_mv": target}, "U1", recommendations)
+            assert result.target_checks["ripple_mv"] == "unverified"
+            assert score_simulation_confidence([result])[0] == 0.0
+
+    def test_ambiguous_or_untyped_ripple_targets_are_unverified(self):
+        for targets, metrics in (
+            ({"ripple": 3000}, {"v(out)_ripple_mv": 1000.0}),
+            ({"ripple_mv": 3000}, {"v(out)_ripple_mv": 1000.0, "v(aux)_ripple_mv": 1200.0}),
+            ({"voltage": 3000}, {"v(out)_ripple_mv": 1000.0}),
+        ):
+            result = SimulationResult(status="ok", sim_type="tran", evidence_verified=True, metrics=metrics)
+            _verify_targets(result, targets, "U1", [])
+            assert all(state == "unverified" for state in result.target_checks.values())
+
+    def test_ripple_and_bandwidth_targets_require_exact_metric_schema(self):
+        result = SimulationResult(
+            status="ok",
+            sim_type="ac",
+            evidence_verified=True,
+            metrics={"input_bandwidth_hz": 1_000_000.0},
+        )
+        _verify_targets(result, {"bandwidth_hz_min": 100_000}, "U1", [])
+        assert result.target_checks["bandwidth_hz_min"] == "unverified"
+
+        result = SimulationResult(
+            status="ok",
+            sim_type="tran",
+            evidence_verified=True,
+            metrics={"v(out)_ripple_mv": 1200.0},
+        )
+        _verify_targets(result, {"ripple_max_mv": 1500}, "U1", [])
+        assert result.target_checks["ripple_max_mv"] == "passed"
 
     def test_to_dict(self):
         plan = SimulationPlan()
@@ -125,13 +190,91 @@ class TestScoreSimulationConfidence:
             recommendations=["fix something"],
         )
         d = report.to_dict()
+        assert d["status"] == "unverified"
         assert d["confidence_score"] == 75.0
         assert d["grade"] == "C"
         assert "fix something" in d["recommendations"]
+        assert d["coverage"] == {}
 
 
 class TestRunDesignSimulations:
-    def test_all_skip_gracefully_without_ngspice(self, tmp_path):
+    def test_explicit_testbench_plan_passes_sources_and_targets_through(self, tmp_path):
+        components = [
+            _make_component("R1"),
+            _make_component("C1"),
+        ]
+        components[0].value = "1k"
+        components[0].pin_nets = {"1": "VIN", "2": "VOUT"}
+        components[1].value = "100n"
+        components[1].pin_nets = {"1": "VOUT", "2": "GND"}
+        spec = {
+            "simulation": {
+                "analyses": [
+                    {
+                        "ref": "rc_filter",
+                        "kind": "ac",
+                        "analysis_params": {
+                            "variation": "dec",
+                            "points": 30,
+                            "fstart": "10",
+                            "fstop": "100k",
+                            "input_trace": "v(vin)",
+                            "output_trace": "v(vout)",
+                        },
+                        "sources": [
+                            {"ref": "VTEST", "type": "V", "positive": "VIN", "negative": "GND", "dc": 0, "ac": 1}
+                        ],
+                        "target_metrics": {"bandwidth_hz_max": 2000},
+                    }
+                ]
+            }
+        }
+        plan = plan_simulations(components, spec=spec)
+        assert plan.total == 1
+        analysis = plan.signal_sims[0]
+        assert analysis["analyses"] == ["ac"]
+        assert analysis["target_metrics"] == {"bandwidth_hz_max": 2000}
+
+        def run_fake(_path, *, sim_type, analysis_params):
+            assert sim_type == "ac"
+            assert analysis_params == spec["simulation"]["analyses"][0]["analysis_params"]
+            return SimulationResult(
+                status="ok", sim_type="ac", evidence_verified=True, metrics={"bandwidth_hz": 1500}
+            )
+
+        with patch("circuit_weaver.spice_runner.run_simulation", side_effect=run_fake):
+            report = run_design_simulations(components, plan, output_dir=tmp_path / "sims")
+        netlist = (tmp_path / "sims" / "rc_filter_ac.cir").read_text()
+        assert "VTEST VIN 0 DC 0 AC 1" in netlist
+        assert ".ac dec 30 10 100k" in netlist
+        assert report.results[0].target_checks["bandwidth_hz_max"] == "passed"
+
+    def test_explicit_ac_trace_selectors_must_name_connected_nodes(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="connected non-ground net"):
+            plan_simulations(
+                [_make_component("R1")],
+                spec={
+                    "simulation": {
+                        "analyses": [
+                            {
+                                "ref": "filter",
+                                "kind": "ac",
+                                "analysis_params": {"input_trace": "v(vin)", "output_trace": "v(missing)"},
+                            }
+                        ]
+                    }
+                },
+            )
+
+    def test_malformed_explicit_analysis_fails_closed(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="kind must be ac, tran, op, or dc"):
+            plan_simulations([], spec={"simulation": {"analyses": [{"ref": "x", "kind": "tran\n.end"}]}})
+
+    def test_unsupported_regulator_is_failed_even_without_ngspice(self, tmp_path):
         components = [
             _make_component("U1", mpn="TPS62300", category="buck", description="buck converter"),
         ]
@@ -141,9 +284,10 @@ class TestRunDesignSimulations:
                 output_dir=tmp_path / "sims",
             )
         assert isinstance(report, DesignSimulationReport)
-        assert all(r.status == "skipped" for r in report.results)
+        assert all(r.status == "failed" for r in report.results)
+        assert report.status == "failed"
         assert report.confidence_score == 0.0
-        assert any("ngspice" in r.lower() for r in report.recommendations)
+        assert any("model" in r.lower() for r in report.recommendations)
 
     def test_generates_netlist_files(self, tmp_path):
         components = [

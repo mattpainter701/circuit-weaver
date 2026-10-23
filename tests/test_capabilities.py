@@ -46,6 +46,14 @@ def test_capability_registry_is_valid():
     validate_capability_registry(CAPABILITIES)
 
 
+def test_library_access_advertises_read_only_public_surfaces():
+    record = get_capability("library-access")
+    assert record["surfaces"]["python"] == "circuit_weaver.library_access:audit_library_access"
+    assert record["surfaces"]["mcp"] == "library_access"
+    assert record["verification_prereq"] == NOT_APPLICABLE
+    assert record["output_guarantee"] == NOT_APPLICABLE
+
+
 def test_public_registry_accessors_are_json_safe_copies():
     registry = get_capability_registry()
     registry[0]["surfaces"]["cli"] = "mutated"

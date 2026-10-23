@@ -126,6 +126,56 @@ def test_rejects_conflicting_duplicate_pad_nets() -> None:
         verify_native_connectivity(inventory, contracts)
 
 
+def test_ignores_native_proven_unassigned_paste_only_pad() -> None:
+    contracts = [_channel(0)]
+    inventory = _native(contracts)
+    adc = next(row for row in inventory["footprints"] if row["ref"] == "U90")
+    adc["native_known_copper_layer_inventory_complete"] = True
+    adc["pads"].append({
+        "number": "",
+        "net": "",
+        "attribute": 1,
+        "layers": [13],
+        "copper_layers": [],
+    })
+
+    evidence = verify_native_connectivity(inventory, contracts)
+
+    assert evidence["status"] == "pass"
+
+
+@pytest.mark.parametrize(
+    ("pad_update", "footprint_update"),
+    [
+        ({"copper_layers": [0]}, {}),
+        ({"layers": None}, {}),
+        ({"copper_layers": None}, {}),
+        ({"net": "VDD"}, {}),
+        ({"attribute": None}, {}),
+        ({}, {"native_known_copper_layer_inventory_complete": False}),
+    ],
+)
+def test_unproven_or_electrical_unnumbered_pad_remains_a_contract_error(
+    pad_update: dict, footprint_update: dict
+) -> None:
+    contracts = [_channel(0)]
+    inventory = _native(contracts)
+    adc = next(row for row in inventory["footprints"] if row["ref"] == "U90")
+    adc["native_known_copper_layer_inventory_complete"] = True
+    adc.update(footprint_update)
+    adc["pads"].append({
+        "number": "",
+        "net": "",
+        "attribute": 1,
+        "layers": [13],
+        "copper_layers": [],
+        **pad_update,
+    })
+
+    with pytest.raises(ConnectivityContractError, match="pad without a number"):
+        verify_native_connectivity(inventory, contracts)
+
+
 def test_rejects_connector_nets_that_do_not_match_frontend() -> None:
     contracts = [_channel(0)]
     contracts[0]["input_positive_net"] = "OTHER"

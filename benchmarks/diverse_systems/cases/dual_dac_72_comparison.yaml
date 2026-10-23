@@ -1,0 +1,1029 @@
+project: Diverse_dual_dac_72_comparison
+company: Circuit Weaver Benchmark
+version: '1.0'
+description: 'Comparison fixture reuse: existing 72-channel dual-DAC card with SPI selection and per-output
+  filters'
+pcb_constraints:
+- kind: placement
+  target: board
+  width_mm: 300
+  height_mm: 220
+power:
+- type: connector
+  ic: BARREL_JACK_2.1MM
+  ref: J1
+  positive_net: VIN_12V
+  negative_net: GND
+  decoupling: true
+- type: buck
+  ic: AP62300
+  ref: U1
+  vin: 12
+  vout: 5
+  iout: 2
+  vin_net: VIN_12V
+  rail_name: VDD_5V
+- type: buck
+  ic: AP62300
+  ref: U2
+  vin: 5
+  vout: 3.3
+  iout: 1
+  vin_net: VDD_5V
+  rail_name: VDD_3P3
+digital:
+- ic: STM32F103C8T6
+  ref: U10
+  pin_nets_extra:
+    '10': SHIFT_DATA
+    '11': SHIFT_CLOCK
+    '12': SHIFT_LATCH
+    '26': SPI_SCK
+    '28': SPI_MOSI
+  no_connects:
+  - '13'
+  - '14'
+  - '15'
+  - '16'
+  - '17'
+  - '18'
+  - '19'
+  - '2'
+  - '20'
+  - '21'
+  - '22'
+  - '25'
+  - '27'
+  - '29'
+  - '3'
+  - '30'
+  - '31'
+  - '32'
+  - '33'
+  - '38'
+  - '39'
+  - '4'
+  - '40'
+  - '41'
+  - '42'
+  - '43'
+  - '45'
+  - '46'
+  - '5'
+  - '6'
+- ic: 74HC595D
+  ref: U14
+  vdd_net: VDD_3P3
+  pin_nets_extra:
+    '10': VDD_3P3
+    '11': SHIFT_CLOCK
+    '12': SHIFT_LATCH
+    '13': GND
+    '14': SHIFT_DATA
+    '15': DAC_SYNC_01
+    '1': DAC_SYNC_02
+    '2': DAC_SYNC_03
+    '3': DAC_SYNC_04
+    '4': DAC_SYNC_05
+    '5': DAC_SYNC_06
+    '6': DAC_SYNC_07
+    '7': DAC_SYNC_08
+    '9': SHIFT_QH_1
+  power_pins_extra:
+    '8': GND
+    '16': VDD_3P3
+  no_connects: []
+- ic: 74HC595D
+  ref: U15
+  vdd_net: VDD_3P3
+  pin_nets_extra:
+    '10': VDD_3P3
+    '11': SHIFT_CLOCK
+    '12': SHIFT_LATCH
+    '13': GND
+    '14': SHIFT_QH_1
+    '15': DAC_SYNC_09
+    '1': DAC_SYNC_10
+    '2': DAC_SYNC_11
+    '3': DAC_SYNC_12
+    '4': DAC_SYNC_13
+    '5': DAC_SYNC_14
+    '6': DAC_SYNC_15
+    '7': DAC_SYNC_16
+    '9': SHIFT_QH_2
+  power_pins_extra:
+    '8': GND
+    '16': VDD_3P3
+  no_connects: []
+- ic: 74HC595D
+  ref: U16
+  vdd_net: VDD_3P3
+  pin_nets_extra:
+    '10': VDD_3P3
+    '11': SHIFT_CLOCK
+    '12': SHIFT_LATCH
+    '13': GND
+    '14': SHIFT_QH_2
+    '15': DAC_SYNC_17
+    '1': DAC_SYNC_18
+    '2': DAC_SYNC_19
+    '3': DAC_SYNC_20
+    '4': DAC_SYNC_21
+    '5': DAC_SYNC_22
+    '6': DAC_SYNC_23
+    '7': DAC_SYNC_24
+    '9': SHIFT_QH_3
+  power_pins_extra:
+    '8': GND
+    '16': VDD_3P3
+  no_connects: []
+- ic: 74HC595D
+  ref: U17
+  vdd_net: VDD_3P3
+  pin_nets_extra:
+    '10': VDD_3P3
+    '11': SHIFT_CLOCK
+    '12': SHIFT_LATCH
+    '13': GND
+    '14': SHIFT_QH_3
+    '15': DAC_SYNC_25
+    '1': DAC_SYNC_26
+    '2': DAC_SYNC_27
+    '3': DAC_SYNC_28
+    '4': DAC_SYNC_29
+    '5': DAC_SYNC_30
+    '6': DAC_SYNC_31
+    '7': DAC_SYNC_32
+    '9': SHIFT_QH_4
+  power_pins_extra:
+    '8': GND
+    '16': VDD_3P3
+  no_connects: []
+- ic: 74HC595D
+  ref: U18
+  vdd_net: VDD_3P3
+  pin_nets_extra:
+    '10': VDD_3P3
+    '11': SHIFT_CLOCK
+    '12': SHIFT_LATCH
+    '13': GND
+    '14': SHIFT_QH_4
+    '15': DAC_SYNC_33
+    '1': DAC_SYNC_34
+    '2': DAC_SYNC_35
+    '3': DAC_SYNC_36
+  power_pins_extra:
+    '8': GND
+    '16': VDD_3P3
+  no_connects:
+  - '4'
+  - '5'
+  - '6'
+  - '7'
+  - '9'
+analog:
+- type: voltage_reference
+  ic: REF3033
+  params:
+    ic: REF3033
+  ref: U13
+  vin: 5
+  vin_net: VDD_5V
+  vref_net: DAC_REF_3V3
+  iload: 0.02
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: output
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U30
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_01
+  output_net: SETPOINT_01
+  output_b_net: SETPOINT_02
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U31
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_02
+  output_net: SETPOINT_03
+  output_b_net: SETPOINT_04
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U32
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_03
+  output_net: SETPOINT_05
+  output_b_net: SETPOINT_06
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U33
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_04
+  output_net: SETPOINT_07
+  output_b_net: SETPOINT_08
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U34
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_05
+  output_net: SETPOINT_09
+  output_b_net: SETPOINT_10
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U35
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_06
+  output_net: SETPOINT_11
+  output_b_net: SETPOINT_12
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U36
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_07
+  output_net: SETPOINT_13
+  output_b_net: SETPOINT_14
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U37
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_08
+  output_net: SETPOINT_15
+  output_b_net: SETPOINT_16
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U38
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_09
+  output_net: SETPOINT_17
+  output_b_net: SETPOINT_18
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U39
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_10
+  output_net: SETPOINT_19
+  output_b_net: SETPOINT_20
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U40
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_11
+  output_net: SETPOINT_21
+  output_b_net: SETPOINT_22
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U41
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_12
+  output_net: SETPOINT_23
+  output_b_net: SETPOINT_24
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U42
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_13
+  output_net: SETPOINT_25
+  output_b_net: SETPOINT_26
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U43
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_14
+  output_net: SETPOINT_27
+  output_b_net: SETPOINT_28
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U44
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_15
+  output_net: SETPOINT_29
+  output_b_net: SETPOINT_30
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U45
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_16
+  output_net: SETPOINT_31
+  output_b_net: SETPOINT_32
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U46
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_17
+  output_net: SETPOINT_33
+  output_b_net: SETPOINT_34
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U47
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_18
+  output_net: SETPOINT_35
+  output_b_net: SETPOINT_36
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U48
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_19
+  output_net: SETPOINT_37
+  output_b_net: SETPOINT_38
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U49
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_20
+  output_net: SETPOINT_39
+  output_b_net: SETPOINT_40
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U50
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_21
+  output_net: SETPOINT_41
+  output_b_net: SETPOINT_42
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U51
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_22
+  output_net: SETPOINT_43
+  output_b_net: SETPOINT_44
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U52
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_23
+  output_net: SETPOINT_45
+  output_b_net: SETPOINT_46
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U53
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_24
+  output_net: SETPOINT_47
+  output_b_net: SETPOINT_48
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U54
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_25
+  output_net: SETPOINT_49
+  output_b_net: SETPOINT_50
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U55
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_26
+  output_net: SETPOINT_51
+  output_b_net: SETPOINT_52
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U56
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_27
+  output_net: SETPOINT_53
+  output_b_net: SETPOINT_54
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U57
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_28
+  output_net: SETPOINT_55
+  output_b_net: SETPOINT_56
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U58
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_29
+  output_net: SETPOINT_57
+  output_b_net: SETPOINT_58
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U59
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_30
+  output_net: SETPOINT_59
+  output_b_net: SETPOINT_60
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U60
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_31
+  output_net: SETPOINT_61
+  output_b_net: SETPOINT_62
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U61
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_32
+  output_net: SETPOINT_63
+  output_b_net: SETPOINT_64
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U62
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_33
+  output_net: SETPOINT_65
+  output_b_net: SETPOINT_66
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U63
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_34
+  output_net: SETPOINT_67
+  output_b_net: SETPOINT_68
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U64
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_35
+  output_net: SETPOINT_69
+  output_b_net: SETPOINT_70
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+- type: dac
+  ic: DAC8552IDGK
+  params:
+    ic: DAC8552IDGK
+  ref: U65
+  vdd_net: VDD_3P3
+  vref: DAC_REF_3V3
+  din_net: SPI_MOSI
+  sclk_net: SPI_SCK
+  sync_net: DAC_SYNC_36
+  output_net: SETPOINT_71
+  output_b_net: SETPOINT_72
+  interfaces:
+  - name: DAC_REF_3V3
+    direction: input
+connectors:
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J2
+  signal_nets: SETPOINT_01,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J3
+  signal_nets: SETPOINT_02,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J4
+  signal_nets: SETPOINT_03,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J5
+  signal_nets: SETPOINT_04,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J6
+  signal_nets: SETPOINT_05,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J7
+  signal_nets: SETPOINT_06,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J8
+  signal_nets: SETPOINT_07,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J9
+  signal_nets: SETPOINT_08,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J10
+  signal_nets: SETPOINT_09,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J11
+  signal_nets: SETPOINT_10,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J12
+  signal_nets: SETPOINT_11,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J13
+  signal_nets: SETPOINT_12,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J14
+  signal_nets: SETPOINT_13,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J15
+  signal_nets: SETPOINT_14,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J16
+  signal_nets: SETPOINT_15,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J17
+  signal_nets: SETPOINT_16,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J18
+  signal_nets: SETPOINT_17,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J19
+  signal_nets: SETPOINT_18,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J20
+  signal_nets: SETPOINT_19,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J21
+  signal_nets: SETPOINT_20,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J22
+  signal_nets: SETPOINT_21,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J23
+  signal_nets: SETPOINT_22,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J24
+  signal_nets: SETPOINT_23,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J25
+  signal_nets: SETPOINT_24,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J26
+  signal_nets: SETPOINT_25,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J27
+  signal_nets: SETPOINT_26,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J28
+  signal_nets: SETPOINT_27,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J29
+  signal_nets: SETPOINT_28,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J30
+  signal_nets: SETPOINT_29,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J31
+  signal_nets: SETPOINT_30,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J32
+  signal_nets: SETPOINT_31,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J33
+  signal_nets: SETPOINT_32,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J34
+  signal_nets: SETPOINT_33,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J35
+  signal_nets: SETPOINT_34,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J36
+  signal_nets: SETPOINT_35,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J37
+  signal_nets: SETPOINT_36,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J38
+  signal_nets: SETPOINT_37,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J39
+  signal_nets: SETPOINT_38,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J40
+  signal_nets: SETPOINT_39,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J41
+  signal_nets: SETPOINT_40,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J42
+  signal_nets: SETPOINT_41,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J43
+  signal_nets: SETPOINT_42,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J44
+  signal_nets: SETPOINT_43,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J45
+  signal_nets: SETPOINT_44,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J46
+  signal_nets: SETPOINT_45,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J47
+  signal_nets: SETPOINT_46,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J48
+  signal_nets: SETPOINT_47,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J49
+  signal_nets: SETPOINT_48,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J50
+  signal_nets: SETPOINT_49,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J51
+  signal_nets: SETPOINT_50,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J52
+  signal_nets: SETPOINT_51,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J53
+  signal_nets: SETPOINT_52,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J54
+  signal_nets: SETPOINT_53,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J55
+  signal_nets: SETPOINT_54,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J56
+  signal_nets: SETPOINT_55,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J57
+  signal_nets: SETPOINT_56,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J58
+  signal_nets: SETPOINT_57,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J59
+  signal_nets: SETPOINT_58,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J60
+  signal_nets: SETPOINT_59,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J61
+  signal_nets: SETPOINT_60,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J62
+  signal_nets: SETPOINT_61,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J63
+  signal_nets: SETPOINT_62,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J64
+  signal_nets: SETPOINT_63,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J65
+  signal_nets: SETPOINT_64,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J66
+  signal_nets: SETPOINT_65,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J67
+  signal_nets: SETPOINT_66,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J68
+  signal_nets: SETPOINT_67,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J69
+  signal_nets: SETPOINT_68,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J70
+  signal_nets: SETPOINT_69,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J71
+  signal_nets: SETPOINT_70,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J72
+  signal_nets: SETPOINT_71,GND
+- type: connector
+  ic: PIN_HEADER_2P
+  ref: J73
+  signal_nets: SETPOINT_72,GND
+- type: connector
+  ic: PIN_HEADER_4P
+  ref: J74
+  signal_nets: VDD_3P3,GND,SWDIO,SWCLK

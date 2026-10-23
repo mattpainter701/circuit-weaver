@@ -10,6 +10,7 @@ from circuit_weaver.footprint_lib import KiCadFootprintLibrary
 from circuit_weaver.schematic_pcb import (
     _annotation_errors_present,
     _copy_schematic_project,
+    _native_build_timeout_seconds,
     _parse_netlist,
     _worker_result,
     schematic_to_pcb,
@@ -44,6 +45,19 @@ def _write_netlist(path: Path, *, pin_nums=("1", "2"), pad_no_connect=True, doct
         encoding="utf-8",
     )
     return path
+
+
+def test_native_build_timeout_scales_with_design_size_and_has_hard_cap():
+    assert _native_build_timeout_seconds(0, 1) == 90
+    assert _native_build_timeout_seconds(768, 66) == 477
+    assert _native_build_timeout_seconds(1202, 66) == 586
+    assert _native_build_timeout_seconds(5000, 200) == 600
+
+
+@pytest.mark.parametrize("components,sheets", [(True, 1), (-1, 1), (0, 0), (1.5, 1), (0, False)])
+def test_native_build_timeout_rejects_invalid_design_counts(components, sheets):
+    with pytest.raises(ValueError, match="component and sheet counts"):
+        _native_build_timeout_seconds(components, sheets)
 
 
 def test_netlist_maps_only_declared_pin_numbers_and_preserves_explicit_no_connect(tmp_path):

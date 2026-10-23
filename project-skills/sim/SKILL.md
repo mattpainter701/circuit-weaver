@@ -4,9 +4,9 @@ description: >
   Circuit simulation and pre-fabrication validation. Trigger on: "simulate",
   "run simulation", "spice", "check stability", "ripple analysis", "phase margin",
   "power supply simulation", "AC analysis", "transient analysis".
-  Includes automated SPICE simulation via ngspice, RF chain analysis (scikit-rf),
-  power/clock analysis (PyLTSpice), and PCB EM (openEMS FDTD).
-  Run before ordering to validate performance before spending on prototypes.
+  Includes automated Circuit Weaver SPICE analyses where model and evidence
+  contracts are available. RF-chain, PyLTSpice, and openEMS examples below are
+  separate manual workflows and are not automatically qualified by this skill.
 ---
 
 ## Auto-Detection
@@ -44,6 +44,20 @@ python -m circuit_weaver simulate design.yaml -o ./sims --json
 
 The simulator auto-detects power regulators, filters, and op-amps from the
 design spec and generates appropriate SPICE netlists + analysis cards.
+Inspect the report's `status`, `coverage`, and `target_checks`: CLI exit code 0
+means verified, 1 means failed, and 2 means unverified. Verification requires
+fresh parsed output and passing explicit supported project targets; a solver
+exit code alone is not acceptance. Missing models or targets remain
+unverified. IC subcircuits require a readable model file plus explicit
+`subckt` and `pin_order` metadata matching the connected pin numbers.
+
+KiCad library assets and functional simulation support are distinct. You can
+inspect local symbol, footprint, and 3D-model availability with
+`circuit-weaver library-access [query] --project-root <dir> --json` or MCP
+`library_access`. Exact symbols may resolve to generically named package
+assets; this proves file identity only, not footprint fit, electrical
+correctness, or RF performance. It does not create functional builders or
+validated RF/radar/SDR/transmitter models.
 
 ---
 

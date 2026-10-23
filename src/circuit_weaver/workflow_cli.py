@@ -32,6 +32,10 @@ def add_parsers(subparsers) -> None:
     runtime = subparsers.add_parser("runtime-info", help="Identify the exact CLI, skill and MCP runtime")
     runtime.add_argument("--json", dest="json_output", action="store_true")
     runtime.add_argument("--audit-external", action="store_true")
+    libraries = subparsers.add_parser("library-access", help="Audit accessible CAD assets and functional support")
+    libraries.add_argument("query", nargs="?", default="")
+    libraries.add_argument("--project-root", default=".")
+    libraries.add_argument("--json", dest="json_output", action="store_true")
     workflow = subparsers.add_parser("workflow", help="Plan, execute and resume checkpointed prototype work")
     actions = workflow.add_subparsers(dest="workflow_action", required=True)
     for name in ("plan", "run", "status", "resume", "cancel"):
@@ -49,6 +53,10 @@ def add_parsers(subparsers) -> None:
 def dispatch(args) -> dict[str, Any] | None:
     from . import project_workflow as workflow
 
+    if args.command == "library-access":
+        from .library_access import audit_library_access
+
+        return audit_library_access(args.query or None, project_root=Path(args.project_root).resolve())
     if args.command == "runtime-info":
         from .runtime_info import runtime_info
 

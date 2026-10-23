@@ -1,0 +1,29 @@
+{
+  "architecture": "Comparison fixture reuse: existing 72-channel dual-DAC card with SPI selection and per-output filters",
+  "assumptions": [
+    "This existing fixture is included as a baseline comparison only.",
+    "Output accuracy and load drive require bench validation."
+  ],
+  "board_mm": {
+    "height": 220,
+    "width": 300
+  },
+  "case_id": "dual_dac_72_comparison",
+  "comparison_fixture_reuse": true,
+  "counts": {
+    "measured": null,
+    "minimum": 350,
+    "target": null
+  },
+  "excluded_claims": [
+    "Reused comparison baseline; it is not evidence of a new architecture or qualification."
+  ],
+  "functional_blocks": [
+    "power",
+    "digital",
+    "analog",
+    "connectors"
+  ],
+  "native_contract": "contracts/dual_dac_72_comparison.json",
+  "pin_net_assertions": []
+}

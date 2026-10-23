@@ -117,8 +117,10 @@ def test_build_passes_explicit_clearance_and_minimum_drill(tmp_path: Path, monke
     root.mkdir()
     (root / "controller.kicad_sch").write_text("(kicad_sch)", encoding="utf-8")
     captured: list[str] = []
+    wrapper_timeouts: list[int] = []
 
     def fake_cli(stage, args, cwd, timeout):
+        wrapper_timeouts.append(timeout)
         captured.extend(args)
         output = Path(args[args.index("--output") + 1])
         output.write_text("(kicad_pcb)", encoding="utf-8")
@@ -139,6 +141,7 @@ def test_build_passes_explicit_clearance_and_minimum_drill(tmp_path: Path, monke
 
     assert captured[captured.index("--clearance") + 1] == "0.127"
     assert captured[captured.index("--minimum-drill") + 1] == "0.25"
+    assert wrapper_timeouts == [900]
 
 
 def test_build_rule_overrides_must_be_finite_and_positive(tmp_path: Path):

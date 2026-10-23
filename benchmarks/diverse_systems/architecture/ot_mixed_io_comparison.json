@@ -1,0 +1,30 @@
+{
+  "architecture": "Comparison fixture reuse: existing connected field gateway with analog inputs, RS-485, and CAN",
+  "assumptions": [
+    "This existing fixture is included as a baseline comparison only."
+  ],
+  "board_mm": {
+    "height": 120,
+    "width": 160
+  },
+  "case_id": "ot_mixed_io_comparison",
+  "comparison_fixture_reuse": true,
+  "counts": {
+    "measured": null,
+    "minimum": 100,
+    "target": null
+  },
+  "excluded_claims": [
+    "Reused comparison baseline; it is not evidence of a new architecture or qualification."
+  ],
+  "functional_blocks": [
+    "power",
+    "digital",
+    "communication",
+    "analog",
+    "connectors",
+    "protection"
+  ],
+  "native_contract": "contracts/ot_mixed_io_comparison.json",
+  "pin_net_assertions": []
+}

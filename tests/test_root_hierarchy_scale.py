@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from circuit_weaver.allocator import SheetAllocation
@@ -7,6 +9,7 @@ from circuit_weaver.component_db import ComponentDef, PinDef
 from circuit_weaver.generator import (
     _pick_root_sheet_geometry,
     _root_sheet_height_for_ports,
+    _splice_relaid_out_split,
 )
 from circuit_weaver.placer import split_sheet_allocation
 from circuit_weaver.primitives import snap
@@ -54,3 +57,24 @@ def test_sheet_split_partitions_scoped_and_unscoped_annotations_once() -> None:
     assert "Scoped note for U10" in halves[1].sheet_annotations
     assert "Scoped note for U10" not in halves[0].sheet_annotations
     assert abs(len(halves[0].sheet_annotations) - len(halves[1].sheet_annotations)) <= 1
+
+
+def test_root_split_reuses_untouched_layouts_and_keeps_pairs_aligned() -> None:
+    allocations = [SimpleNamespace(name=name) for name in ("power", "connectors", "mcu")]
+    layouts = [SimpleNamespace(name=name) for name in ("power", "connectors", "mcu")]
+    children = [SimpleNamespace(name="connectors_1"), SimpleNamespace(name="connectors_2")]
+    child_layouts = [SimpleNamespace(name="connectors_1"), SimpleNamespace(name="connectors_2")]
+
+    new_allocations, new_layouts = _splice_relaid_out_split(allocations, layouts, 1, children, child_layouts)
+
+    assert [item.name for item in new_allocations] == ["power", "connectors_1", "connectors_2", "mcu"]
+    assert [item.name for item in new_layouts] == ["power", "connectors_1", "connectors_2", "mcu"]
+    assert new_allocations[0] is allocations[0]
+    assert new_allocations[-1] is allocations[-1]
+    assert new_layouts[0] is layouts[0]
+    assert new_layouts[-1] is layouts[-1]
+
+
+def test_root_split_rejects_misaligned_allocation_and_layout_sequences() -> None:
+    with pytest.raises(ValueError, match="out of sync"):
+        _splice_relaid_out_split([SimpleNamespace(name="power")], [], 0, [], [])

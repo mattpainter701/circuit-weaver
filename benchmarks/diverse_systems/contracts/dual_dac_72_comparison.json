@@ -1,0 +1,6490 @@
+{
+  "required_paths": [
+    {
+      "id": "analog_spi_data",
+      "loads": [
+        {
+          "pad": "7",
+          "ref": "U30"
+        },
+        {
+          "pad": "7",
+          "ref": "U31"
+        },
+        {
+          "pad": "7",
+          "ref": "U32"
+        },
+        {
+          "pad": "7",
+          "ref": "U33"
+        },
+        {
+          "pad": "7",
+          "ref": "U34"
+        },
+        {
+          "pad": "7",
+          "ref": "U35"
+        },
+        {
+          "pad": "7",
+          "ref": "U36"
+        },
+        {
+          "pad": "7",
+          "ref": "U37"
+        },
+        {
+          "pad": "7",
+          "ref": "U38"
+        },
+        {
+          "pad": "7",
+          "ref": "U39"
+        },
+        {
+          "pad": "7",
+          "ref": "U40"
+        },
+        {
+          "pad": "7",
+          "ref": "U41"
+        },
+        {
+          "pad": "7",
+          "ref": "U42"
+        },
+        {
+          "pad": "7",
+          "ref": "U43"
+        },
+        {
+          "pad": "7",
+          "ref": "U44"
+        },
+        {
+          "pad": "7",
+          "ref": "U45"
+        },
+        {
+          "pad": "7",
+          "ref": "U46"
+        },
+        {
+          "pad": "7",
+          "ref": "U47"
+        },
+        {
+          "pad": "7",
+          "ref": "U48"
+        },
+        {
+          "pad": "7",
+          "ref": "U49"
+        },
+        {
+          "pad": "7",
+          "ref": "U50"
+        },
+        {
+          "pad": "7",
+          "ref": "U51"
+        },
+        {
+          "pad": "7",
+          "ref": "U52"
+        },
+        {
+          "pad": "7",
+          "ref": "U53"
+        },
+        {
+          "pad": "7",
+          "ref": "U54"
+        },
+        {
+          "pad": "7",
+          "ref": "U55"
+        },
+        {
+          "pad": "7",
+          "ref": "U56"
+        },
+        {
+          "pad": "7",
+          "ref": "U57"
+        },
+        {
+          "pad": "7",
+          "ref": "U58"
+        },
+        {
+          "pad": "7",
+          "ref": "U59"
+        },
+        {
+          "pad": "7",
+          "ref": "U60"
+        },
+        {
+          "pad": "7",
+          "ref": "U61"
+        },
+        {
+          "pad": "7",
+          "ref": "U62"
+        },
+        {
+          "pad": "7",
+          "ref": "U63"
+        },
+        {
+          "pad": "7",
+          "ref": "U64"
+        },
+        {
+          "pad": "7",
+          "ref": "U65"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "28",
+              "ref": "U10"
+            },
+            {
+              "pad": "7",
+              "ref": "U30"
+            },
+            {
+              "pad": "7",
+              "ref": "U31"
+            },
+            {
+              "pad": "7",
+              "ref": "U32"
+            },
+            {
+              "pad": "7",
+              "ref": "U33"
+            },
+            {
+              "pad": "7",
+              "ref": "U34"
+            },
+            {
+              "pad": "7",
+              "ref": "U35"
+            },
+            {
+              "pad": "7",
+              "ref": "U36"
+            },
+            {
+              "pad": "7",
+              "ref": "U37"
+            },
+            {
+              "pad": "7",
+              "ref": "U38"
+            },
+            {
+              "pad": "7",
+              "ref": "U39"
+            },
+            {
+              "pad": "7",
+              "ref": "U40"
+            },
+            {
+              "pad": "7",
+              "ref": "U41"
+            },
+            {
+              "pad": "7",
+              "ref": "U42"
+            },
+            {
+              "pad": "7",
+              "ref": "U43"
+            },
+            {
+              "pad": "7",
+              "ref": "U44"
+            },
+            {
+              "pad": "7",
+              "ref": "U45"
+            },
+            {
+              "pad": "7",
+              "ref": "U46"
+            },
+            {
+              "pad": "7",
+              "ref": "U47"
+            },
+            {
+              "pad": "7",
+              "ref": "U48"
+            },
+            {
+              "pad": "7",
+              "ref": "U49"
+            },
+            {
+              "pad": "7",
+              "ref": "U50"
+            },
+            {
+              "pad": "7",
+              "ref": "U51"
+            },
+            {
+              "pad": "7",
+              "ref": "U52"
+            },
+            {
+              "pad": "7",
+              "ref": "U53"
+            },
+            {
+              "pad": "7",
+              "ref": "U54"
+            },
+            {
+              "pad": "7",
+              "ref": "U55"
+            },
+            {
+              "pad": "7",
+              "ref": "U56"
+            },
+            {
+              "pad": "7",
+              "ref": "U57"
+            },
+            {
+              "pad": "7",
+              "ref": "U58"
+            },
+            {
+              "pad": "7",
+              "ref": "U59"
+            },
+            {
+              "pad": "7",
+              "ref": "U60"
+            },
+            {
+              "pad": "7",
+              "ref": "U61"
+            },
+            {
+              "pad": "7",
+              "ref": "U62"
+            },
+            {
+              "pad": "7",
+              "ref": "U63"
+            },
+            {
+              "pad": "7",
+              "ref": "U64"
+            },
+            {
+              "pad": "7",
+              "ref": "U65"
+            }
+          ],
+          "net": "SPI_MOSI"
+        }
+      ],
+      "source": {
+        "pad": "28",
+        "ref": "U10"
+      },
+      "through": []
+    },
+    {
+      "id": "analog_spi_clock",
+      "loads": [
+        {
+          "pad": "6",
+          "ref": "U30"
+        },
+        {
+          "pad": "6",
+          "ref": "U31"
+        },
+        {
+          "pad": "6",
+          "ref": "U32"
+        },
+        {
+          "pad": "6",
+          "ref": "U33"
+        },
+        {
+          "pad": "6",
+          "ref": "U34"
+        },
+        {
+          "pad": "6",
+          "ref": "U35"
+        },
+        {
+          "pad": "6",
+          "ref": "U36"
+        },
+        {
+          "pad": "6",
+          "ref": "U37"
+        },
+        {
+          "pad": "6",
+          "ref": "U38"
+        },
+        {
+          "pad": "6",
+          "ref": "U39"
+        },
+        {
+          "pad": "6",
+          "ref": "U40"
+        },
+        {
+          "pad": "6",
+          "ref": "U41"
+        },
+        {
+          "pad": "6",
+          "ref": "U42"
+        },
+        {
+          "pad": "6",
+          "ref": "U43"
+        },
+        {
+          "pad": "6",
+          "ref": "U44"
+        },
+        {
+          "pad": "6",
+          "ref": "U45"
+        },
+        {
+          "pad": "6",
+          "ref": "U46"
+        },
+        {
+          "pad": "6",
+          "ref": "U47"
+        },
+        {
+          "pad": "6",
+          "ref": "U48"
+        },
+        {
+          "pad": "6",
+          "ref": "U49"
+        },
+        {
+          "pad": "6",
+          "ref": "U50"
+        },
+        {
+          "pad": "6",
+          "ref": "U51"
+        },
+        {
+          "pad": "6",
+          "ref": "U52"
+        },
+        {
+          "pad": "6",
+          "ref": "U53"
+        },
+        {
+          "pad": "6",
+          "ref": "U54"
+        },
+        {
+          "pad": "6",
+          "ref": "U55"
+        },
+        {
+          "pad": "6",
+          "ref": "U56"
+        },
+        {
+          "pad": "6",
+          "ref": "U57"
+        },
+        {
+          "pad": "6",
+          "ref": "U58"
+        },
+        {
+          "pad": "6",
+          "ref": "U59"
+        },
+        {
+          "pad": "6",
+          "ref": "U60"
+        },
+        {
+          "pad": "6",
+          "ref": "U61"
+        },
+        {
+          "pad": "6",
+          "ref": "U62"
+        },
+        {
+          "pad": "6",
+          "ref": "U63"
+        },
+        {
+          "pad": "6",
+          "ref": "U64"
+        },
+        {
+          "pad": "6",
+          "ref": "U65"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "26",
+              "ref": "U10"
+            },
+            {
+              "pad": "6",
+              "ref": "U30"
+            },
+            {
+              "pad": "6",
+              "ref": "U31"
+            },
+            {
+              "pad": "6",
+              "ref": "U32"
+            },
+            {
+              "pad": "6",
+              "ref": "U33"
+            },
+            {
+              "pad": "6",
+              "ref": "U34"
+            },
+            {
+              "pad": "6",
+              "ref": "U35"
+            },
+            {
+              "pad": "6",
+              "ref": "U36"
+            },
+            {
+              "pad": "6",
+              "ref": "U37"
+            },
+            {
+              "pad": "6",
+              "ref": "U38"
+            },
+            {
+              "pad": "6",
+              "ref": "U39"
+            },
+            {
+              "pad": "6",
+              "ref": "U40"
+            },
+            {
+              "pad": "6",
+              "ref": "U41"
+            },
+            {
+              "pad": "6",
+              "ref": "U42"
+            },
+            {
+              "pad": "6",
+              "ref": "U43"
+            },
+            {
+              "pad": "6",
+              "ref": "U44"
+            },
+            {
+              "pad": "6",
+              "ref": "U45"
+            },
+            {
+              "pad": "6",
+              "ref": "U46"
+            },
+            {
+              "pad": "6",
+              "ref": "U47"
+            },
+            {
+              "pad": "6",
+              "ref": "U48"
+            },
+            {
+              "pad": "6",
+              "ref": "U49"
+            },
+            {
+              "pad": "6",
+              "ref": "U50"
+            },
+            {
+              "pad": "6",
+              "ref": "U51"
+            },
+            {
+              "pad": "6",
+              "ref": "U52"
+            },
+            {
+              "pad": "6",
+              "ref": "U53"
+            },
+            {
+              "pad": "6",
+              "ref": "U54"
+            },
+            {
+              "pad": "6",
+              "ref": "U55"
+            },
+            {
+              "pad": "6",
+              "ref": "U56"
+            },
+            {
+              "pad": "6",
+              "ref": "U57"
+            },
+            {
+              "pad": "6",
+              "ref": "U58"
+            },
+            {
+              "pad": "6",
+              "ref": "U59"
+            },
+            {
+              "pad": "6",
+              "ref": "U60"
+            },
+            {
+              "pad": "6",
+              "ref": "U61"
+            },
+            {
+              "pad": "6",
+              "ref": "U62"
+            },
+            {
+              "pad": "6",
+              "ref": "U63"
+            },
+            {
+              "pad": "6",
+              "ref": "U64"
+            },
+            {
+              "pad": "6",
+              "ref": "U65"
+            }
+          ],
+          "net": "SPI_SCK"
+        }
+      ],
+      "source": {
+        "pad": "26",
+        "ref": "U10"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_01",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U30"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "15",
+              "ref": "U14"
+            },
+            {
+              "pad": "5",
+              "ref": "U30"
+            }
+          ],
+          "net": "DAC_SYNC_01"
+        }
+      ],
+      "source": {
+        "pad": "15",
+        "ref": "U14"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_02",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U31"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "U14"
+            },
+            {
+              "pad": "5",
+              "ref": "U31"
+            }
+          ],
+          "net": "DAC_SYNC_02"
+        }
+      ],
+      "source": {
+        "pad": "1",
+        "ref": "U14"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_03",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U32"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "U14"
+            },
+            {
+              "pad": "5",
+              "ref": "U32"
+            }
+          ],
+          "net": "DAC_SYNC_03"
+        }
+      ],
+      "source": {
+        "pad": "2",
+        "ref": "U14"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_04",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U33"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U14"
+            },
+            {
+              "pad": "5",
+              "ref": "U33"
+            }
+          ],
+          "net": "DAC_SYNC_04"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U14"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_05",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U34"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U14"
+            },
+            {
+              "pad": "5",
+              "ref": "U34"
+            }
+          ],
+          "net": "DAC_SYNC_05"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U14"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_06",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U35"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "5",
+              "ref": "U14"
+            },
+            {
+              "pad": "5",
+              "ref": "U35"
+            }
+          ],
+          "net": "DAC_SYNC_06"
+        }
+      ],
+      "source": {
+        "pad": "5",
+        "ref": "U14"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_07",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U36"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "6",
+              "ref": "U14"
+            },
+            {
+              "pad": "5",
+              "ref": "U36"
+            }
+          ],
+          "net": "DAC_SYNC_07"
+        }
+      ],
+      "source": {
+        "pad": "6",
+        "ref": "U14"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_08",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U37"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "7",
+              "ref": "U14"
+            },
+            {
+              "pad": "5",
+              "ref": "U37"
+            }
+          ],
+          "net": "DAC_SYNC_08"
+        }
+      ],
+      "source": {
+        "pad": "7",
+        "ref": "U14"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_09",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U38"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "15",
+              "ref": "U15"
+            },
+            {
+              "pad": "5",
+              "ref": "U38"
+            }
+          ],
+          "net": "DAC_SYNC_09"
+        }
+      ],
+      "source": {
+        "pad": "15",
+        "ref": "U15"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_10",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U39"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "U15"
+            },
+            {
+              "pad": "5",
+              "ref": "U39"
+            }
+          ],
+          "net": "DAC_SYNC_10"
+        }
+      ],
+      "source": {
+        "pad": "1",
+        "ref": "U15"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_11",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U40"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "U15"
+            },
+            {
+              "pad": "5",
+              "ref": "U40"
+            }
+          ],
+          "net": "DAC_SYNC_11"
+        }
+      ],
+      "source": {
+        "pad": "2",
+        "ref": "U15"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_12",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U41"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U15"
+            },
+            {
+              "pad": "5",
+              "ref": "U41"
+            }
+          ],
+          "net": "DAC_SYNC_12"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U15"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_13",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U42"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U15"
+            },
+            {
+              "pad": "5",
+              "ref": "U42"
+            }
+          ],
+          "net": "DAC_SYNC_13"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U15"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_14",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U43"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "5",
+              "ref": "U15"
+            },
+            {
+              "pad": "5",
+              "ref": "U43"
+            }
+          ],
+          "net": "DAC_SYNC_14"
+        }
+      ],
+      "source": {
+        "pad": "5",
+        "ref": "U15"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_15",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U44"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "6",
+              "ref": "U15"
+            },
+            {
+              "pad": "5",
+              "ref": "U44"
+            }
+          ],
+          "net": "DAC_SYNC_15"
+        }
+      ],
+      "source": {
+        "pad": "6",
+        "ref": "U15"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_16",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U45"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "7",
+              "ref": "U15"
+            },
+            {
+              "pad": "5",
+              "ref": "U45"
+            }
+          ],
+          "net": "DAC_SYNC_16"
+        }
+      ],
+      "source": {
+        "pad": "7",
+        "ref": "U15"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_17",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U46"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "15",
+              "ref": "U16"
+            },
+            {
+              "pad": "5",
+              "ref": "U46"
+            }
+          ],
+          "net": "DAC_SYNC_17"
+        }
+      ],
+      "source": {
+        "pad": "15",
+        "ref": "U16"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_18",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U47"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "U16"
+            },
+            {
+              "pad": "5",
+              "ref": "U47"
+            }
+          ],
+          "net": "DAC_SYNC_18"
+        }
+      ],
+      "source": {
+        "pad": "1",
+        "ref": "U16"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_19",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U48"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "U16"
+            },
+            {
+              "pad": "5",
+              "ref": "U48"
+            }
+          ],
+          "net": "DAC_SYNC_19"
+        }
+      ],
+      "source": {
+        "pad": "2",
+        "ref": "U16"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_20",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U49"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U16"
+            },
+            {
+              "pad": "5",
+              "ref": "U49"
+            }
+          ],
+          "net": "DAC_SYNC_20"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U16"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_21",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U50"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U16"
+            },
+            {
+              "pad": "5",
+              "ref": "U50"
+            }
+          ],
+          "net": "DAC_SYNC_21"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U16"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_22",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U51"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "5",
+              "ref": "U16"
+            },
+            {
+              "pad": "5",
+              "ref": "U51"
+            }
+          ],
+          "net": "DAC_SYNC_22"
+        }
+      ],
+      "source": {
+        "pad": "5",
+        "ref": "U16"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_23",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U52"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "6",
+              "ref": "U16"
+            },
+            {
+              "pad": "5",
+              "ref": "U52"
+            }
+          ],
+          "net": "DAC_SYNC_23"
+        }
+      ],
+      "source": {
+        "pad": "6",
+        "ref": "U16"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_24",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U53"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "7",
+              "ref": "U16"
+            },
+            {
+              "pad": "5",
+              "ref": "U53"
+            }
+          ],
+          "net": "DAC_SYNC_24"
+        }
+      ],
+      "source": {
+        "pad": "7",
+        "ref": "U16"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_25",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U54"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "15",
+              "ref": "U17"
+            },
+            {
+              "pad": "5",
+              "ref": "U54"
+            }
+          ],
+          "net": "DAC_SYNC_25"
+        }
+      ],
+      "source": {
+        "pad": "15",
+        "ref": "U17"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_26",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U55"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "U17"
+            },
+            {
+              "pad": "5",
+              "ref": "U55"
+            }
+          ],
+          "net": "DAC_SYNC_26"
+        }
+      ],
+      "source": {
+        "pad": "1",
+        "ref": "U17"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_27",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U56"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "U17"
+            },
+            {
+              "pad": "5",
+              "ref": "U56"
+            }
+          ],
+          "net": "DAC_SYNC_27"
+        }
+      ],
+      "source": {
+        "pad": "2",
+        "ref": "U17"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_28",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U57"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U17"
+            },
+            {
+              "pad": "5",
+              "ref": "U57"
+            }
+          ],
+          "net": "DAC_SYNC_28"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U17"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_29",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U58"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U17"
+            },
+            {
+              "pad": "5",
+              "ref": "U58"
+            }
+          ],
+          "net": "DAC_SYNC_29"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U17"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_30",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U59"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "5",
+              "ref": "U17"
+            },
+            {
+              "pad": "5",
+              "ref": "U59"
+            }
+          ],
+          "net": "DAC_SYNC_30"
+        }
+      ],
+      "source": {
+        "pad": "5",
+        "ref": "U17"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_31",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U60"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "6",
+              "ref": "U17"
+            },
+            {
+              "pad": "5",
+              "ref": "U60"
+            }
+          ],
+          "net": "DAC_SYNC_31"
+        }
+      ],
+      "source": {
+        "pad": "6",
+        "ref": "U17"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_32",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U61"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "7",
+              "ref": "U17"
+            },
+            {
+              "pad": "5",
+              "ref": "U61"
+            }
+          ],
+          "net": "DAC_SYNC_32"
+        }
+      ],
+      "source": {
+        "pad": "7",
+        "ref": "U17"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_33",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U62"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "15",
+              "ref": "U18"
+            },
+            {
+              "pad": "5",
+              "ref": "U62"
+            }
+          ],
+          "net": "DAC_SYNC_33"
+        }
+      ],
+      "source": {
+        "pad": "15",
+        "ref": "U18"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_34",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U63"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "U18"
+            },
+            {
+              "pad": "5",
+              "ref": "U63"
+            }
+          ],
+          "net": "DAC_SYNC_34"
+        }
+      ],
+      "source": {
+        "pad": "1",
+        "ref": "U18"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_35",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U64"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "U18"
+            },
+            {
+              "pad": "5",
+              "ref": "U64"
+            }
+          ],
+          "net": "DAC_SYNC_35"
+        }
+      ],
+      "source": {
+        "pad": "2",
+        "ref": "U18"
+      },
+      "through": []
+    },
+    {
+      "id": "dac_sync_36",
+      "loads": [
+        {
+          "pad": "5",
+          "ref": "U65"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U18"
+            },
+            {
+              "pad": "5",
+              "ref": "U65"
+            }
+          ],
+          "net": "DAC_SYNC_36"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U18"
+      },
+      "through": []
+    },
+    {
+      "id": "setpoint_output_01",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J2"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C28"
+            },
+            {
+              "pad": "2",
+              "ref": "J2"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U30"
+            },
+            {
+              "pad": "1",
+              "ref": "R7"
+            }
+          ],
+          "net": "VOUTA_RAW_U30"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R7"
+            },
+            {
+              "pad": "2",
+              "ref": "C28"
+            },
+            {
+              "pad": "1",
+              "ref": "J2"
+            }
+          ],
+          "net": "SETPOINT_01"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U30"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R7"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_02",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J3"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C29"
+            },
+            {
+              "pad": "2",
+              "ref": "J3"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U30"
+            },
+            {
+              "pad": "1",
+              "ref": "R8"
+            }
+          ],
+          "net": "VOUTB_RAW_U30"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R8"
+            },
+            {
+              "pad": "2",
+              "ref": "C29"
+            },
+            {
+              "pad": "1",
+              "ref": "J3"
+            }
+          ],
+          "net": "SETPOINT_02"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U30"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R8"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_03",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J4"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C34"
+            },
+            {
+              "pad": "2",
+              "ref": "J4"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U31"
+            },
+            {
+              "pad": "1",
+              "ref": "R9"
+            }
+          ],
+          "net": "VOUTA_RAW_U31"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R9"
+            },
+            {
+              "pad": "2",
+              "ref": "C34"
+            },
+            {
+              "pad": "1",
+              "ref": "J4"
+            }
+          ],
+          "net": "SETPOINT_03"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U31"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R9"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_04",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J5"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C35"
+            },
+            {
+              "pad": "2",
+              "ref": "J5"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U31"
+            },
+            {
+              "pad": "1",
+              "ref": "R10"
+            }
+          ],
+          "net": "VOUTB_RAW_U31"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R10"
+            },
+            {
+              "pad": "2",
+              "ref": "C35"
+            },
+            {
+              "pad": "1",
+              "ref": "J5"
+            }
+          ],
+          "net": "SETPOINT_04"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U31"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R10"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_05",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J6"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C40"
+            },
+            {
+              "pad": "2",
+              "ref": "J6"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U32"
+            },
+            {
+              "pad": "1",
+              "ref": "R11"
+            }
+          ],
+          "net": "VOUTA_RAW_U32"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R11"
+            },
+            {
+              "pad": "2",
+              "ref": "C40"
+            },
+            {
+              "pad": "1",
+              "ref": "J6"
+            }
+          ],
+          "net": "SETPOINT_05"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U32"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R11"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_06",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J7"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C41"
+            },
+            {
+              "pad": "2",
+              "ref": "J7"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U32"
+            },
+            {
+              "pad": "1",
+              "ref": "R12"
+            }
+          ],
+          "net": "VOUTB_RAW_U32"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R12"
+            },
+            {
+              "pad": "2",
+              "ref": "C41"
+            },
+            {
+              "pad": "1",
+              "ref": "J7"
+            }
+          ],
+          "net": "SETPOINT_06"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U32"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R12"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_07",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J8"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C46"
+            },
+            {
+              "pad": "2",
+              "ref": "J8"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U33"
+            },
+            {
+              "pad": "1",
+              "ref": "R13"
+            }
+          ],
+          "net": "VOUTA_RAW_U33"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R13"
+            },
+            {
+              "pad": "2",
+              "ref": "C46"
+            },
+            {
+              "pad": "1",
+              "ref": "J8"
+            }
+          ],
+          "net": "SETPOINT_07"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U33"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R13"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_08",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J9"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C47"
+            },
+            {
+              "pad": "2",
+              "ref": "J9"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U33"
+            },
+            {
+              "pad": "1",
+              "ref": "R14"
+            }
+          ],
+          "net": "VOUTB_RAW_U33"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R14"
+            },
+            {
+              "pad": "2",
+              "ref": "C47"
+            },
+            {
+              "pad": "1",
+              "ref": "J9"
+            }
+          ],
+          "net": "SETPOINT_08"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U33"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R14"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_09",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J10"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C52"
+            },
+            {
+              "pad": "2",
+              "ref": "J10"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U34"
+            },
+            {
+              "pad": "1",
+              "ref": "R15"
+            }
+          ],
+          "net": "VOUTA_RAW_U34"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R15"
+            },
+            {
+              "pad": "2",
+              "ref": "C52"
+            },
+            {
+              "pad": "1",
+              "ref": "J10"
+            }
+          ],
+          "net": "SETPOINT_09"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U34"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R15"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_10",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J11"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C53"
+            },
+            {
+              "pad": "2",
+              "ref": "J11"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U34"
+            },
+            {
+              "pad": "1",
+              "ref": "R16"
+            }
+          ],
+          "net": "VOUTB_RAW_U34"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R16"
+            },
+            {
+              "pad": "2",
+              "ref": "C53"
+            },
+            {
+              "pad": "1",
+              "ref": "J11"
+            }
+          ],
+          "net": "SETPOINT_10"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U34"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R16"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_11",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J12"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C58"
+            },
+            {
+              "pad": "2",
+              "ref": "J12"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U35"
+            },
+            {
+              "pad": "1",
+              "ref": "R17"
+            }
+          ],
+          "net": "VOUTA_RAW_U35"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R17"
+            },
+            {
+              "pad": "2",
+              "ref": "C58"
+            },
+            {
+              "pad": "1",
+              "ref": "J12"
+            }
+          ],
+          "net": "SETPOINT_11"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U35"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R17"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_12",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J13"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C59"
+            },
+            {
+              "pad": "2",
+              "ref": "J13"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U35"
+            },
+            {
+              "pad": "1",
+              "ref": "R18"
+            }
+          ],
+          "net": "VOUTB_RAW_U35"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R18"
+            },
+            {
+              "pad": "2",
+              "ref": "C59"
+            },
+            {
+              "pad": "1",
+              "ref": "J13"
+            }
+          ],
+          "net": "SETPOINT_12"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U35"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R18"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_13",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J14"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C64"
+            },
+            {
+              "pad": "2",
+              "ref": "J14"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U36"
+            },
+            {
+              "pad": "1",
+              "ref": "R19"
+            }
+          ],
+          "net": "VOUTA_RAW_U36"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R19"
+            },
+            {
+              "pad": "2",
+              "ref": "C64"
+            },
+            {
+              "pad": "1",
+              "ref": "J14"
+            }
+          ],
+          "net": "SETPOINT_13"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U36"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R19"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_14",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J15"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C65"
+            },
+            {
+              "pad": "2",
+              "ref": "J15"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U36"
+            },
+            {
+              "pad": "1",
+              "ref": "R20"
+            }
+          ],
+          "net": "VOUTB_RAW_U36"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R20"
+            },
+            {
+              "pad": "2",
+              "ref": "C65"
+            },
+            {
+              "pad": "1",
+              "ref": "J15"
+            }
+          ],
+          "net": "SETPOINT_14"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U36"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R20"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_15",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J16"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C70"
+            },
+            {
+              "pad": "2",
+              "ref": "J16"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U37"
+            },
+            {
+              "pad": "1",
+              "ref": "R21"
+            }
+          ],
+          "net": "VOUTA_RAW_U37"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R21"
+            },
+            {
+              "pad": "2",
+              "ref": "C70"
+            },
+            {
+              "pad": "1",
+              "ref": "J16"
+            }
+          ],
+          "net": "SETPOINT_15"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U37"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R21"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_16",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J17"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C71"
+            },
+            {
+              "pad": "2",
+              "ref": "J17"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U37"
+            },
+            {
+              "pad": "1",
+              "ref": "R22"
+            }
+          ],
+          "net": "VOUTB_RAW_U37"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R22"
+            },
+            {
+              "pad": "2",
+              "ref": "C71"
+            },
+            {
+              "pad": "1",
+              "ref": "J17"
+            }
+          ],
+          "net": "SETPOINT_16"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U37"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R22"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_17",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J18"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C76"
+            },
+            {
+              "pad": "2",
+              "ref": "J18"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U38"
+            },
+            {
+              "pad": "1",
+              "ref": "R23"
+            }
+          ],
+          "net": "VOUTA_RAW_U38"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R23"
+            },
+            {
+              "pad": "2",
+              "ref": "C76"
+            },
+            {
+              "pad": "1",
+              "ref": "J18"
+            }
+          ],
+          "net": "SETPOINT_17"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U38"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R23"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_18",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J19"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C77"
+            },
+            {
+              "pad": "2",
+              "ref": "J19"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U38"
+            },
+            {
+              "pad": "1",
+              "ref": "R24"
+            }
+          ],
+          "net": "VOUTB_RAW_U38"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R24"
+            },
+            {
+              "pad": "2",
+              "ref": "C77"
+            },
+            {
+              "pad": "1",
+              "ref": "J19"
+            }
+          ],
+          "net": "SETPOINT_18"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U38"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R24"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_19",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J20"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C82"
+            },
+            {
+              "pad": "2",
+              "ref": "J20"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U39"
+            },
+            {
+              "pad": "1",
+              "ref": "R25"
+            }
+          ],
+          "net": "VOUTA_RAW_U39"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R25"
+            },
+            {
+              "pad": "2",
+              "ref": "C82"
+            },
+            {
+              "pad": "1",
+              "ref": "J20"
+            }
+          ],
+          "net": "SETPOINT_19"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U39"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R25"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_20",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J21"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C83"
+            },
+            {
+              "pad": "2",
+              "ref": "J21"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U39"
+            },
+            {
+              "pad": "1",
+              "ref": "R26"
+            }
+          ],
+          "net": "VOUTB_RAW_U39"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R26"
+            },
+            {
+              "pad": "2",
+              "ref": "C83"
+            },
+            {
+              "pad": "1",
+              "ref": "J21"
+            }
+          ],
+          "net": "SETPOINT_20"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U39"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R26"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_21",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J22"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C88"
+            },
+            {
+              "pad": "2",
+              "ref": "J22"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U40"
+            },
+            {
+              "pad": "1",
+              "ref": "R27"
+            }
+          ],
+          "net": "VOUTA_RAW_U40"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R27"
+            },
+            {
+              "pad": "2",
+              "ref": "C88"
+            },
+            {
+              "pad": "1",
+              "ref": "J22"
+            }
+          ],
+          "net": "SETPOINT_21"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U40"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R27"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_22",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J23"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C89"
+            },
+            {
+              "pad": "2",
+              "ref": "J23"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U40"
+            },
+            {
+              "pad": "1",
+              "ref": "R28"
+            }
+          ],
+          "net": "VOUTB_RAW_U40"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R28"
+            },
+            {
+              "pad": "2",
+              "ref": "C89"
+            },
+            {
+              "pad": "1",
+              "ref": "J23"
+            }
+          ],
+          "net": "SETPOINT_22"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U40"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R28"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_23",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J24"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C94"
+            },
+            {
+              "pad": "2",
+              "ref": "J24"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U41"
+            },
+            {
+              "pad": "1",
+              "ref": "R29"
+            }
+          ],
+          "net": "VOUTA_RAW_U41"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R29"
+            },
+            {
+              "pad": "2",
+              "ref": "C94"
+            },
+            {
+              "pad": "1",
+              "ref": "J24"
+            }
+          ],
+          "net": "SETPOINT_23"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U41"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R29"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_24",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J25"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C95"
+            },
+            {
+              "pad": "2",
+              "ref": "J25"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U41"
+            },
+            {
+              "pad": "1",
+              "ref": "R30"
+            }
+          ],
+          "net": "VOUTB_RAW_U41"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R30"
+            },
+            {
+              "pad": "2",
+              "ref": "C95"
+            },
+            {
+              "pad": "1",
+              "ref": "J25"
+            }
+          ],
+          "net": "SETPOINT_24"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U41"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R30"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_25",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J26"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C100"
+            },
+            {
+              "pad": "2",
+              "ref": "J26"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U42"
+            },
+            {
+              "pad": "1",
+              "ref": "R31"
+            }
+          ],
+          "net": "VOUTA_RAW_U42"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R31"
+            },
+            {
+              "pad": "2",
+              "ref": "C100"
+            },
+            {
+              "pad": "1",
+              "ref": "J26"
+            }
+          ],
+          "net": "SETPOINT_25"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U42"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R31"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_26",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J27"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C101"
+            },
+            {
+              "pad": "2",
+              "ref": "J27"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U42"
+            },
+            {
+              "pad": "1",
+              "ref": "R32"
+            }
+          ],
+          "net": "VOUTB_RAW_U42"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R32"
+            },
+            {
+              "pad": "2",
+              "ref": "C101"
+            },
+            {
+              "pad": "1",
+              "ref": "J27"
+            }
+          ],
+          "net": "SETPOINT_26"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U42"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R32"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_27",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J28"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C106"
+            },
+            {
+              "pad": "2",
+              "ref": "J28"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U43"
+            },
+            {
+              "pad": "1",
+              "ref": "R33"
+            }
+          ],
+          "net": "VOUTA_RAW_U43"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R33"
+            },
+            {
+              "pad": "2",
+              "ref": "C106"
+            },
+            {
+              "pad": "1",
+              "ref": "J28"
+            }
+          ],
+          "net": "SETPOINT_27"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U43"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R33"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_28",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J29"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C107"
+            },
+            {
+              "pad": "2",
+              "ref": "J29"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U43"
+            },
+            {
+              "pad": "1",
+              "ref": "R34"
+            }
+          ],
+          "net": "VOUTB_RAW_U43"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R34"
+            },
+            {
+              "pad": "2",
+              "ref": "C107"
+            },
+            {
+              "pad": "1",
+              "ref": "J29"
+            }
+          ],
+          "net": "SETPOINT_28"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U43"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R34"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_29",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J30"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C112"
+            },
+            {
+              "pad": "2",
+              "ref": "J30"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U44"
+            },
+            {
+              "pad": "1",
+              "ref": "R35"
+            }
+          ],
+          "net": "VOUTA_RAW_U44"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R35"
+            },
+            {
+              "pad": "2",
+              "ref": "C112"
+            },
+            {
+              "pad": "1",
+              "ref": "J30"
+            }
+          ],
+          "net": "SETPOINT_29"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U44"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R35"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_30",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J31"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C113"
+            },
+            {
+              "pad": "2",
+              "ref": "J31"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U44"
+            },
+            {
+              "pad": "1",
+              "ref": "R36"
+            }
+          ],
+          "net": "VOUTB_RAW_U44"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R36"
+            },
+            {
+              "pad": "2",
+              "ref": "C113"
+            },
+            {
+              "pad": "1",
+              "ref": "J31"
+            }
+          ],
+          "net": "SETPOINT_30"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U44"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R36"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_31",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J32"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C118"
+            },
+            {
+              "pad": "2",
+              "ref": "J32"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U45"
+            },
+            {
+              "pad": "1",
+              "ref": "R37"
+            }
+          ],
+          "net": "VOUTA_RAW_U45"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R37"
+            },
+            {
+              "pad": "2",
+              "ref": "C118"
+            },
+            {
+              "pad": "1",
+              "ref": "J32"
+            }
+          ],
+          "net": "SETPOINT_31"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U45"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R37"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_32",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J33"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C119"
+            },
+            {
+              "pad": "2",
+              "ref": "J33"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U45"
+            },
+            {
+              "pad": "1",
+              "ref": "R38"
+            }
+          ],
+          "net": "VOUTB_RAW_U45"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R38"
+            },
+            {
+              "pad": "2",
+              "ref": "C119"
+            },
+            {
+              "pad": "1",
+              "ref": "J33"
+            }
+          ],
+          "net": "SETPOINT_32"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U45"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R38"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_33",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J34"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C124"
+            },
+            {
+              "pad": "2",
+              "ref": "J34"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U46"
+            },
+            {
+              "pad": "1",
+              "ref": "R39"
+            }
+          ],
+          "net": "VOUTA_RAW_U46"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R39"
+            },
+            {
+              "pad": "2",
+              "ref": "C124"
+            },
+            {
+              "pad": "1",
+              "ref": "J34"
+            }
+          ],
+          "net": "SETPOINT_33"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U46"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R39"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_34",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J35"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C125"
+            },
+            {
+              "pad": "2",
+              "ref": "J35"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U46"
+            },
+            {
+              "pad": "1",
+              "ref": "R40"
+            }
+          ],
+          "net": "VOUTB_RAW_U46"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R40"
+            },
+            {
+              "pad": "2",
+              "ref": "C125"
+            },
+            {
+              "pad": "1",
+              "ref": "J35"
+            }
+          ],
+          "net": "SETPOINT_34"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U46"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R40"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_35",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J36"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C130"
+            },
+            {
+              "pad": "2",
+              "ref": "J36"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U47"
+            },
+            {
+              "pad": "1",
+              "ref": "R41"
+            }
+          ],
+          "net": "VOUTA_RAW_U47"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R41"
+            },
+            {
+              "pad": "2",
+              "ref": "C130"
+            },
+            {
+              "pad": "1",
+              "ref": "J36"
+            }
+          ],
+          "net": "SETPOINT_35"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U47"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R41"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_36",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J37"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C131"
+            },
+            {
+              "pad": "2",
+              "ref": "J37"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U47"
+            },
+            {
+              "pad": "1",
+              "ref": "R42"
+            }
+          ],
+          "net": "VOUTB_RAW_U47"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R42"
+            },
+            {
+              "pad": "2",
+              "ref": "C131"
+            },
+            {
+              "pad": "1",
+              "ref": "J37"
+            }
+          ],
+          "net": "SETPOINT_36"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U47"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R42"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_37",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J38"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C136"
+            },
+            {
+              "pad": "2",
+              "ref": "J38"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U48"
+            },
+            {
+              "pad": "1",
+              "ref": "R43"
+            }
+          ],
+          "net": "VOUTA_RAW_U48"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R43"
+            },
+            {
+              "pad": "2",
+              "ref": "C136"
+            },
+            {
+              "pad": "1",
+              "ref": "J38"
+            }
+          ],
+          "net": "SETPOINT_37"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U48"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R43"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_38",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J39"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C137"
+            },
+            {
+              "pad": "2",
+              "ref": "J39"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U48"
+            },
+            {
+              "pad": "1",
+              "ref": "R44"
+            }
+          ],
+          "net": "VOUTB_RAW_U48"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R44"
+            },
+            {
+              "pad": "2",
+              "ref": "C137"
+            },
+            {
+              "pad": "1",
+              "ref": "J39"
+            }
+          ],
+          "net": "SETPOINT_38"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U48"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R44"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_39",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J40"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C142"
+            },
+            {
+              "pad": "2",
+              "ref": "J40"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U49"
+            },
+            {
+              "pad": "1",
+              "ref": "R45"
+            }
+          ],
+          "net": "VOUTA_RAW_U49"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R45"
+            },
+            {
+              "pad": "2",
+              "ref": "C142"
+            },
+            {
+              "pad": "1",
+              "ref": "J40"
+            }
+          ],
+          "net": "SETPOINT_39"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U49"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R45"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_40",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J41"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C143"
+            },
+            {
+              "pad": "2",
+              "ref": "J41"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U49"
+            },
+            {
+              "pad": "1",
+              "ref": "R46"
+            }
+          ],
+          "net": "VOUTB_RAW_U49"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R46"
+            },
+            {
+              "pad": "2",
+              "ref": "C143"
+            },
+            {
+              "pad": "1",
+              "ref": "J41"
+            }
+          ],
+          "net": "SETPOINT_40"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U49"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R46"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_41",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J42"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C148"
+            },
+            {
+              "pad": "2",
+              "ref": "J42"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U50"
+            },
+            {
+              "pad": "1",
+              "ref": "R47"
+            }
+          ],
+          "net": "VOUTA_RAW_U50"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R47"
+            },
+            {
+              "pad": "2",
+              "ref": "C148"
+            },
+            {
+              "pad": "1",
+              "ref": "J42"
+            }
+          ],
+          "net": "SETPOINT_41"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U50"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R47"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_42",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J43"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C149"
+            },
+            {
+              "pad": "2",
+              "ref": "J43"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U50"
+            },
+            {
+              "pad": "1",
+              "ref": "R48"
+            }
+          ],
+          "net": "VOUTB_RAW_U50"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R48"
+            },
+            {
+              "pad": "2",
+              "ref": "C149"
+            },
+            {
+              "pad": "1",
+              "ref": "J43"
+            }
+          ],
+          "net": "SETPOINT_42"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U50"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R48"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_43",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J44"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C154"
+            },
+            {
+              "pad": "2",
+              "ref": "J44"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U51"
+            },
+            {
+              "pad": "1",
+              "ref": "R49"
+            }
+          ],
+          "net": "VOUTA_RAW_U51"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R49"
+            },
+            {
+              "pad": "2",
+              "ref": "C154"
+            },
+            {
+              "pad": "1",
+              "ref": "J44"
+            }
+          ],
+          "net": "SETPOINT_43"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U51"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R49"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_44",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J45"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C155"
+            },
+            {
+              "pad": "2",
+              "ref": "J45"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U51"
+            },
+            {
+              "pad": "1",
+              "ref": "R50"
+            }
+          ],
+          "net": "VOUTB_RAW_U51"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R50"
+            },
+            {
+              "pad": "2",
+              "ref": "C155"
+            },
+            {
+              "pad": "1",
+              "ref": "J45"
+            }
+          ],
+          "net": "SETPOINT_44"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U51"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R50"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_45",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J46"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C160"
+            },
+            {
+              "pad": "2",
+              "ref": "J46"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U52"
+            },
+            {
+              "pad": "1",
+              "ref": "R51"
+            }
+          ],
+          "net": "VOUTA_RAW_U52"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R51"
+            },
+            {
+              "pad": "2",
+              "ref": "C160"
+            },
+            {
+              "pad": "1",
+              "ref": "J46"
+            }
+          ],
+          "net": "SETPOINT_45"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U52"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R51"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_46",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J47"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C161"
+            },
+            {
+              "pad": "2",
+              "ref": "J47"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U52"
+            },
+            {
+              "pad": "1",
+              "ref": "R52"
+            }
+          ],
+          "net": "VOUTB_RAW_U52"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R52"
+            },
+            {
+              "pad": "2",
+              "ref": "C161"
+            },
+            {
+              "pad": "1",
+              "ref": "J47"
+            }
+          ],
+          "net": "SETPOINT_46"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U52"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R52"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_47",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J48"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C166"
+            },
+            {
+              "pad": "2",
+              "ref": "J48"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U53"
+            },
+            {
+              "pad": "1",
+              "ref": "R53"
+            }
+          ],
+          "net": "VOUTA_RAW_U53"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R53"
+            },
+            {
+              "pad": "2",
+              "ref": "C166"
+            },
+            {
+              "pad": "1",
+              "ref": "J48"
+            }
+          ],
+          "net": "SETPOINT_47"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U53"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R53"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_48",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J49"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C167"
+            },
+            {
+              "pad": "2",
+              "ref": "J49"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U53"
+            },
+            {
+              "pad": "1",
+              "ref": "R54"
+            }
+          ],
+          "net": "VOUTB_RAW_U53"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R54"
+            },
+            {
+              "pad": "2",
+              "ref": "C167"
+            },
+            {
+              "pad": "1",
+              "ref": "J49"
+            }
+          ],
+          "net": "SETPOINT_48"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U53"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R54"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_49",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J50"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C172"
+            },
+            {
+              "pad": "2",
+              "ref": "J50"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U54"
+            },
+            {
+              "pad": "1",
+              "ref": "R55"
+            }
+          ],
+          "net": "VOUTA_RAW_U54"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R55"
+            },
+            {
+              "pad": "2",
+              "ref": "C172"
+            },
+            {
+              "pad": "1",
+              "ref": "J50"
+            }
+          ],
+          "net": "SETPOINT_49"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U54"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R55"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_50",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J51"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C173"
+            },
+            {
+              "pad": "2",
+              "ref": "J51"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U54"
+            },
+            {
+              "pad": "1",
+              "ref": "R56"
+            }
+          ],
+          "net": "VOUTB_RAW_U54"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R56"
+            },
+            {
+              "pad": "2",
+              "ref": "C173"
+            },
+            {
+              "pad": "1",
+              "ref": "J51"
+            }
+          ],
+          "net": "SETPOINT_50"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U54"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R56"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_51",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J52"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C178"
+            },
+            {
+              "pad": "2",
+              "ref": "J52"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U55"
+            },
+            {
+              "pad": "1",
+              "ref": "R57"
+            }
+          ],
+          "net": "VOUTA_RAW_U55"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R57"
+            },
+            {
+              "pad": "2",
+              "ref": "C178"
+            },
+            {
+              "pad": "1",
+              "ref": "J52"
+            }
+          ],
+          "net": "SETPOINT_51"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U55"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R57"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_52",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J53"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C179"
+            },
+            {
+              "pad": "2",
+              "ref": "J53"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U55"
+            },
+            {
+              "pad": "1",
+              "ref": "R58"
+            }
+          ],
+          "net": "VOUTB_RAW_U55"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R58"
+            },
+            {
+              "pad": "2",
+              "ref": "C179"
+            },
+            {
+              "pad": "1",
+              "ref": "J53"
+            }
+          ],
+          "net": "SETPOINT_52"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U55"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R58"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_53",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J54"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C184"
+            },
+            {
+              "pad": "2",
+              "ref": "J54"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U56"
+            },
+            {
+              "pad": "1",
+              "ref": "R59"
+            }
+          ],
+          "net": "VOUTA_RAW_U56"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R59"
+            },
+            {
+              "pad": "2",
+              "ref": "C184"
+            },
+            {
+              "pad": "1",
+              "ref": "J54"
+            }
+          ],
+          "net": "SETPOINT_53"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U56"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R59"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_54",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J55"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C185"
+            },
+            {
+              "pad": "2",
+              "ref": "J55"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U56"
+            },
+            {
+              "pad": "1",
+              "ref": "R60"
+            }
+          ],
+          "net": "VOUTB_RAW_U56"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R60"
+            },
+            {
+              "pad": "2",
+              "ref": "C185"
+            },
+            {
+              "pad": "1",
+              "ref": "J55"
+            }
+          ],
+          "net": "SETPOINT_54"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U56"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R60"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_55",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J56"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C190"
+            },
+            {
+              "pad": "2",
+              "ref": "J56"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U57"
+            },
+            {
+              "pad": "1",
+              "ref": "R61"
+            }
+          ],
+          "net": "VOUTA_RAW_U57"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R61"
+            },
+            {
+              "pad": "2",
+              "ref": "C190"
+            },
+            {
+              "pad": "1",
+              "ref": "J56"
+            }
+          ],
+          "net": "SETPOINT_55"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U57"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R61"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_56",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J57"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C191"
+            },
+            {
+              "pad": "2",
+              "ref": "J57"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U57"
+            },
+            {
+              "pad": "1",
+              "ref": "R62"
+            }
+          ],
+          "net": "VOUTB_RAW_U57"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R62"
+            },
+            {
+              "pad": "2",
+              "ref": "C191"
+            },
+            {
+              "pad": "1",
+              "ref": "J57"
+            }
+          ],
+          "net": "SETPOINT_56"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U57"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R62"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_57",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J58"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C196"
+            },
+            {
+              "pad": "2",
+              "ref": "J58"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U58"
+            },
+            {
+              "pad": "1",
+              "ref": "R63"
+            }
+          ],
+          "net": "VOUTA_RAW_U58"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R63"
+            },
+            {
+              "pad": "2",
+              "ref": "C196"
+            },
+            {
+              "pad": "1",
+              "ref": "J58"
+            }
+          ],
+          "net": "SETPOINT_57"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U58"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R63"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_58",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J59"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C197"
+            },
+            {
+              "pad": "2",
+              "ref": "J59"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U58"
+            },
+            {
+              "pad": "1",
+              "ref": "R64"
+            }
+          ],
+          "net": "VOUTB_RAW_U58"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R64"
+            },
+            {
+              "pad": "2",
+              "ref": "C197"
+            },
+            {
+              "pad": "1",
+              "ref": "J59"
+            }
+          ],
+          "net": "SETPOINT_58"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U58"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R64"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_59",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J60"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C202"
+            },
+            {
+              "pad": "2",
+              "ref": "J60"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U59"
+            },
+            {
+              "pad": "1",
+              "ref": "R65"
+            }
+          ],
+          "net": "VOUTA_RAW_U59"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R65"
+            },
+            {
+              "pad": "2",
+              "ref": "C202"
+            },
+            {
+              "pad": "1",
+              "ref": "J60"
+            }
+          ],
+          "net": "SETPOINT_59"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U59"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R65"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_60",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J61"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C203"
+            },
+            {
+              "pad": "2",
+              "ref": "J61"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U59"
+            },
+            {
+              "pad": "1",
+              "ref": "R66"
+            }
+          ],
+          "net": "VOUTB_RAW_U59"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R66"
+            },
+            {
+              "pad": "2",
+              "ref": "C203"
+            },
+            {
+              "pad": "1",
+              "ref": "J61"
+            }
+          ],
+          "net": "SETPOINT_60"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U59"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R66"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_61",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J62"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C208"
+            },
+            {
+              "pad": "2",
+              "ref": "J62"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U60"
+            },
+            {
+              "pad": "1",
+              "ref": "R67"
+            }
+          ],
+          "net": "VOUTA_RAW_U60"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R67"
+            },
+            {
+              "pad": "2",
+              "ref": "C208"
+            },
+            {
+              "pad": "1",
+              "ref": "J62"
+            }
+          ],
+          "net": "SETPOINT_61"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U60"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R67"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_62",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J63"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C209"
+            },
+            {
+              "pad": "2",
+              "ref": "J63"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U60"
+            },
+            {
+              "pad": "1",
+              "ref": "R68"
+            }
+          ],
+          "net": "VOUTB_RAW_U60"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R68"
+            },
+            {
+              "pad": "2",
+              "ref": "C209"
+            },
+            {
+              "pad": "1",
+              "ref": "J63"
+            }
+          ],
+          "net": "SETPOINT_62"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U60"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R68"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_63",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J64"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C214"
+            },
+            {
+              "pad": "2",
+              "ref": "J64"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U61"
+            },
+            {
+              "pad": "1",
+              "ref": "R69"
+            }
+          ],
+          "net": "VOUTA_RAW_U61"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R69"
+            },
+            {
+              "pad": "2",
+              "ref": "C214"
+            },
+            {
+              "pad": "1",
+              "ref": "J64"
+            }
+          ],
+          "net": "SETPOINT_63"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U61"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R69"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_64",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J65"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C215"
+            },
+            {
+              "pad": "2",
+              "ref": "J65"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U61"
+            },
+            {
+              "pad": "1",
+              "ref": "R70"
+            }
+          ],
+          "net": "VOUTB_RAW_U61"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R70"
+            },
+            {
+              "pad": "2",
+              "ref": "C215"
+            },
+            {
+              "pad": "1",
+              "ref": "J65"
+            }
+          ],
+          "net": "SETPOINT_64"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U61"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R70"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_65",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J66"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C220"
+            },
+            {
+              "pad": "2",
+              "ref": "J66"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U62"
+            },
+            {
+              "pad": "1",
+              "ref": "R71"
+            }
+          ],
+          "net": "VOUTA_RAW_U62"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R71"
+            },
+            {
+              "pad": "2",
+              "ref": "C220"
+            },
+            {
+              "pad": "1",
+              "ref": "J66"
+            }
+          ],
+          "net": "SETPOINT_65"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U62"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R71"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_66",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J67"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C221"
+            },
+            {
+              "pad": "2",
+              "ref": "J67"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U62"
+            },
+            {
+              "pad": "1",
+              "ref": "R72"
+            }
+          ],
+          "net": "VOUTB_RAW_U62"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R72"
+            },
+            {
+              "pad": "2",
+              "ref": "C221"
+            },
+            {
+              "pad": "1",
+              "ref": "J67"
+            }
+          ],
+          "net": "SETPOINT_66"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U62"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R72"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_67",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J68"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C226"
+            },
+            {
+              "pad": "2",
+              "ref": "J68"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U63"
+            },
+            {
+              "pad": "1",
+              "ref": "R73"
+            }
+          ],
+          "net": "VOUTA_RAW_U63"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R73"
+            },
+            {
+              "pad": "2",
+              "ref": "C226"
+            },
+            {
+              "pad": "1",
+              "ref": "J68"
+            }
+          ],
+          "net": "SETPOINT_67"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U63"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R73"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_68",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J69"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C227"
+            },
+            {
+              "pad": "2",
+              "ref": "J69"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U63"
+            },
+            {
+              "pad": "1",
+              "ref": "R74"
+            }
+          ],
+          "net": "VOUTB_RAW_U63"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R74"
+            },
+            {
+              "pad": "2",
+              "ref": "C227"
+            },
+            {
+              "pad": "1",
+              "ref": "J69"
+            }
+          ],
+          "net": "SETPOINT_68"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U63"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R74"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_69",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J70"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C232"
+            },
+            {
+              "pad": "2",
+              "ref": "J70"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U64"
+            },
+            {
+              "pad": "1",
+              "ref": "R75"
+            }
+          ],
+          "net": "VOUTA_RAW_U64"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R75"
+            },
+            {
+              "pad": "2",
+              "ref": "C232"
+            },
+            {
+              "pad": "1",
+              "ref": "J70"
+            }
+          ],
+          "net": "SETPOINT_69"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U64"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R75"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_70",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J71"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C233"
+            },
+            {
+              "pad": "2",
+              "ref": "J71"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U64"
+            },
+            {
+              "pad": "1",
+              "ref": "R76"
+            }
+          ],
+          "net": "VOUTB_RAW_U64"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R76"
+            },
+            {
+              "pad": "2",
+              "ref": "C233"
+            },
+            {
+              "pad": "1",
+              "ref": "J71"
+            }
+          ],
+          "net": "SETPOINT_70"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U64"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R76"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_71",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J72"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C238"
+            },
+            {
+              "pad": "2",
+              "ref": "J72"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "4",
+              "ref": "U65"
+            },
+            {
+              "pad": "1",
+              "ref": "R77"
+            }
+          ],
+          "net": "VOUTA_RAW_U65"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R77"
+            },
+            {
+              "pad": "2",
+              "ref": "C238"
+            },
+            {
+              "pad": "1",
+              "ref": "J72"
+            }
+          ],
+          "net": "SETPOINT_71"
+        }
+      ],
+      "source": {
+        "pad": "4",
+        "ref": "U65"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R77"
+        }
+      ]
+    },
+    {
+      "id": "setpoint_output_72",
+      "loads": [
+        {
+          "pad": "1",
+          "ref": "J73"
+        }
+      ],
+      "return_assertions": [
+        {
+          "endpoints": [
+            {
+              "pad": "1",
+              "ref": "C239"
+            },
+            {
+              "pad": "2",
+              "ref": "J73"
+            }
+          ],
+          "net": "GND"
+        }
+      ],
+      "segments": [
+        {
+          "endpoints": [
+            {
+              "pad": "3",
+              "ref": "U65"
+            },
+            {
+              "pad": "1",
+              "ref": "R78"
+            }
+          ],
+          "net": "VOUTB_RAW_U65"
+        },
+        {
+          "endpoints": [
+            {
+              "pad": "2",
+              "ref": "R78"
+            },
+            {
+              "pad": "2",
+              "ref": "C239"
+            },
+            {
+              "pad": "1",
+              "ref": "J73"
+            }
+          ],
+          "net": "SETPOINT_72"
+        }
+      ],
+      "source": {
+        "pad": "3",
+        "ref": "U65"
+      },
+      "through": [
+        {
+          "input_pad": "1",
+          "output_pad": "2",
+          "ref": "R78"
+        }
+      ]
+    }
+  ]
+}

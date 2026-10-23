@@ -168,14 +168,15 @@ class TestDiscoverCLI:
 class TestSimulateCLI:
     def test_simulate_json_output(self, project_dir):
         result = _run(["simulate", str(project_dir / "design.yaml"), "-o", str(project_dir / "sims"), "--json"])
-        assert result.returncode == 0
+        assert result.returncode == 2
         data = json.loads(result.stdout)
+        assert data['status'] == 'unverified'
         assert "confidence_score" in data
         assert "plan" in data
 
     def test_simulate_text_output(self, project_dir):
         result = _run(["simulate", str(project_dir / "design.yaml"), "-o", str(project_dir / "sims")])
-        assert result.returncode == 0
+        assert result.returncode == 2
         assert "simulation" in result.stdout.lower()
 
     def test_simulate_type_filter(self, project_dir):
@@ -183,7 +184,7 @@ class TestSimulateCLI:
             "simulate", str(project_dir / "design.yaml"),
             "-o", str(project_dir / "sims"), "--type", "power", "--json",
         ])
-        assert result.returncode == 0
+        assert result.returncode == 2
 
     def test_simulate_bad_spec(self, tmp_path):
         bad = tmp_path / "bad.yaml"
@@ -191,6 +192,25 @@ class TestSimulateCLI:
         result = _run(["simulate", str(bad), "-o", str(tmp_path / "sims")])
         assert result.returncode != 0
         assert "error" in result.stderr.lower() or "Error" in result.stderr
+
+    @pytest.mark.parametrize(('status', 'exit_code'), [('verified', 0), ('failed', 1), ('unverified', 2), (None, 2)])
+    def test_simulate_exit_code_requires_verified_evidence(self, tmp_path, monkeypatch, capsys, status, exit_code):
+        from types import SimpleNamespace
+
+        from circuit_weaver import dispatcher, simulation
+
+        spec = tmp_path / 'design.yaml'
+        spec.write_text(_MINIMAL_SPEC, encoding='utf-8')
+        payload = {'status': status or 'unverified'}
+        attributes = {'to_dict': lambda: payload}
+        if status is not None:
+            attributes['status'] = status
+        monkeypatch.setattr(simulation, 'run_design_simulations', lambda *a, **kw: SimpleNamespace(**attributes))
+        monkeypatch.setattr(sys, 'argv', ['circuit-weaver', 'simulate', str(spec), '--json'])
+        with pytest.raises(SystemExit) as exc:
+            dispatcher.main()
+        assert exc.value.code == exit_code
+        assert json.loads(capsys.readouterr().out) == payload
 
 
 # ── confidence ────────────────────────────────────────────────────────────

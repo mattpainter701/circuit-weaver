@@ -41,7 +41,10 @@ DEFAULT_STAGES = STAGES
 _RUNNER_KEY = "runner"
 _LOCK_NAME = "workflow.lock"
 _CHILD_ENV = "CIRCUIT_WEAVER_WORKFLOW_CHILD"
-_STAGE_TIMEOUTS = {"build": 300, "place": 300, "route": 1800, "preview": 180}
+# Native PCB generation scales each subprocess budget to the parsed schematic
+# size (capped at 600s). Keep a separate 900s hard stage cap for netlist export,
+# worker execution, DRC validation and publication together.
+_STAGE_TIMEOUTS = {"build": 900, "place": 300, "route": 1800, "preview": 180}
 _APPEND_ONLY_OUTPUTS = {"design.log", "circuit-weaver.log"}
 
 

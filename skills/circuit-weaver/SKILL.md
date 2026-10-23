@@ -81,6 +81,32 @@ Circuit Weaver or its agent skill does not register the server. See
 [`docs/project-workflows.md`](../../docs/project-workflows.md) for signatures,
 examples, checkpoint behavior, and the installation/registration distinction.
 
+Use `circuit-weaver library-access [query] --project-root <absolute-dir> --json`
+or MCP `library_access` to inspect local KiCad symbols, footprints, and 3D
+models separately from curated functional/topology support and project SPICE
+bindings. The report is read-only and labels library-root provenance. An exact
+symbol may resolve to a generic package footprint and model even when those
+filenames do not contain the MPN. Treat that as asset identity only: it does
+not validate pinout, package fit, electrical behavior, or RF performance. A
+missing functional builder or SPICE contract remains a separate engineering
+gap; library availability alone does not qualify RF, radar, SDR, or transmitter
+circuits.
+
+For `simulate`, report the returned status and evidence rather than treating a
+successful ngspice process as acceptance. `verified` requires fresh parsed
+output and explicit supported project targets that pass; `failed` identifies a
+failed analysis or target; `unverified` covers incomplete evidence, absent
+models, or no explicit targets. CLI exit codes are 0 verified, 1 failed, and 2
+unverified. IC models need readable files plus explicit `subckt` and
+`pin_order` metadata matching connected pin numbers. Do not infer RF
+qualification from generic SPICE models, KiCad assets, or a simulation pass.
+For passive or custom analyses, use `spec.simulation.analyses` to state the
+analysis kind, validated `analysis_params`, structured V/I `sources`, and
+explicit `target_metrics`; AC `input_trace` / `output_trace` must identify
+connected nodes. No stimulus or acceptance target is invented. See
+`docs/project-workflows.md#explicit-spice-testbenches` for a complete RC example
+and the evidence limits of a verified result.
+
 Only after the project route is selected should a new-design request enter the
 interactive wizard below. Existing projects should resume through the shared
 lifecycle interface before invoking focused commands.
@@ -323,7 +349,7 @@ Examples:
 
 **All platforms:** Ask as open text input.
 
-**Action:** 
+**Action:**
 1. Take the project name
 2. Create folder: `${PROJECT_NAME}/`
 3. Create logfile: `${PROJECT_NAME}/design.log`

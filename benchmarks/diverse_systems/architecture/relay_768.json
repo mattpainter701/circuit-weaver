@@ -1,0 +1,48 @@
+{
+  "architecture": "768-channel serialized relay output card",
+  "assumptions": [
+    "External relay coils are assumed to draw at most 80 mA each; aggregate power and thermal limits are unverified.",
+    "The 12 V coil source and field returns are external.",
+    "The shared data, clock, and latch nets drive 96 register inputs without added buffering; timing/fanout needs review.",
+    "Board dimensions are authored stress constraints, not a placement result."
+  ],
+  "board_mm": {
+    "height": 420,
+    "width": 520
+  },
+  "case_id": "relay_768",
+  "comparison_fixture_reuse": false,
+  "counts": {
+    "measured": null,
+    "minimum": 1000,
+    "target": 1250
+  },
+  "excluded_claims": [
+    "No safety certification, thermal validation, field wiring approval, or manufacturing release."
+  ],
+  "functional_blocks": [
+    "STM32 control and reset-safe output enable",
+    "96 x 74HC595 serial register chain",
+    "110 x ULN2003A coil sinks",
+    "768 dedicated 12 V coil connectors"
+  ],
+  "native_contract": "contracts/relay_768.json",
+  "pin_net_assertions": [
+    {
+      "count": 768,
+      "kind": "per_channel_path",
+      "sink": "dedicated connector pin 2",
+      "source": "74HC595 Q0-Q7",
+      "through": "ULN2003A input/output channel"
+    },
+    {
+      "count": 96,
+      "kind": "serial_chain",
+      "signals": [
+        "SHIFT_DATA",
+        "SHIFT_CLOCK",
+        "SHIFT_LATCH"
+      ]
+    }
+  ]
+}

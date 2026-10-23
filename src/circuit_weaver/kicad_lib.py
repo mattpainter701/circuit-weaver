@@ -29,6 +29,11 @@ import re
 from pathlib import Path
 
 from .component_db import ComponentDef, PinDef
+from .footprint_lib import (
+    _direct_string,
+    _global_library_table_entries,
+    _parse_kicad_sexp,
+)
 
 # Try importing kiutils — preferred parser for KiCad 10
 try:
@@ -307,15 +312,19 @@ def symbol_to_component_def(
 
         # Detect power pins by electrical type OR by name pattern
         is_power_type = pin.electrical_type in ("power_in", "power_out")
-        is_gnd_name = bool(re.match(
-            r"^(GND|VSS|AVSS|DVSS|AGND|DGND|PGND|EPAD|EP|EXPOSED)$",
-            pname,
-        ))
-        is_vdd_name = bool(re.match(
-            r"^(VCC|VDD|VDDIO|AVDD|DVDD|VCCA|VDDA|V_?IN|VBAT|VSYS|VBUS|"
-            r"VCC_IO|AVCC|DVCC|VDDCORE|VDDA_\w+|VDD_\w+|VCC_\w+)$",
-            pname,
-        ))
+        is_gnd_name = bool(
+            re.match(
+                r"^(GND|VSS|AVSS|DVSS|AGND|DGND|PGND|EPAD|EP|EXPOSED)$",
+                pname,
+            )
+        )
+        is_vdd_name = bool(
+            re.match(
+                r"^(VCC|VDD|VDDIO|AVDD|DVDD|VCCA|VDDA|V_?IN|VBAT|VSYS|VBUS|"
+                r"VCC_IO|AVCC|DVCC|VDDCORE|VDDA_\w+|VDD_\w+|VCC_\w+)$",
+                pname,
+            )
+        )
 
         if is_power_type or is_gnd_name or is_vdd_name:
             if is_gnd_name:
@@ -408,6 +417,69 @@ _KICAD_LIB_PATHS = {
     ],
 }
 
+_KICAD_SYMBOL_ENV_PATHS = (
+    "KICAD_SYMBOL_DIR",
+    "KICAD10_SYMBOL_DIR",
+    "KICAD9_SYMBOL_DIR",
+    "KICAD8_SYMBOL_DIR",
+)
+
+
+def _project_symbol_path(project_root: Path, nickname: str) -> Path | None:
+    """Resolve a KiCad project symbol-table entry constrained to the project.
+
+    Only literal ``${KIPRJMOD}/relative/path`` entries of KiCad's native
+    ``sym-lib-table`` form are accepted. Environment interpolation and
+    absolute paths are deliberately excluded from this project-local lookup.
+    """
+    table = project_root / "sym-lib-table"
+    if not table.is_file():
+        return None
+    if table.stat().st_size > 1024 * 1024:
+        raise ValueError("KiCad symbol library table exceeds 1 MiB")
+    try:
+        tree = _parse_kicad_sexp(table.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"could not read KiCad symbol library table: {exc}") from exc
+    if not tree or tree[0] != "sym_lib_table":
+        raise ValueError("invalid KiCad symbol library table root")
+    matches = [
+        item
+        for item in tree[1:]
+        if isinstance(item, list) and item and item[0] == "lib" and _direct_string(item, "name") == nickname
+    ]
+    if len(matches) > 1:
+        raise ValueError(f"duplicate symbol library nickname in project table: {nickname}")
+    if not matches:
+        return None
+    entry = matches[0]
+    kind, uri = _direct_string(entry, "type"), _direct_string(entry, "uri")
+    if kind != "KiCad":
+        raise ValueError(f"unsupported project symbol library type for {nickname}: {kind!r}")
+    prefix = "${KIPRJMOD}/"
+    if not uri or not uri.startswith(prefix):
+        raise ValueError(f"unsupported project symbol library URI for {nickname}")
+    relative = uri[len(prefix) :]
+    parts = relative.split("/")
+    if (
+        not relative
+        or "\\" in relative
+        or any(part in {"", ".", ".."} for part in parts)
+        or ":" in relative
+        or "${" in relative
+    ):
+        raise ValueError(f"unsafe project symbol library URI for {nickname}")
+    root = project_root.resolve(strict=True)
+    candidate = root.joinpath(*parts).resolve(strict=False)
+    if not candidate.is_relative_to(root):
+        raise ValueError(f"project symbol library escapes project root: {nickname}")
+    if candidate.suffix == ".kicad_sym":
+        return candidate if candidate.is_file() else None
+    if candidate.suffix == ".kicad_symdir":
+        return candidate if candidate.is_dir() else None
+    raise ValueError(f"unsupported project symbol library path for {nickname}")
+
+
 # KiCad GitLab raw content base URL (moved from GitHub in 2020)
 # KiCad 10+ uses .kicad_symdir/ with one file per symbol
 KICAD_GITLAB_RAW = "https://gitlab.com/kicad/libraries/kicad-symbols/-/raw/master"
@@ -441,10 +513,19 @@ KICAD_LIBRARY_INDEX = {
 class KiCadLibrary:
     """Manages access to KiCad symbol libraries from multiple sources."""
 
-    def __init__(self, cache_dir: str = None):
+    def __init__(
+        self,
+        cache_dir: str = None,
+        *,
+        roots: list[str | Path] | None = None,
+        project_root: str | Path | None = None,
+    ):
         self._symbols = {}  # {lib_name: {sym_name: sym_data}}
         self._sym_files = {}  # {lib_name: Path}
+        self._sym_dirs = {}  # {lib_name: Path}
         self._symbol_search_cache = {}  # {symbol_name: lib_name}
+        self._project_root = Path(project_root).expanduser().resolve() if project_root is not None else None
+        self._global_libraries = _global_library_table_entries("sym-lib-table", "sym_lib_table")
 
         # Default cache directory
         if cache_dir:
@@ -452,35 +533,78 @@ class KiCadLibrary:
         else:
             self._cache = Path.home() / ".cache" / "schematic_engine" / "kicad_symbols"
 
-        # Auto-detect local KiCad install
-        self._local_kicad = self._find_local_kicad()
+        # Auto-detect standard, versioned, and caller-supplied symbol roots.
+        self._local_kicad_roots = self._find_local_kicad_roots(roots)
+        self._local_kicad = self._local_kicad_roots[0] if self._local_kicad_roots else None
         if self._local_kicad:
             print(f"Found local KiCad symbols: {self._local_kicad}")
 
-    def _find_local_kicad(self) -> Path | None:
-        """Auto-detect local KiCad symbol library path."""
-        # Check environment variable first
-        env_path = os.environ.get("KICAD_SYMBOL_DIR")
-        if env_path and Path(env_path).is_dir():
-            return Path(env_path)
+    @staticmethod
+    def _find_local_kicad_roots(roots: list[str | Path] | None = None) -> list[Path]:
+        """Return existing symbol roots in explicit-to-default precedence order."""
+        candidates = [Path(path).expanduser() for path in roots or []]
+        candidates.extend(
+            Path(os.environ[name]).expanduser() for name in _KICAD_SYMBOL_ENV_PATHS if os.environ.get(name)
+        )
+        candidates.extend(_KICAD_LIB_PATHS.get(platform.system(), []))
+        existing: list[Path] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            if not candidate.is_dir():
+                continue
+            resolved = candidate.resolve()
+            key = os.path.normcase(str(resolved))
+            if key not in seen:
+                seen.add(key)
+                existing.append(resolved)
+        return existing
 
-        # Check platform-specific paths
-        system = platform.system()
-        for p in _KICAD_LIB_PATHS.get(system, []):
-            if p.is_dir():
-                return p
-        return None
+    @property
+    def roots(self) -> list[Path]:
+        """Local symbol roots searched in deterministic precedence order."""
+        return list(self._local_kicad_roots)
 
-    def add_path(self, path: str):
-        """Add a directory of .kicad_sym files to the library."""
-        p = Path(path)
+    @property
+    def global_libraries(self) -> dict[str, Path]:
+        """User-global nickname-to-library paths read from KiCad tables."""
+        return dict(self._global_libraries)
+
+    @staticmethod
+    def _find_local_kicad() -> Path | None:
+        """Compatibility wrapper returning the first discovered symbol root."""
+        roots = KiCadLibrary._find_local_kicad_roots()
+        return roots[0] if roots else None
+
+    def add_path(self, path: str | Path):
+        """Add a directory of `.kicad_sym` files or KiCad 10 symdirs.
+
+        The path may be a symbol-library root or one `.kicad_symdir` itself.
+        Roots are searched in the order they are added, before auto-detected
+        roots, so explicit custom libraries remain predictable.
+        """
+        p = Path(path).expanduser()
         if not p.is_dir():
             print(f"WARNING: {path} is not a directory")
             return
+        p = p.resolve()
+        if p.suffix == ".kicad_symdir":
+            entries = [(p.stem, p)]
+        else:
+            entries = []
+            entries.extend((file.stem, file) for file in sorted(p.glob("*.kicad_sym")))
+            entries.extend((entry.stem, entry) for entry in sorted(p.glob("*.kicad_symdir")) if entry.is_dir())
+        if p not in self._local_kicad_roots:
+            self._local_kicad_roots.insert(0, p)
+            self._local_kicad = p
         self._symbol_search_cache.clear()
-        for f in p.glob("*.kicad_sym"):
-            lib_name = f.stem
-            self._sym_files[lib_name] = f
+        for lib_name, entry in entries:
+            self._symbols.pop(lib_name, None)
+            if entry.suffix == ".kicad_sym":
+                self._sym_files[lib_name] = entry
+                self._sym_dirs.pop(lib_name, None)
+            else:
+                self._sym_dirs[lib_name] = entry
+                self._sym_files.pop(lib_name, None)
 
     def add_file(self, filepath: str, lib_name: str = None):
         """Add a single .kicad_sym file."""
@@ -507,6 +631,29 @@ class KiCadLibrary:
                     # Cached downloads are stored as plain directories per library.
                     yield entry.name
 
+    def _iter_project_library_names(self):
+        """Yield project-local symbol table nicknames in table order."""
+        if self._project_root is None:
+            return
+        table = self._project_root / "sym-lib-table"
+        if not table.is_file() or table.stat().st_size > 1024 * 1024:
+            return
+        try:
+            tree = _parse_kicad_sexp(table.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError):
+            return
+        if not tree or tree[0] != "sym_lib_table":
+            return
+        for item in tree[1:]:
+            if not isinstance(item, list) or not item or item[0] != "lib":
+                continue
+            try:
+                nickname = _direct_string(item, "name")
+                if nickname and _direct_string(item, "type") == "KiCad":
+                    yield nickname
+            except ValueError:
+                continue
+
     def _find_symbol_in_symdir_root(self, root: Path | None, symbol_name: str, plain_dirs: bool = False) -> str | None:
         """Quickly find which library directory contains a symbol file."""
         if not root or not root.is_dir():
@@ -530,24 +677,51 @@ class KiCadLibrary:
         if lib_name in self._symbols:
             return self._symbols[lib_name]
 
-        # Try sym_files first (single .kicad_sym file)
+        # Project-local libraries override same-named global libraries.
+        if self._project_root is not None:
+            project_path = _project_symbol_path(self._project_root, lib_name)
+            if project_path is not None:
+                if project_path.suffix == ".kicad_sym":
+                    syms = parse_kicad_sym_file(str(project_path))
+                else:
+                    syms = self._load_symdir(project_path)
+                self._symbols[lib_name] = syms
+                return syms
+
+        # Try explicitly added single files and symdirs first.
         if lib_name in self._sym_files:
             syms = parse_kicad_sym_file(str(self._sym_files[lib_name]))
             self._symbols[lib_name] = syms
             return syms
+        if lib_name in self._sym_dirs:
+            syms = self._load_symdir(self._sym_dirs[lib_name])
+            self._symbols[lib_name] = syms
+            return syms
 
-        # Try local KiCad install — check both .kicad_sym (v9) and .kicad_symdir/ (v10)
-        if self._local_kicad:
-            local_file = self._local_kicad / f"{lib_name}.kicad_sym"
+        global_path = self._global_libraries.get(lib_name)
+        if global_path is not None:
+            if global_path.suffix == ".kicad_sym":
+                syms = parse_kicad_sym_file(str(global_path))
+            elif global_path.suffix == ".kicad_symdir":
+                syms = self._load_symdir(global_path)
+            else:
+                syms = {}
+            self._symbols[lib_name] = syms
+            return syms
+
+        # Try local KiCad roots — support files and KiCad 10 symdirs.
+        for local_root in self._local_kicad_roots:
+            local_file = local_root / f"{lib_name}.kicad_sym"
             if local_file.exists():
                 syms = parse_kicad_sym_file(str(local_file))
                 self._symbols[lib_name] = syms
                 self._sym_files[lib_name] = local_file
                 return syms
-            local_dir = self._local_kicad / f"{lib_name}.kicad_symdir"
+            local_dir = local_root / f"{lib_name}.kicad_symdir"
             if local_dir.is_dir():
                 syms = self._load_symdir(local_dir)
                 self._symbols[lib_name] = syms
+                self._sym_dirs[lib_name] = local_dir
                 return syms
 
         # Try cache — single file or directory
@@ -732,6 +906,15 @@ class KiCadLibrary:
 
         searched = set()
 
+        # Project-local nicknames are searched before user-global/standard
+        # libraries so a project can pin its own symbol definitions.
+        for lname in self._iter_project_library_names():
+            searched.add(lname)
+            syms = self._load_lib(lname)
+            if symbol_name in syms:
+                self._symbol_search_cache[symbol_name] = lname
+                return syms[symbol_name]
+
         # Search all explicitly added libraries first.
         for lname in list(self._sym_files.keys()):
             searched.add(lname)
@@ -740,14 +923,24 @@ class KiCadLibrary:
                 self._symbol_search_cache[symbol_name] = lname
                 return syms[symbol_name]
 
-        # Fast-path KiCad 10 style per-symbol directories before brute-force loading.
-        local_hint = self._find_symbol_in_symdir_root(self._local_kicad, symbol_name)
-        if local_hint and local_hint not in searched:
-            syms = self._load_lib(local_hint)
-            searched.add(local_hint)
+        for lname in list(self._sym_dirs.keys()) + list(self._global_libraries):
+            if lname in searched:
+                continue
+            searched.add(lname)
+            syms = self._load_lib(lname)
             if symbol_name in syms:
-                self._symbol_search_cache[symbol_name] = local_hint
+                self._symbol_search_cache[symbol_name] = lname
                 return syms[symbol_name]
+
+        # Fast-path KiCad 10 style per-symbol directories before brute-force loading.
+        for local_root in self._local_kicad_roots:
+            local_hint = self._find_symbol_in_symdir_root(local_root, symbol_name)
+            if local_hint and local_hint not in searched:
+                syms = self._load_lib(local_hint)
+                searched.add(local_hint)
+                if symbol_name in syms:
+                    self._symbol_search_cache[symbol_name] = local_hint
+                    return syms[symbol_name]
 
         cache_hint = self._find_symbol_in_symdir_root(self._cache, symbol_name, plain_dirs=True)
         if cache_hint and cache_hint not in searched:
@@ -758,13 +951,14 @@ class KiCadLibrary:
                 return syms[symbol_name]
 
         # Fall back to scanning any remaining local or cached libraries.
-        for lname in self._iter_library_names(self._local_kicad, include_symdirs=True):
-            if lname in searched:
-                continue
-            syms = self._load_lib(lname)
-            if symbol_name in syms:
-                self._symbol_search_cache[symbol_name] = lname
-                return syms[symbol_name]
+        for local_root in self._local_kicad_roots:
+            for lname in self._iter_library_names(local_root, include_symdirs=True):
+                if lname in searched:
+                    continue
+                syms = self._load_lib(lname)
+                if symbol_name in syms:
+                    self._symbol_search_cache[symbol_name] = lname
+                    return syms[symbol_name]
 
         for lname in self._iter_library_names(self._cache, include_symdirs=True):
             if lname in searched:

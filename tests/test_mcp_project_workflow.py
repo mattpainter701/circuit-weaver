@@ -126,6 +126,7 @@ def test_mcp_app_exposes_workflow_tools_and_keeps_legacy_tools() -> None:
         "research_component",
         "manufacturing_readiness",
         "runtime_info",
+        "library_access",
         "start_project",
         "open_project",
         "plan_workflow",

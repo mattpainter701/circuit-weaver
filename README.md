@@ -47,6 +47,10 @@ See the [project workflow guide](docs/project-workflows.md) for runtime selectio
 
 RF research and circuit-generation assistance are available, but controlled-impedance routing, matching networks, antenna performance and RF stability require separate engineering verification. Native DRC and a rendered board are not evidence of RF performance. Review the [automation validation guide](docs/automation-validation.md) for prerequisites, evidence and prototype delivery gates.
 
+### Reproducible passive SPICE benchmarks
+
+`python benchmarks/diverse_systems/spice_suite.py --output <new-empty-directory>` runs independently defined IoT, SDR IQ, Butterworth, radar IF-bank, megohm/picofarad, and OT burden fixtures through the product SPICE exporter and runner, then compares parsed results with analytic oracles. Ngspice is discovered on `PATH` or selected with `CIRCUIT_WEAVER_NGSPICE` / `--ngspice <executable>`. The suite reports unverified when ngspice is unavailable and labels the OT comparator unverified; its negative controls and passive-model results do not qualify IC models, RF layout, PCB behavior, or manufacturing readiness. See [the benchmark guide](benchmarks/diverse_systems/README.md).
+
 ---
 
 <!-- capability-registry:start -->
@@ -69,6 +73,7 @@ Verification is conservative: a capability only claims the evidence level its pu
 | `scaffold` | beta | CLI: `scaffold`; Skill: `circuit-weaver` | `static-parse` → `static-parse` | `command-contract`, `static-parse` | 0.32.1 |
 | `register-ic` | experimental | CLI: `register-ic` | `static-parse` → `static-parse` | `command-contract`, `static-parse` | 0.32.1 |
 | `resolve-symbol` | experimental | CLI: `resolve-symbol` | not applicable (operational) | `command-contract` | 0.33.0 |
+| `library-access` | experimental | CLI: `library-access`; Python: `circuit_weaver.library_access:audit_library_access`; MCP: `library_access`; Skill: `circuit-weaver` | not applicable (operational) | `command-contract` | 0.38.0 |
 | `export-jlcpcb` | review_only | CLI: `export-jlcpcb`; Skill: `circuit-weaver` | `static-parse` → `static-parse` | `command-contract`, `static-parse` | 0.32.1 |
 | `export-gerbers` | review_only | CLI: `export-gerbers`; Skill: `circuit-weaver` | `static-parse` → `static-parse` | `command-contract`, `static-parse` | 0.32.1 |
 | `cost-bom` | experimental | CLI: `cost-bom`; Skill: `circuit-weaver` | `static-parse` → `static-parse` | `command-contract`, `static-parse` | 0.32.1 |
