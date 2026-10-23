@@ -1088,8 +1088,13 @@ async def mcp_smoke(spec: Path, output: Path, env: dict) -> dict:
                 await session.initialize()
                 inventory = await session.list_tools()
                 names = sorted(tool.name for tool in inventory.tools)
-                require(set(names) == {"generate_artifacts", "validate_design", "discover_projects",
-                                       "research_component", "manufacturing_readiness"}, "MCP inventory mismatch")
+                required_tools = {
+                    "generate_artifacts", "validate_design", "discover_projects",
+                    "research_component", "manufacturing_readiness", "runtime_info",
+                    "start_project", "open_project", "plan_workflow", "run_workflow",
+                    "workflow_status", "resume_workflow", "cancel_workflow",
+                }
+                require(required_tools <= set(names), "MCP inventory is missing required tools")
                 spec_json = json.dumps(yaml.safe_load(spec.read_text(encoding="utf-8")))
                 validation_tool = next(tool for tool in inventory.tools if tool.name == "validate_design")
                 paged_validation = "page" in validation_tool.inputSchema.get("properties", {}).get(

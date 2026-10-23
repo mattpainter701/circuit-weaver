@@ -2,6 +2,23 @@
 
 All commands use the `circuit-weaver` entry point (or `python -m circuit_weaver`).
 
+Run the command without arguments from a circuit directory to list discovered
+projects and choose new/open in an interactive terminal. For automation:
+
+```bash
+circuit-weaver runtime-info --json
+circuit-weaver start ./sensor --spec ./sensor.yaml --json
+circuit-weaver open ./sensor --json
+circuit-weaver workflow run ./sensor --stages validate generate --json
+circuit-weaver workflow status ./sensor --json
+circuit-weaver workflow resume ./sensor --json
+```
+
+`workflow resume` executes the saved plan after checking input and artifact
+hashes. The existing `resume <project> --json` only prints a continuation plan;
+add `--execute` to run it. See [Project lifecycle workflows](project-workflows.md)
+for native-stage options, cancellation and the shared Python/MCP interfaces.
+
 ## validate
 
 Validate a canonical or legacy design spec.

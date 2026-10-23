@@ -277,9 +277,7 @@ def _load_project_state_file(path: Path) -> ProjectState | None:
         raise ValueError(f"Project state at {path} must be a JSON object")
     version = int(payload.get("schema_version", 0) or 0)
     if version > STATE_SCHEMA_VERSION:
-        raise ValueError(
-            f"Project state schema {version} is newer than supported schema {STATE_SCHEMA_VERSION}"
-        )
+        raise ValueError(f"Project state schema {version} is newer than supported schema {STATE_SCHEMA_VERSION}")
     return ProjectState.from_dict(payload)
 
 
@@ -555,9 +553,7 @@ def record_generation_state(
             pass
 
     placement_record = (
-        _portable_file_record(root, placement_review, kind="placement_review")
-        if placement_review is not None
-        else None
+        _portable_file_record(root, placement_review, kind="placement_review") if placement_review is not None else None
     )
     if placement_record is not None:
         workflow["placement_review"] = placement_record["path"]
@@ -595,9 +591,7 @@ def record_generation_state(
         state.current_phase = "generating"
         state.last_error = ""
         retry = f"circuit-weaver generate {quoted_spec} -o {quoted_output}" if quoted_spec else ""
-        state.next_actions = [
-            action for action in (f"circuit-weaver status {quoted_root}", retry) if action
-        ]
+        state.next_actions = [action for action in (f"circuit-weaver status {quoted_root}", retry) if action]
     elif phase == "failed":
         state.status = "generation_failed"
         state.current_phase = "generation_failed"
@@ -672,9 +666,7 @@ def _inventory(root: Path) -> dict[str, Any]:
     }
 
 
-def _merge_recorded_source_inventory(
-    inventory: dict[str, Any], state: ProjectState | None
-) -> dict[str, Any]:
+def _merge_recorded_source_inventory(inventory: dict[str, Any], state: ProjectState | None) -> dict[str, Any]:
     """Include non-copied external import sources in user-facing file counts."""
     if state is None:
         return inventory
@@ -843,9 +835,7 @@ def _recovery_actions(root: Path, state: ProjectState, status: str) -> list[str]
         if status == "source_missing":
             import_source = str((state.workflow.get("import") or {}).get("source", ""))
             if import_source:
-                return [
-                    f'circuit-weaver import-design "{import_source}" --project-dir {quoted_root} --force'
-                ]
+                return [f'circuit-weaver import-design "{import_source}" --project-dir {quoted_root} --force']
             return [f"circuit-weaver status {quoted_root}"]
         return [f"circuit-weaver analyze-design {quoted_root} --force"]
     if source and output:
@@ -907,6 +897,93 @@ def _next_actions(root: Path, kind: str, status: str) -> list[str]:
     return [f"circuit-weaver status {quoted}", f'circuit-weaver validate "{spec}"']
 
 
+def _workflow_projection(root: Path, state: ProjectState | None) -> dict[str, Any]:
+    """Project native checkpoints onto status without inventing completion."""
+    if state is None or not isinstance(state.workflow.get("runner"), dict):
+        return {}
+    run = state.workflow["runner"]
+    generation_updated = str((state.workflow.get("generate") or {}).get("updated_at", ""))
+    if generation_updated and generation_updated > str(run.get("updated_at", "")):
+        return {}
+    stages = run.get("stages", {})
+    stage = run.get("current_stage") or run.get("last_completed_stage")
+    if not stage:
+        stage = next(
+            (
+                key
+                for key in reversed(("validate", "generate", "build", "place", "route", "preview"))
+                if stages.get(key, {}).get("status") == "completed"
+            ),
+            None,
+        )
+    status = run.get("status", "idle")
+    quoted = f'"{root}"'
+    actions = [f"circuit-weaver workflow status {quoted}"]
+    if status == "running":
+        actions.append(f"circuit-weaver workflow cancel {quoted}")
+        return {
+            "status": "cancellation_requested" if run.get("cancel_requested") else "in_progress",
+            "current_phase": str(stage or "workflow_running"),
+            "next_actions": actions,
+            "last_error": "",
+        }
+    invalidated = []
+    for key, checkpoint in stages.items():
+        if checkpoint.get("status") != "completed":
+            continue
+        for item in [*checkpoint.get("inputs", []), *checkpoint.get("outputs", [])]:
+            path = Path(item.get("path", ""))
+            if not path.is_absolute():
+                path = root / path
+            try:
+                exists = path.is_file()
+                if exists != item.get("exists", True) or (
+                    exists and (path.stat().st_size != item.get("size") or file_sha256(path) != item.get("sha256"))
+                ):
+                    invalidated.append(key)
+                    break
+            except OSError:
+                invalidated.append(key)
+                break
+    if invalidated:
+        return {
+            "status": "workflow_stale",
+            "current_phase": "checkpoint_invalidated",
+            "last_error": "Checkpoint inputs or artifacts changed: " + ", ".join(sorted(set(invalidated))),
+            "next_actions": [*actions, f"circuit-weaver workflow plan {quoted}"],
+        }
+    if status == "failed":
+        error = run.get("last_error") or stages.get(stage, {}).get("error") or "Workflow stage failed"
+        return {
+            "status": "workflow_failed",
+            "current_phase": f"{stage or 'workflow'}_failed",
+            "last_error": str(error.get("message", error)) if isinstance(error, dict) else str(error),
+            "next_actions": [*actions, f"circuit-weaver workflow resume {quoted}"],
+        }
+    if status == "cancelled":
+        return {
+            "status": "cancelled",
+            "current_phase": "workflow_cancelled",
+            "last_error": "",
+            "next_actions": [*actions, f"circuit-weaver workflow resume {quoted}"],
+        }
+    if status == "planned":
+        return {
+            "status": "ready",
+            "current_phase": "workflow_planned",
+            "last_error": "",
+            "next_actions": [*actions, f"circuit-weaver workflow run {quoted}"],
+        }
+    if stage:
+        return {
+            "status": "workflow_completed" if status == "completed" else "stage_completed",
+            "current_phase": f"{stage}_completed",
+            "last_error": "",
+            "next_actions": actions,
+        }
+    return {}
+
+
 def get_project_state_summary(target: str | Path) -> dict[str, Any]:
     """Return reconciled state without requiring a manifest to already exist."""
 
@@ -920,20 +997,16 @@ def get_project_state_summary(target: str | Path) -> dict[str, Any]:
     state = _load_project_state_file(project_state_path(root))
     inventory = _merge_recorded_source_inventory(_inventory(root), state)
     validation = _read_validation_state(root)
-    kind = state.kind if state is not None else (
-        "circuit_weaver" if inventory["design_specs"] else "kicad_native"
-    )
+    kind = state.kind if state is not None else ("circuit_weaver" if inventory["design_specs"] else "kicad_native")
     reconciliation = _reconciliation(root, state)
     status = _reconciled_status(_derived_status(state, inventory, validation), state, reconciliation)
     if state is not None and reconciliation["dirty"]:
         actions = _recovery_actions(root, state, status)
     else:
         actions = (
-            list(state.next_actions)
-            if state is not None and state.next_actions
-            else _next_actions(root, kind, status)
+            list(state.next_actions) if state is not None and state.next_actions else _next_actions(root, kind, status)
         )
-    return {
+    summary = {
         "project_root": str(root),
         "state_file": str(project_state_path(root)),
         "has_manifest": state is not None,
@@ -952,6 +1025,9 @@ def get_project_state_summary(target: str | Path) -> dict[str, Any]:
         "last_error": state.last_error if state is not None else "",
         "next_actions": actions,
     }
+    if not reconciliation["dirty"]:
+        summary.update(_workflow_projection(root, state))
+    return summary
 
 
 def resume_project(target: str | Path) -> dict[str, Any]:

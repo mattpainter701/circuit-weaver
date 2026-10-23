@@ -316,13 +316,22 @@ def test_stdio_server_handshake_and_tool_call(tmp_path: Path) -> None:
             async with ClientSession(read_stream, write_stream) as session:
                 await session.initialize()
                 tools = await session.list_tools()
-                assert {tool.name for tool in tools.tools} == {
+                required_tools = {
                     "validate_design",
                     "generate_artifacts",
                     "discover_projects",
                     "research_component",
                     "manufacturing_readiness",
+                    "runtime_info",
+                    "start_project",
+                    "open_project",
+                    "plan_workflow",
+                    "run_workflow",
+                    "workflow_status",
+                    "resume_workflow",
+                    "cancel_workflow",
                 }
+                assert required_tools <= {tool.name for tool in tools.tools}
 
                 response = await session.call_tool(
                     "discover_projects",

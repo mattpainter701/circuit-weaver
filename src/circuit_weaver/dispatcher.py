@@ -3676,6 +3676,9 @@ def _handle_repair_command(args: argparse.Namespace) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Transactional MVP workflow for circuit_weaver")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    from .workflow_cli import add_parsers as add_workflow_parsers
+
+    add_workflow_parsers(subparsers)
 
     validate_p = subparsers.add_parser("validate", help="Validate a canonical/legacy design spec")
     validate_p.add_argument("spec", help="Path to YAML/JSON design spec")
@@ -3929,6 +3932,10 @@ def main() -> None:
     resume_p = subparsers.add_parser("resume", help="Reconcile an interrupted project and print a restart plan")
     resume_p.add_argument("project", help="Project directory, manifest, design spec, or KiCad project path")
     resume_p.add_argument("--json", dest="json_output", action="store_true", default=False)
+    resume_p.add_argument("--execute", action="store_true", help="Execute the verified saved workflow plan")
+    from .workflow_cli import json_options
+
+    resume_p.add_argument("--options-json", type=json_options)
 
     wizard_p = subparsers.add_parser(
         "design-wizard",
@@ -4487,6 +4494,19 @@ def main() -> None:
     verify_p.add_argument("plan", help="Signed repair plan JSON")
     verify_p.add_argument("--output", "-o", help="Write the verification result JSON")
     args = parser.parse_args()
+    if args.command in {"start", "open", "workflow", "runtime-info"} or (
+            args.command == "resume" and args.execute):
+        from .workflow_cli import dispatch as dispatch_workflow
+
+        try:
+            # Engine diagnostics must not corrupt the one JSON result written
+            # by this adapter, including generation inside a shared workflow.
+            with contextlib.redirect_stdout(sys.stderr):
+                result = dispatch_workflow(args)
+        except (OSError, ValueError) as exc:
+            result = {"ok": False, "status": "error", "error": {"code": "invalid_request", "message": str(exc)}}
+        _print_json(result)
+        raise SystemExit(0 if result.get("ok", result.get("status") != "error") else 1)
 
     # Task 159: every CLI subcommand gets a circuit-weaver.log in the
     # project directory (unless it's a read-only/administrative command
@@ -5396,58 +5416,70 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
 
     if args.command == "build-pcb":
         from .schematic_pcb import schematic_to_pcb
+        from .workflow_cli import native_stage
 
-        result = _run_with_stderr_capture(lambda: schematic_to_pcb(
+        result = native_stage(
+            "build", args.schematic, args.output, vars(args), lambda: _run_with_stderr_capture(lambda: schematic_to_pcb(
             args.schematic, args.output, width_mm=args.width, height_mm=args.height,
             clearance_mm=args.clearance, minimum_drill_mm=args.minimum_drill,
             overwrite=args.overwrite, kicad_python_path=args.kicad_python_path,
-        ))
+        )))
         _print_json(result)
         raise SystemExit(0 if result["status"] == "ok" else 1)
 
     if args.command == "preview-pcb":
+        from .workflow_cli import native_stage
+
         if args.appearance == "assembly":
             from .pcb_assembly_preview import render_board_assembly
 
-            result = _run_with_stderr_capture(lambda: render_board_assembly(
+            result = native_stage(
+                "preview", args.kicad_pcb, args.output, vars(args),
+                lambda: _run_with_stderr_capture(lambda: render_board_assembly(
                 args.kicad_pcb, args.output, kicad_cli=args.kicad_cli_path, side=args.side,
                 timeout_seconds=args.timeout, overwrite=args.overwrite,
-            ))
+            )))
             _print_json(result)
             raise SystemExit(0 if result["status"] == "ok" else 1)
 
         from .pcb_preview import render_board_preview
 
-        result = _run_with_stderr_capture(lambda: render_board_preview(
-            args.kicad_pcb, args.output, side=args.side, timeout_seconds=args.timeout,
-            overwrite=args.overwrite, kicad_cli=args.kicad_cli_path, kicad_python_path=args.kicad_python_path,
-        ))
-        if result["status"] == "ok" and args.render_3d:
-            from .pcb_model_preview import render_board_model
-
-            result["model_preview"] = _run_with_stderr_capture(lambda: render_board_model(
-                args.kicad_pcb, Path(args.output).with_suffix(".png"), side=args.side,
-                timeout_seconds=args.timeout, overwrite=args.overwrite, kicad_cli=args.kicad_cli_path,
+        def render_requested_preview():
+            result = _run_with_stderr_capture(lambda: render_board_preview(
+                args.kicad_pcb, args.output, side=args.side, timeout_seconds=args.timeout,
+                overwrite=args.overwrite, kicad_cli=args.kicad_cli_path, kicad_python_path=args.kicad_python_path,
             ))
-            if result["model_preview"]["status"] != "ok":
-                result["status"] = "error"
-                model_error = (
-                    result["model_preview"].get("message")
-                    or result["model_preview"].get("reason", "unknown error")
-                )
-                result["message"] = "SVG generated, but requested model preview failed: " + str(model_error)
+            if result["status"] == "ok" and args.render_3d:
+                from .pcb_model_preview import render_board_model
+
+                result["model_preview"] = _run_with_stderr_capture(lambda: render_board_model(
+                    args.kicad_pcb, Path(args.output).with_suffix(".png"), side=args.side,
+                    timeout_seconds=args.timeout, overwrite=args.overwrite, kicad_cli=args.kicad_cli_path,
+                ))
+                if result["model_preview"]["status"] != "ok":
+                    result["status"] = "error"
+                    model_error = (
+                        result["model_preview"].get("message")
+                        or result["model_preview"].get("reason", "unknown error")
+                    )
+                    result["message"] = "SVG generated, but requested model preview failed: " + str(model_error)
+            return result
+
+        result = native_stage("preview", args.kicad_pcb, args.output, vars(args), render_requested_preview)
         _print_json(result)
         raise SystemExit(0 if result["status"] == "ok" else 1)
 
     if args.command == "place-pcb":
         from .pcb_layout import place_pcb
+        from .workflow_cli import native_stage
 
-        result = _run_with_stderr_capture(lambda: place_pcb(
+        result = native_stage(
+            "place", args.kicad_pcb, args.output, vars(args), lambda: _run_with_stderr_capture(lambda: place_pcb(
             args.kicad_pcb, args.output, iterations=args.iterations, seed=args.seed,
             overwrite=args.overwrite, kicad_python_path=args.kicad_python_path,
             design_spec=_load_spec_file(args.design) if args.design else None,
             tidy_references=args.tidy_references,
-        ))
+        )))
         _print_json(result)
         raise SystemExit(0 if result["status"] == "ok" else 1)
 
@@ -5509,8 +5541,10 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
 
     if args.command == "autoroute":
         from .autoroute import autoroute_pcb
+        from .workflow_cli import native_stage
 
-        result = _run_with_stderr_capture(
+        result = native_stage(
+            "route", args.kicad_pcb, args.routed_board or args.output, vars(args), lambda: _run_with_stderr_capture(
             lambda: autoroute_pcb(
                 args.kicad_pcb,
                 output_path=args.output,
@@ -5531,7 +5565,7 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
                 kicad_python_path=args.kicad_python_path,
                 routed_board_path=args.routed_board,
             )
-        )
+        ))
 
         _print_json(result)
         if result["status"] == "ok":

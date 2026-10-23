@@ -23,6 +23,68 @@ All platforms follow the same design flow — just different UI for user input.
 
 ## Domain Routing
 
+## Start, Open, and Resume Projects (First Route)
+
+For every request to start, open, continue, or resume a project, first identify the
+runtime that will perform the work. Use the installed `circuit-weaver` command
+when available; otherwise use the explicitly selected Python interpreter with
+`-m circuit_weaver`. Run `runtime-info --json` (or `python -m circuit_weaver
+runtime-info --json`) and report its installed version, declared capabilities,
+and any discovered native-tool paths. Treat KiCad, Java/Freerouting, and
+optional-library paths as candidates only: this probe does not run tool-version
+checks or verify KiCad Python `pcbnew`. Do not claim those executables, APIs, or
+libraries work until the relevant operation checks them successfully.
+
+Discover the current working directory with the platform's shell and run
+`circuit-weaver discover --root <cwd> --json` (or the matching explicit Python
+command). Offer the discovered projects plus a choice to browse to another
+directory, create a new project, or start from a detected sample. Never assume
+the agent process is already in the user's project directory. Once a project is
+selected, use the same project path for every operation below and for the
+interactive CLI (`circuit-weaver` with no subcommand), Python CLI, or MCP.
+
+Use the shared project lifecycle commands:
+
+```text
+circuit-weaver start <absolute-project-dir> [--spec <yaml>] [--name <name>] --json
+circuit-weaver open <absolute-project-or-source-path> --json
+circuit-weaver workflow plan <absolute-project-dir> [--stages validate generate build place route preview] --json
+circuit-weaver workflow run <absolute-project-dir> [--stages ...] --json
+circuit-weaver workflow status <absolute-project-dir> --json
+circuit-weaver workflow resume <absolute-project-dir> --json
+circuit-weaver workflow cancel <absolute-project-dir> --json
+circuit-weaver resume <absolute-project-dir> --json
+circuit-weaver resume <absolute-project-dir> --execute --json
+```
+
+Use the explicitly selected Python executable in place of `circuit-weaver` when
+the installed command is missing or could resolve to a different environment.
+The equivalent module form is `& $python -m circuit_weaver ...` in PowerShell
+or `"$python" -m circuit_weaver ...` in POSIX shells. `workflow resume` and
+the Python/MCP `resume_workflow` execute the verified saved workflow from its
+first incomplete stage. The legacy top-level `resume` command prints a plan by
+default; add `--execute` only when the user asked to continue execution.
+Reconcile status and file hashes before retrying work.
+Stages are checkpointed and resumable. Cancellation takes effect at a stage
+boundary. A successful stage means only what its evidence records: planning,
+preview, or placement does not claim a completed native KiCad build or route.
+Never imply manufacture approval from a workflow status.
+
+For MCP, call `runtime_info` first and use the same explicit interpreter to
+launch `python -m circuit_weaver.mcp_server`. Invoke `start_project`,
+`open_project`, `plan_workflow`, `run_workflow`, `workflow_status`,
+`resume_workflow`, and `cancel_workflow` with explicit absolute project paths.
+`resume_workflow` executes the verified saved plan; call `plan_workflow` for a
+non-executing plan. Pass specs and options as JSON objects and stage selections
+as JSON string arrays. MCP registration is a separate client configuration step; installing
+Circuit Weaver or its agent skill does not register the server. See
+[`docs/project-workflows.md`](../../docs/project-workflows.md) for signatures,
+examples, checkpoint behavior, and the installation/registration distinction.
+
+Only after the project route is selected should a new-design request enter the
+interactive wizard below. Existing projects should resume through the shared
+lifecycle interface before invoking focused commands.
+
 Do **not** treat the absence of built-in topology coverage as evidence that a design
 domain is unsupported.
 

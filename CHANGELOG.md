@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Share project start/open, planning, execution and verified resume across the CLI, Python API, MCP server and agent skill. Record real stage outcomes and artifact hashes, reject changed inputs and conflicting outputs, and expose responsive status and boundary cancellation without reporting unfinished native work as complete.
+- Restore directory-based terminal discovery and report the exact package, interpreter, bundled skill and MCP launch command. Safely migrate recognized legacy skills while preserving customized installations, and audit client configuration without revealing secret arguments.
 - Reserve native pad and body geometry as well as authored courtyards during automatic placement, preventing undersized custom courtyards from hiding physical overlaps. Preserve larger courtyards, asymmetric footprint origins and native DRC rejection.
 - Restore authored project and design-rule files after native board creation, preventing KiCad's fresh defaults from replacing source netclasses or rule severities before DRC. Preserve declared prototype clearance/drill assumptions only where the source permits them, and verify settings remain unchanged through validation.
 - Preserve numbered non-plated holes whose schematic pins are explicitly typed and annotated as no-connect. Accommodate KiCad clearing their bookkeeping numbers while verifying every hole's geometry and lack of net metadata before and after save/reload; connected pins remain blocking.

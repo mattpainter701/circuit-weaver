@@ -27,7 +27,8 @@ from pathlib import Path, PureWindowsPath
 from typing import Any, Mapping
 
 _MANIFEST_NAME = ".circuit-weaver-install.json"
-_MANIFEST_SCHEMA = 1
+_MANIFEST_SCHEMA = 2
+_SUPPORTED_MANIFEST_SCHEMAS = {1, _MANIFEST_SCHEMA}
 _WINDOWS_INVALID_MANAGED_CHARS = frozenset('<>:"|?*')
 _WINDOWS_RESERVED_MANAGED_NAMES = {
     "CON",
@@ -231,7 +232,7 @@ def _read_manifest(skill_dir: Path, skill_name: str) -> dict[str, str] | None:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    if payload.get("schema") != _MANIFEST_SCHEMA or payload.get("skill") != skill_name:
+    if payload.get("schema") not in _SUPPORTED_MANIFEST_SCHEMAS or payload.get("skill") != skill_name:
         return None
     files = payload.get("files")
     if not isinstance(files, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in files.items()):
@@ -242,6 +243,12 @@ def _read_manifest(skill_dir: Path, skill_name: str) -> dict[str, str] | None:
 
 
 def _package_version() -> str:
+    try:
+        from . import __version__
+
+        return __version__
+    except ImportError:
+        pass
     try:
         return importlib_metadata.version("circuit-weaver")
     except importlib_metadata.PackageNotFoundError:
@@ -261,6 +268,11 @@ def _write_manifest(skill_dir: Path, skill_name: str, hashes: Mapping[str, str])
         "schema": _MANIFEST_SCHEMA,
         "skill": skill_name,
         "package_version": _package_version(),
+        "python_executable": str(Path(os.sys.executable).resolve()),
+        "python_version": os.sys.version.split()[0],
+        "package_location": str(Path(__file__).resolve().parent),
+        "cli_command": [str(Path(os.sys.executable).resolve()), "-m", "circuit_weaver"],
+        "mcp_command": [str(Path(os.sys.executable).resolve()), "-m", "circuit_weaver.mcp_server"],
         "source_fingerprint": _source_fingerprint(hashes),
         "files": dict(sorted(hashes.items())),
     }
@@ -298,6 +310,8 @@ def _legacy_baseline(
     source_hashes: Mapping[str, str],
 ) -> dict[str, str] | None:
     """Recognize the previous manifest-less release without trusting unknown files."""
+    if existing_dir.is_symlink():
+        return None
     try:
         installed_md = _managed_target(existing_dir, "SKILL.md")
     except _UnsafeManagedPath:
@@ -308,6 +322,20 @@ def _legacy_baseline(
         recognized_hashes.add(source_hashes["SKILL.md"])
     if installed_md_hash not in recognized_hashes:
         return None
+
+    # A known SKILL.md alone does not establish ownership of other files.
+    # Migrate only when every existing distributable file is an exact current
+    # source match; unknown or customized files remain untouched as conflicts.
+    for path in existing_dir.rglob("*"):
+        if path.is_symlink():
+            return None
+        if not path.is_file() or path.name == _MANIFEST_NAME:
+            continue
+        relative = path.relative_to(existing_dir).as_posix()
+        if relative == "SKILL.md":
+            continue
+        if relative not in source_hashes or _file_hash(path) != source_hashes[relative]:
+            return None
 
     baseline = {"SKILL.md": installed_md_hash}
     for relative, source_hash in source_hashes.items():
@@ -331,6 +359,7 @@ def _copy_skill(
     force: bool = False,
     backup: bool = False,
     dry_run: bool = False,
+    legacy_source_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Install or safely upgrade one skill and return a structured outcome."""
     src_skill = src_dir / skill_name
@@ -347,7 +376,25 @@ def _copy_skill(
     clean_source_hashes: dict[str, str] = {key: value for key, value in source_hashes.items() if value is not None}
 
     legacy_dir: Path | None = None
+    if legacy_source_dir is not None and legacy_source_dir.is_symlink():
+        return {
+            "status": "conflict",
+            "reason": "legacy skill directory is a symlink; resolve manually",
+            "dest": str(dest_skill / "SKILL.md"),
+            "conflicts": [str(legacy_source_dir)],
+        }
+    if legacy_source_dir is not None and legacy_source_dir.exists():
+        if dest_skill.exists():
+            return {
+                "status": "conflict",
+                "reason": "both canonical and legacy skill directories exist; resolve manually",
+                "dest": str(dest_skill / "SKILL.md"),
+                "conflicts": [str(legacy_source_dir)],
+            }
+        legacy_dir = legacy_source_dir
     for alias in _LEGACY_SKILL_DIR_ALIASES.get(skill_name, ()):
+        if legacy_dir is not None:
+            break
         candidate = dest_platform_dir / alias
         if not candidate.exists():
             continue
@@ -378,8 +425,7 @@ def _copy_skill(
             return {
                 "status": "conflict",
                 "reason": (
-                    "destination has no recognized Circuit Weaver provenance; "
-                    "use --force to overwrite managed files"
+                    "destination has no recognized Circuit Weaver provenance; " "use --force to overwrite managed files"
                 ),
                 "dest": str(existing_dir / "SKILL.md"),
                 "conflicts": [str(existing_dir / "SKILL.md")],
@@ -568,6 +614,11 @@ def install_skills(
                 force=force,
                 backup=backup,
                 dry_run=dry_run,
+                legacy_source_dir=(
+                    _PLATFORM_DETECT_ALIASES.get("codex", ())[0] / "skills" / skill_name
+                    if platform == "codex" and _PLATFORM_DETECT_ALIASES.get("codex")
+                    else None
+                ),
             )
             status = outcome["status"]
             if status == "installed":
@@ -618,7 +669,6 @@ def install_skills(
         prefix = "Would install" if dry_run else "Installed"
         unchanged_note = f" ({total_unchanged} already up to date)" if total_unchanged else ""
         result["message"] = (
-            f"{prefix} {total_installed} skills to "
-            f"{len(selected_platforms)} platform(s){unchanged_note}"
+            f"{prefix} {total_installed} skills to " f"{len(selected_platforms)} platform(s){unchanged_note}"
         )
     return result

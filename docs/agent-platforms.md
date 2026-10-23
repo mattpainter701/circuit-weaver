@@ -65,12 +65,20 @@ pip install "circuit-weaver[mcp]"
 circuit-weaver-mcp
 ```
 
-The server exposes five tools: `validate_design`, `generate_artifacts`,
-`discover_projects`, `research_component`, and `manufacturing_readiness`.
-These tools cover focused operations; they do not run the conversational
-design wizard or provide the full CLI project lifecycle. Use the `circuit-weaver`
-agent skill or CLI for end-to-end design, import, analysis, resume, and
-manufacturing workflows. Installing skills does not configure an MCP client.
+The 13-tool server retains the focused tools `validate_design`, `generate_artifacts`,
+`discover_projects`, `research_component`, and `manufacturing_readiness`, plus
+`runtime_info` and the shared project lifecycle tools `start_project`,
+`open_project`, `plan_workflow`, `run_workflow`, `workflow_status`,
+`resume_workflow`, and `cancel_workflow`. The lifecycle tools require explicit
+absolute project paths; specs and options are JSON objects and stage selections
+are JSON arrays. Calls are synchronous request/response operations: a run tool
+returns after its selected stages finish or fail. `resume_workflow` executes the
+verified saved workflow; `plan_workflow` inspects without executing.
+`cancel_workflow` records a request that the runner observes at a stage
+boundary. The MCP server does not run the conversational design wizard.
+Installing skills does not configure an MCP client. See
+[`project-workflows.md`](project-workflows.md) for the lifecycle API and
+checkpoint behavior.
 
 `validate_design` defaults to `detail_level="summary"`. It preserves validity,
 category counts, every finding and evidence ID, but omits the embedded evidence

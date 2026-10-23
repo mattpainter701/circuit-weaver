@@ -33,7 +33,17 @@ Circuit Weaver supports **describe the design → validate → generate KiCad ar
 
 Circuit Weaver is an **alpha tool for engineering prototypes**. The 0.37.0 workflow corpus covers all 13 shipped samples and three connected mixed-signal boards with 149, 155 and 145 physical parts. Each passes 16 stages, including native routing, DRC, assembled model previews and a real MCP session. These are finite regression fixtures; passing them does not establish arbitrary-circuit electrical correctness or fabrication readiness.
 
-Claude Code, Codex and OpenCode can use the packaged agent skills and CLI. The optional MCP server exposes five focused tools rather than the entire CLI lifecycle. Installer and MCP tests do not constitute a fresh end-to-end test inside every agent client; see [agent platform support](docs/agent-platforms.md).
+Claude Code, Codex and OpenCode can use the packaged agent skills, CLI and optional MCP server. MCP retains its five focused validation and discovery tools and adds runtime inspection plus checkpointed project lifecycle tools. Workflow execution is a synchronous request/response operation; cancellation is observed at stage boundaries. Installer and MCP tests do not constitute a fresh end-to-end test inside every agent client; see [agent platform support](docs/agent-platforms.md).
+
+| Project workflow need | CLI | MCP | Behavior |
+|-|-|-|-|
+| Check the installed interpreter, capabilities and skill state | `runtime-info --json` | `runtime_info` | Read-only preflight |
+| Discover or start a project | `discover --root <dir> --json`, `start <dir> --json` | `discover_projects`, `start_project` | Project paths are explicit for lifecycle operations |
+| Open, inspect, and plan work | `open <path> --json`, `workflow plan <dir> --json` | `open_project`, `workflow_status`, `plan_workflow` | Planning does not execute stages |
+| Execute or continue checkpointed work | `workflow run <dir>`, `workflow resume <dir>` | `run_workflow`, `resume_workflow` | Stages are validate, generate, build, place, route, preview; checkpoints use input and artifact hashes |
+| Request cancellation | `workflow cancel <dir>` | `cancel_workflow` | Cancellation takes effect at the next stage boundary |
+
+See the [project workflow guide](docs/project-workflows.md) for runtime selection, Python functions, MCP configuration, and checkpoint semantics. These tools report only the evidence their completed stages actually produced; they do not grant manufacturing approval.
 
 RF research and circuit-generation assistance are available, but controlled-impedance routing, matching networks, antenna performance and RF stability require separate engineering verification. Native DRC and a rendered board are not evidence of RF performance. Review the [automation validation guide](docs/automation-validation.md) for prerequisites, evidence and prototype delivery gates.
 
