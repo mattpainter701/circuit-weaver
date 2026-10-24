@@ -127,7 +127,8 @@ class _Board:
     def BuildConnectivity(self):
         pass
     def GetConnectivity(self):
-        return SimpleNamespace(GetConnectedPads=lambda _: [], GetConnectedTracks=lambda _: [])
+        return SimpleNamespace(GetConnectedPads=lambda _: [], GetConnectedTracks=lambda _: [],
+                               GetConnectedItems=lambda _: [])
     def GetFootprints(self):
         return []
 
@@ -211,7 +212,8 @@ def test_saved_report_includes_unconnected_pads_by_net(monkeypatch):
         return [SimpleNamespace(
             GetReference=lambda: "J1",
             Pads=lambda: [SimpleNamespace(
-                GetNetname=lambda: "GND", GetNumber=lambda: "1", IsConnected=lambda: False
+                GetNetname=lambda: "GND", GetNumber=lambda: "1", IsConnected=lambda: True,
+                m_Uuid=SimpleNamespace(AsString=lambda: "pad-1")
             )],
         )]
 

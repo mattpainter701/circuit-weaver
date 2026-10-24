@@ -115,6 +115,13 @@ verifies selected zone layers, saved fill geometry and connectivity. These
 reports record copper count/order and zone results only; they do not define
 dielectric materials or thicknesses, or qualify impedance.
 
+Pre-route plane reports list pads whose native connectivity cluster does not
+reach a filled zone on that net; opens remain pending work. After routing,
+the runner requires native DRC with zero opens, fresh saved plane fills,
+positive copper anchors, and no pending plane-net pad attachments. Plane
+creation currently requires a rectangular outline and no existing zones;
+saved-fill verification accepts single-layer copper zones.
+
 | Option | Native routing flag | Accepted values |
 | --- | --- | --- |
 | `copper_layers` | `build-pcb --copper-layers` | Integer `2` or `4`; default `2` |

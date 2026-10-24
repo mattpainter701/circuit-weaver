@@ -82,13 +82,65 @@ def _trace_route(graph, row):
             "trace_only_vias": int(route["vias"])}
 
 
+def _native_item_id(item):
+    try:
+        value = item.m_Uuid.AsString()
+    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        raise ValueError("native connectivity item UUID is unavailable") from exc
+    if not isinstance(value, str) or not value:
+        raise ValueError("native connectivity item UUID is empty or invalid")
+    return value
+
+
+def _unconnected_plane_pads_by_net(board, nets, *, rebuild=True):
+    """Find pads whose native transitive cluster reaches no filled net zone.
+
+    BOARD_ITEM.IsConnected() is a type test, not a graph query. KiCad's
+    GetConnectedItems() searches connectivity clusters with zones included.
+    Cache pad members of each result so a routed net needs one native search.
+    Final whole-board DRC separately rejects opens between distinct clusters.
+    """
+    if rebuild:
+        board.BuildConnectivity()
+    connectivity = board.GetConnectivity()
+    search = getattr(connectivity, "GetConnectedItems", None)
+    if not callable(search):
+        raise ValueError("native transitive connectivity query is unavailable")
+    result = {net: [] for net in nets}
+    zone_ids = {net: set() for net in result}
+    for zone in board.Zones():
+        net = str(zone.GetNetname())
+        if (net in zone_ids and not zone.GetIsRuleArea()
+                and str(zone.GetLayerName()).endswith(".Cu") and zone.IsFilled()
+                and zone.HasFilledPolysForLayer(zone.GetLayer())):
+            zone_ids[net].add(_native_item_id(zone))
+    cached = {net: {} for net in result}
+    pad_ids = set()
+    for footprint in board.GetFootprints():
+        for pad in footprint.Pads():
+            net = str(pad.GetNetname())
+            if net not in result:
+                continue
+            pad_id = _native_item_id(pad)
+            if pad_id in pad_ids:
+                raise ValueError("native pad connectivity identities are not unique")
+            pad_ids.add(pad_id)
+            if pad_id not in cached[net]:
+                members = list(search(pad))
+                same_net = [item for item in members if str(item.GetNetname()) == net]
+                ids = {_native_item_id(item) for item in same_net}
+                attached = bool(ids & zone_ids[net])
+                cached[net][pad_id] = attached
+                for item in same_net:
+                    if str(item.GetClass()) == "PAD":
+                        cached[net][_native_item_id(item)] = attached
+            if not cached[net][pad_id]:
+                result[net].append(f"{footprint.GetReference()}.{pad.GetNumber()}")
+    return {net: sorted(pads) for net, pads in result.items()}
+
+
 def _connected_ground_pads(board, net, *, allow_unconnected=False):
-    board.BuildConnectivity()
-    unconnected = []
-    for fp in board.GetFootprints():
-        for pad in fp.Pads():
-            if str(pad.GetNetname()) == str(net) and not pad.IsConnected():
-                unconnected.append(f"{fp.GetReference()}.{pad.GetNumber()}")
+    unconnected = _unconnected_plane_pads_by_net(board, [str(net)])[str(net)]
     if unconnected and not allow_unconnected:
         raise ValueError("filled ground plane leaves pads unconnected: " + ", ".join(unconnected))
     return unconnected

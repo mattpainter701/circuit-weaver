@@ -240,16 +240,15 @@ def _verify_saved_imported_zones(board, pcbnew, report):
             "rows", "fillable_zone_count", "keepout_zone_count", "non_copper_zone_count")}:
         raise ValueError("saved SES zone-fill geometry differs from fresh native refill")
     connected = _zone_connected_counts(board)
-    # _zone_connected_counts rebuilt connectivity once. Inspect every pad once,
-    # rather than rebuilding it for every net on a large board.
-    unconnected_pads_by_net = {row["net"]: [] for row in saved_fill_state["rows"]}
-    for footprint in board.GetFootprints():
-        for pad in footprint.Pads():
-            net = str(pad.GetNetname())
-            if net in unconnected_pads_by_net and not pad.IsConnected():
-                unconnected_pads_by_net[net].append(f"{footprint.GetReference()}.{pad.GetNumber()}")
-    for pads in unconnected_pads_by_net.values():
-        pads.sort()
+    try:
+        from ._native_ground_plane import _unconnected_plane_pads_by_net
+    except ImportError:  # Standalone import from KiCad's bundled Python.
+        from _native_ground_plane import _unconnected_plane_pads_by_net
+    # _zone_connected_counts already rebuilt connectivity. Native cluster
+    # membership, rather than the BOARD_ITEM type flag, proves plane attachment.
+    unconnected_pads_by_net = _unconnected_plane_pads_by_net(
+        board, sorted({row["net"] for row in saved_fill_state["rows"]}), rebuild=False,
+    )
     unconnected_ground_pads = unconnected_pads_by_net.get("GND", [])
     report.update({"status": "verified", "saved_fill_geometry_verified": True,
                    "zone_definitions_preserved": True, "copper_stackup_preserved": True,
