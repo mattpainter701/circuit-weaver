@@ -27,10 +27,11 @@ class _Polygons:
 
 
 class _Zone:
-    def __init__(self, uuid="zone-1", net="GND", layer_name="In1.Cu", rule_area=False):
+    def __init__(self, uuid="zone-1", net="GND", layer_name="In1.Cu", rule_area=False, layer_id=2):
         self.m_Uuid = SimpleNamespace(AsString=lambda: uuid)
         self.net = net
         self.layer_name = layer_name
+        self.layer_id = layer_id
         self.rule_area = rule_area
         self.polygons = _Polygons()
 
@@ -38,10 +39,10 @@ class _Zone:
         return self.net
 
     def GetLayer(self):
-        return 2
+        return self.layer_id
 
     def GetLayerSet(self):
-        return _Seq([2])
+        return _Seq([self.layer_id])
 
     def GetLayerName(self):
         return self.layer_name
@@ -119,7 +120,7 @@ class _Board:
         return 4
 
     def GetLayerName(self, layer):
-        return {0: "F.Cu", 2: "In1.Cu", 4: "In2.Cu", 31: "B.Cu"}[layer]
+        return {0: "F.Cu", 2: "In1.Cu", 4: "In2.Cu", 31: "B.Cu", 44: "Dwgs.User"}[layer]
 
     def Zones(self):
         return self.zones
@@ -196,13 +197,28 @@ def test_saved_refill_rejects_changed_fill_geometry(monkeypatch):
 def test_rule_area_and_non_copper_zone_definitions_are_preserved_but_not_filled():
     board = _Board()
     rule_area = _Zone(uuid="keepout-1", rule_area=True)
-    non_copper = _Zone(uuid="graphic-1", layer_name="Dwgs.User")
+    non_copper = _Zone(uuid="graphic-1", layer_name="F.Cu", layer_id=44)
     board.zones.extend([rule_area, non_copper])
     state = worker._zone_fill_state(board, PCBNEW)
     assert state["fillable_zone_count"] == 1
     assert state["keepout_zone_count"] == 1
     assert state["non_copper_zone_count"] == 1
     assert [row["id"] for row in state["rows"]] == ["zone-1"]
+
+
+def test_zone_reports_resolve_layer_name_from_native_layer_id():
+    board = _Board()
+    # KiCad 10's convenience name can incorrectly report F.Cu for an inner zone.
+    board.zone.layer_name = "F.Cu"
+
+    definition = worker._zone_definition_state(board, PCBNEW)
+    fill = worker._zone_fill_state(board, PCBNEW)
+    connected = worker._zone_connected_counts(board)
+
+    assert definition[0]["layer_id"] == 2
+    assert definition[0]["layer_name"] == "In1.Cu"
+    assert fill["rows"][0]["layer_name"] == "In1.Cu"
+    assert connected == [{"id": "zone-1", "connected_copper_count": 0}]
 
 
 def test_saved_report_includes_unconnected_pads_by_net(monkeypatch):

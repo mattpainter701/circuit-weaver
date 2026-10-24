@@ -127,11 +127,13 @@ def _zone_definition_state(board, pcbnew):
         try:
             uuid = str(zone.m_Uuid.AsString())
             outline = zone.Outline().Format(False)
+            layer_id = int(zone.GetLayer())
+            layer_name = str(board.GetLayerName(layer_id))
             row = {
                 "id": uuid,
                 "net": str(zone.GetNetname()),
-                "layer_id": int(zone.GetLayer()),
-                "layer_name": str(zone.GetLayerName()),
+                "layer_id": layer_id,
+                "layer_name": layer_name,
                 "layer_ids": sorted(int(layer) for layer in zone.GetLayerSet().Seq()),
                 "rule_area": _zone_is_rule_area(zone),
                 "outline_sha256": hashlib.sha256(outline.encode("utf-8")).hexdigest(),
@@ -176,14 +178,15 @@ def _zone_fill_state(board, pcbnew):
         if _zone_is_rule_area(zone):
             keepout_count += 1
             continue
-        if not str(zone.GetLayerName()).endswith(".Cu"):
+        layer = int(zone.GetLayer())
+        layer_name = str(board.GetLayerName(layer))
+        if not layer_name.endswith(".Cu"):
             non_copper_count += 1
             continue
-        layer = int(zone.GetLayer())
         if sorted(int(value) for value in zone.GetLayerSet().Seq()) != [layer]:
             raise ValueError("saved fill verification currently requires single-layer copper zones")
         if not zone.IsFilled() or not zone.HasFilledPolysForLayer(layer):
-            raise ValueError(f"zone {zone.GetNetname()} on {zone.GetLayerName()} has no saved fill")
+            raise ValueError(f"zone {zone.GetNetname()} on {layer_name} has no saved fill")
         polygons = zone.GetFilledPolysList(layer)
         polygon_count = int(polygons.OutlineCount())
         islands = sum(bool(zone.IsIsland(layer, index)) for index in range(polygon_count))
@@ -192,7 +195,7 @@ def _zone_fill_state(board, pcbnew):
             raise ValueError("native zone fill has invalid area")
         rows.append({
             "id": str(zone.m_Uuid.AsString()), "net": str(zone.GetNetname()),
-            "layer_name": str(zone.GetLayerName()), "area_mm2": round(area_mm2, 6),
+            "layer_name": layer_name, "area_mm2": round(area_mm2, 6),
             "island_count": islands,
             "polygon_sha256": hashlib.sha256(polygons.Format(False).encode("utf-8")).hexdigest(),
         })
@@ -206,7 +209,8 @@ def _zone_connected_counts(board):
     connectivity = board.GetConnectivity()
     result = []
     for zone in board.Zones():
-        if _zone_is_rule_area(zone) or not str(zone.GetLayerName()).endswith(".Cu"):
+        layer_name = str(board.GetLayerName(int(zone.GetLayer())))
+        if _zone_is_rule_area(zone) or not layer_name.endswith(".Cu"):
             continue
         connected = list(connectivity.GetConnectedPads(zone)) + list(connectivity.GetConnectedTracks(zone))
         count = sum(1 for item in connected

@@ -55,7 +55,7 @@ class Zone(Item):
         return self.polys
 
     def GetLayer(self):
-        return 2
+        return {"F.Cu": 0, "In1.Cu": 4, "In2.Cu": 6, "B.Cu": 2, "F.SilkS": 5}[self.layer]
 
 
 class Footprint:
@@ -93,6 +93,9 @@ class Board:
 
     def GetConnectivity(self):
         return self.connectivity
+
+    def GetLayerName(self, layer):
+        return {0: "F.Cu", 4: "In1.Cu", 6: "In2.Cu", 2: "B.Cu", 5: "F.SilkS"}[layer]
 
     def BuildConnectivity(self):
         self.build_count += 1
@@ -194,3 +197,16 @@ def test_rebuild_false_does_not_rebuild_connectivity():
 
     assert pending(board, rebuild=False) == {"GND": []}
     assert board.build_count == 0
+
+
+@pytest.mark.parametrize("actual_layer,convenience_name,expected", [
+    ("In1.Cu", "F.Fab", []),
+    ("F.SilkS", "F.Cu", ["J1.1"]),
+])
+def test_plane_filter_uses_native_board_layer_identity(actual_layer, convenience_name, expected):
+    pad = Pad("pad-a", "J1", "1")
+    zone = Zone("zone-gnd", layer=actual_layer)
+    zone.GetLayerName = lambda: convenience_name
+    board = Board([pad], [zone], {pad.uuid: [pad, zone]})
+
+    assert pending(board) == {"GND": expected}

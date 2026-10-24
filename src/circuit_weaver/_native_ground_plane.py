@@ -111,7 +111,7 @@ def _unconnected_plane_pads_by_net(board, nets, *, rebuild=True):
     for zone in board.Zones():
         net = str(zone.GetNetname())
         if (net in zone_ids and not zone.GetIsRuleArea()
-                and str(zone.GetLayerName()).endswith(".Cu") and zone.IsFilled()
+                and str(board.GetLayerName(int(zone.GetLayer()))).endswith(".Cu") and zone.IsFilled()
                 and zone.HasFilledPolysForLayer(zone.GetLayer())):
             zone_ids[net].add(_native_item_id(zone))
     cached = {net: {} for net in result}
@@ -171,7 +171,8 @@ def _zone_pad_anchors(board, zone):
     anchors = [item for item in connected if item.GetClass() != "ZONE"
                and str(item.GetNetname()) == str(zone.GetNetname())]
     if not anchors:
-        raise ValueError(f"filled {zone.GetNetname()} zone on {zone.GetLayerName()} has no native copper connection")
+        layer_name = board.GetLayerName(int(zone.GetLayer()))
+        raise ValueError(f"filled {zone.GetNetname()} zone on {layer_name} has no native copper connection")
     return anchors
 
 
