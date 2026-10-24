@@ -41,3 +41,27 @@ def test_native_worker_receives_json_and_only_copies_can_change(tmp_path, monkey
     monkeypatch.setattr(kicad_bridge.subprocess, "run", worker)
     assert kicad_bridge.run_kicad("inspect", board=board, include_route_geometry=True)["status"] == "ok"
     assert board.read_text() == "board source" and settings.read_text() == "source settings"
+
+
+def test_native_worker_has_project_library_and_rejects_new_membership(tmp_path, monkeypatch):
+    board = tmp_path / "board.kicad_pcb"
+    board.write_text("board source")
+    library = tmp_path / "Local.pretty"
+    library.mkdir()
+    (library / "A.kicad_mod").write_text("original footprint")
+    table = tmp_path / "fp-lib-table"
+    table.write_text('(fp_lib_table (lib (name "Local") (type "KiCad") (uri "${KIPRJMOD}/Local.pretty")))')
+    monkeypatch.setattr(kicad_bridge, "find_kicad_python", lambda path: "native-python")
+
+    def worker(command, **options):
+        copied = Path(json.loads(options["input"])["board"])
+        assert (copied.parent / "fp-lib-table").read_bytes() == table.read_bytes()
+        assert (copied.parent / "Local.pretty" / "A.kicad_mod").read_text() == "original footprint"
+        (library / "B.kicad_mod").write_text("new asset while native worker runs")
+        return SimpleNamespace(returncode=0, stdout='CW_KICAD_RESULT={"status":"ok"}\n', stderr="")
+
+    monkeypatch.setattr(kicad_bridge.subprocess, "run", worker)
+    result = kicad_bridge.run_kicad("inspect", board=board)
+    assert result["status"] == "error"
+    assert "context changed" in result["message"]
+    assert board.read_text() == "board source"

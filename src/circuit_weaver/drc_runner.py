@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .evidence import EvidenceLedger, EvidenceSource
+from .kicad_project_context import inspect_project_footprint_context, stage_project_footprint_context
 from .pcb_contracts import PcbConstraint, drc_validation_issue
 from .validator import ValidationIssue
 
@@ -193,6 +194,7 @@ def run_drc(
     constraints: Sequence[PcbConstraint] = (),
     approved_overrides: Mapping[str, str] | None = None,
     timeout: int = 120,
+    project_context: str | Path | None = None,
 ) -> DrcResult:
     """Run DRC on exact board bytes and record the tool result as evidence."""
 
@@ -201,6 +203,12 @@ def run_drc(
         return DrcResult(status="failed", board=str(board_path), failure_reason="board not found")
     original_bytes = board_path.read_bytes()
     board_hash = hashlib.sha256(original_bytes).hexdigest()
+    settings_hashes = {
+        board_path.with_suffix(suffix): (
+            hashlib.sha256(board_path.with_suffix(suffix).read_bytes()).hexdigest()
+            if board_path.with_suffix(suffix).is_file() else None
+        ) for suffix in (".kicad_pro", ".kicad_dru")
+    }
     cli = _kicad_cli_path()
     if cli is None:
         return DrcResult(
@@ -212,13 +220,55 @@ def run_drc(
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as handle:
         report_path = Path(handle.name)
     try:
-        process = subprocess.run(
-            [str(cli), "pcb", "drc", "--format", "json", "--output", str(report_path), str(board_path)],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        with tempfile.TemporaryDirectory(prefix="cw-drc-context-") as folder:
+            stage = Path(folder)
+            staged_board = stage / board_path.name
+            shutil.copy2(board_path, staged_board)
+            if hashlib.sha256(staged_board.read_bytes()).hexdigest() != board_hash:
+                raise ValueError("Board changed while staging DRC")
+            for suffix in (".kicad_pro", ".kicad_dru"):
+                sidecar = board_path.with_suffix(suffix)
+                if sidecar.is_file():
+                    shutil.copy2(sidecar, staged_board.with_suffix(suffix))
+                    staged_hash = hashlib.sha256(staged_board.with_suffix(suffix).read_bytes()).hexdigest()
+                    if staged_hash != settings_hashes[sidecar]:
+                        raise ValueError("Project settings changed while staging DRC")
+            context = Path(project_context).resolve() if project_context is not None else board_path.resolve().parent
+            if context.is_file():
+                context = context.parent
+            context_before = inspect_project_footprint_context(context)
+            stage_project_footprint_context(context, stage)
+            process = subprocess.run(
+                [str(cli), "pcb", "drc", "--format", "json", "--output", str(report_path), str(staged_board)],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+            if staged_board.read_bytes() != original_bytes:
+                return DrcResult(
+                    status="failed", board=str(board_path), board_sha256=board_hash,
+                    failure_reason="kicad-cli mutated the isolated board bytes during DRC",
+                )
+            for original, digest in settings_hashes.items():
+                staged_settings = staged_board.with_suffix(original.suffix)
+                if digest is not None and (
+                    not staged_settings.is_file()
+                    or hashlib.sha256(staged_settings.read_bytes()).hexdigest() != digest
+                ):
+                    raise ValueError("kicad-cli mutated authored project settings during DRC")
+        for original, digest in settings_hashes.items():
+            current = hashlib.sha256(original.read_bytes()).hexdigest() if original.is_file() else None
+            if current != digest:
+                raise ValueError("Source project settings changed during DRC")
+        if inspect_project_footprint_context(context) != context_before:
+            return DrcResult(
+                status="failed",
+                board=str(board_path),
+                board_sha256=board_hash,
+                failure_reason="Project footprint context changed during DRC",
+            )
         if process.returncode != 0:
             detail = (process.stderr or process.stdout or "").strip()
             return DrcResult(

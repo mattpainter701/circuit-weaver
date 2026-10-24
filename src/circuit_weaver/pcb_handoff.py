@@ -730,6 +730,8 @@ def generate_authoritative_board(
                 evidence_ledger=ledger,
                 constraints=constraints,
                 approved_overrides=approved_drc_overrides,
+                **({"project_context": footprint_library._project_root}
+                   if getattr(footprint_library, "_project_root", None) is not None else {}),
             )
             if drc_result.status != "ok":
                 raise PcbDrcBlocked(f"authoritative DRC could not complete: {drc_result.failure_reason}")

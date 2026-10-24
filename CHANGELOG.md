@@ -6,6 +6,7 @@
 - Add time-window voltage/current acceptance, time-weighted transient means and structured pulsed current sources, with distinct IoT input, industrial current-burden and transmitter bias regression circuits.
 - Seed large assemblies by connected owner/support families and authored functional groups, using compact tiles and natural routing channels while preserving fixed and edge constraints. Bound high fanout seed graphs with a deterministic sparse cycle that retains every owner.
 - Keep native tool probes separate from MCP protocol input, allowing KiCad review to run reliably through real stdio clients.
+- Preserve declared project-local footprint libraries through native staging and DRC, bind generated schematic builds to the explicit circuit directory, and invalidate placement/routing checkpoints when library content or membership changes.
 
 - Keep explicitly selected circuit directories separate from unrelated ancestor state. Preserve recorded source/output ownership and canonical generated output folders, and checkpoint separately requested native outputs in their own directory.
 - Add explicit adoption of existing circuit directories without rewriting their sources, plus shared bounded routing controls. Keep untracked `open` inspection read-only and preserve hash-based resume checks.

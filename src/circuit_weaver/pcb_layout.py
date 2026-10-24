@@ -16,6 +16,7 @@ from .component_db import ComponentDef, PinDef
 from .drc_runner import run_drc
 from .evidence import EvidenceLedger
 from .kicad_bridge import run_kicad
+from .kicad_project_context import inspect_project_footprint_context, stage_project_footprint_context
 from .pcb_handoff import _pcb_output_lock, _publish_staged_transaction
 from .placement_optimizer import (
     PlacementConfig,
@@ -177,9 +178,21 @@ def _require_modern_project_settings(source: Path) -> None:
         )
 
 
-def _prepare_settings(source: Path, staged: Path) -> dict[Path, str | None]:
+def _prepare_settings(source: Path, staged: Path, project_context: str | Path | None = None) -> dict[Path, str | None]:
     _require_modern_project_settings(source)
     snapshots = {source: _hash(source)}
+    context_root = Path(project_context).resolve() if project_context is not None else source.resolve().parent
+    if context_root.is_file():
+        context_root = context_root.parent
+    context_inventory = inspect_project_footprint_context(context_root)
+    snapshots.update({Path(path): digest for path, digest in context_inventory.get("source_hashes", {}).items()})
+    snapshots.update({
+        Path(path): digest
+        for path, digest in context_inventory.get("library_manifest_sha256", {}).items()
+    })
+    for path in context_inventory.get("watch_paths", []):
+        snapshots.setdefault(Path(path), None)
+    stage_project_footprint_context(context_root, staged.parent)
     for suffix in (".kicad_pro", ".kicad_dru"):
         origin = source.with_suffix(suffix)
         if origin.is_file():
@@ -191,8 +204,13 @@ def _prepare_settings(source: Path, staged: Path) -> dict[Path, str | None]:
 
 
 def _check_snapshots(snapshots: dict[Path, str | None]) -> None:
+    from .kicad_project_context import footprint_library_tree_sha256
     for source, digest in snapshots.items():
-        if (_hash(source) if source.exists() else None) != digest:
+        if source.is_dir():
+            current = footprint_library_tree_sha256(source)
+        else:
+            current = _hash(source) if source.exists() else None
+        if current != digest:
             raise ValueError("Source board, session, or project settings changed during processing")
 
 
@@ -512,7 +530,7 @@ def _place_pcb_once(
             if tidy_references:
                 result["silkscreen"] = applied.get("silkscreen", {})
             _restore_settings(source, staged, snapshots)
-            drc = run_drc(staged, evidence_ledger=EvidenceLedger())
+            drc = run_drc(staged, evidence_ledger=EvidenceLedger(), project_context=source.parent)
             # An unrouted board necessarily has unconnected pads. All other
             # DRC errors still prevent publication, including pad clearances.
             blockers = [f for f in drc.findings if f.severity == "blocker" and f.rule_id != "CW-DRC-002"]
@@ -680,7 +698,7 @@ def import_routing_session(
             if imported["status"] != "ok":
                 return imported
             _restore_settings(source, staged, snapshots)
-            drc = run_drc(staged, evidence_ledger=EvidenceLedger())
+            drc = run_drc(staged, evidence_ledger=EvidenceLedger(), project_context=source.parent)
             if not drc.passed:
                 return {"status": "error", "message": "Imported routing failed KiCad DRC; board was not published",
                         "drc": drc.to_dict()}

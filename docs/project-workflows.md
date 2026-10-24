@@ -287,5 +287,20 @@ table entries and literal `${KIPRJMOD}` paths, reject stale or conflicting
 state, and roll back touched assets if apply fails. Native validation and
 engineering inspection still follow asset import.
 
+Native worker, placement/import, schematic build and DRC staging preserve
+project `fp-lib-table` and its declared literal `${KIPRJMOD}/...pretty`
+libraries. Limits are 1 MiB per table, 256 table entries, 4,096 files, 8,192
+traversal entries and 64 MiB aggregate library content. Links, reparse points,
+escaping paths, ambiguous nicknames and changing assets fail explicitly.
+Global library entries remain unchanged; this does not configure missing global
+libraries or qualify their geometry. Temporary copies are not published.
+
+Shared builds pass the circuit root even when the schematic is under `output/`.
+Standalone callers can use `build-pcb ... --project-root <project>` or Python
+`schematic_to_pcb(..., project_root=...)`. Symbol tables and authored schematic
+settings still use the schematic directory. Placement/routing checkpoints watch
+the optional footprint table, declared library files and tree membership,
+including a table or asset appearing during a stage.
+
 Native `review-pcb`, the shared authored routing gate and transient acceptance
 windows are documented in [board quality review](board-quality-review.md).

@@ -4011,6 +4011,9 @@ def main() -> None:
     )
     build_p.add_argument("schematic", help="Root .kicad_sch; all physical symbols need resolvable footprints")
     build_p.add_argument("--output", "-o", required=True, help="Separate prototype .kicad_pcb output")
+    build_p.add_argument(
+        "--project-root", help="Explicit KiCad project root for local libraries (defaults to schematic directory)"
+    )
     build_p.add_argument("--width", type=float, default=80.0, help="Rectangular board width in mm")
     build_p.add_argument("--height", type=float, default=60.0, help="Rectangular board height in mm")
     build_p.add_argument("--clearance", type=float, help="Explicit default clearance in mm for a new prototype project")
@@ -5427,6 +5430,7 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
             args.schematic, args.output, width_mm=args.width, height_mm=args.height,
             clearance_mm=args.clearance, minimum_drill_mm=args.minimum_drill,
             overwrite=args.overwrite, kicad_python_path=args.kicad_python_path,
+            project_root=args.project_root,
         )))
         _print_json(result)
         raise SystemExit(0 if result["status"] == "ok" else 1)

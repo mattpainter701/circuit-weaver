@@ -370,9 +370,14 @@ def _pack_free_rectangles(items, width, height, margin, gap):
     return positions
 
 
-def _copy_schematic_project(source: Path, destination: Path) -> tuple[Path, dict[Path, str]]:
+def _copy_schematic_project(
+    source: Path, destination: Path, project_root: Path | None = None
+) -> tuple[Path, dict[Path, str]]:
     """Copy local hierarchy and symbol tables so export cannot touch source files."""
     snapshots: dict[Path, str] = {}
+    project = (project_root or source.parent).resolve()
+    if not project.is_dir():
+        raise ValueError("project_root must be an existing directory")
     schematic_files = sorted(source.parent.glob("*.kicad_sch"))
     for item in schematic_files:
         text = item.read_text(encoding="utf-8")
@@ -394,11 +399,22 @@ def _copy_schematic_project(source: Path, destination: Path) -> tuple[Path, dict
             resolved = (source.parent / child_name).resolve(strict=False)
             if resolved.parent != source.parent.resolve() or not resolved.is_file():
                 raise ValueError(f"Missing or out-of-project hierarchical sheet: {child_name}")
-    for pattern in ("*.kicad_sch", "*.kicad_sym", "sym-lib-table", "fp-lib-table", "*.kicad_pro", "*.kicad_dru"):
+    for pattern in ("*.kicad_sch", "*.kicad_sym", "sym-lib-table", "*.kicad_pro", "*.kicad_dru"):
         for item in source.parent.glob(pattern):
             if item.is_file():
                 snapshots[item.resolve()] = hashlib.sha256(item.read_bytes()).hexdigest()
                 shutil.copy2(item, destination / item.name)
+    # Copy project footprint context to the isolated native stage, retaining KIPRJMOD layout.
+    from .kicad_project_context import inspect_project_footprint_context, stage_project_footprint_context
+    context_inventory = inspect_project_footprint_context(project)
+    stage_project_footprint_context(project, destination)
+    snapshots.update({Path(path): digest for path, digest in context_inventory.get("source_hashes", {}).items()})
+    snapshots.update({
+        Path(path): digest
+        for path, digest in context_inventory.get("library_manifest_sha256", {}).items()
+    })
+    for path in context_inventory.get("watch_paths", []):
+        snapshots.setdefault(Path(path), None)
     copied = destination / source.name
     if not copied.is_file():
         raise ValueError("Could not stage the source schematic")
@@ -430,8 +446,12 @@ def _source_project_has_clearance_rules(project_path: Path, rules_path: Path) ->
 
 
 def _check_snapshot(snapshot: dict[Path, str | None]) -> None:
+    from .kicad_project_context import footprint_library_tree_sha256
     for path, digest in snapshot.items():
-        current = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+        if path.is_dir():
+            current = footprint_library_tree_sha256(path)
+        else:
+            current = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
         if current != digest:
             raise ValueError(f"Input or output changed during schematic-to-PCB processing: {path}")
 
@@ -494,6 +514,7 @@ def schematic_to_pcb(
     minimum_drill_mm: float | None = None,
     overwrite: bool = False,
     kicad_python_path: str | Path | None = None,
+    project_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Create and validate a review-only pad-bearing PCB from a real schematic."""
     source = Path(schematic_path).expanduser().resolve()
@@ -524,6 +545,9 @@ def schematic_to_pcb(
             or not math.isfinite(float(minimum_drill_mm)) or minimum_drill_mm <= 0
         ):
             raise ValueError("Minimum drill must be a finite positive millimeter value")
+        project = Path(project_root).expanduser().resolve() if project_root is not None else source.parent
+        if not project.is_dir():
+            raise ValueError("project_root must be an existing directory")
         target_snapshot = _target_snapshot(target)
         source_project_settings = {
             suffix: source.with_suffix(suffix)
@@ -580,7 +604,7 @@ def schematic_to_pcb(
             staging = Path(tmp)
             staged_project = staging / "project"
             staged_project.mkdir()
-            staged_schematic, source_snapshot = _copy_schematic_project(source, staged_project)
+            staged_schematic, source_snapshot = _copy_schematic_project(source, staged_project, project)
             sheet_count = max(1, sum(path.suffix.lower() == ".kicad_sch" for path in source_snapshot))
             netlist_export_timeout = _native_build_timeout_seconds(0, sheet_count)
             netlist = staging / "schematic.net.xml"
@@ -607,7 +631,7 @@ def schematic_to_pcb(
                     "KiCad schematic netlist export reported annotation errors; "
                     "repair the schematic first"
                 )
-            footprint_library = KiCadFootprintLibrary(project_root=source.parent)
+            footprint_library = KiCadFootprintLibrary(project_root=project)
             model = _parse_netlist(netlist, footprint_library)
             _pack_components(model["components"], float(width_mm), float(height_mm), footprint_library)
             worker_timeout = _native_build_timeout_seconds(len(model["components"]), sheet_count)
@@ -650,7 +674,7 @@ def schematic_to_pcb(
                 staged_board, source_settings_payloads,
                 clearance_mm=clearance_mm, minimum_drill_mm=minimum_drill_mm,
             )
-            drc = run_drc(staged_board, evidence_ledger=EvidenceLedger())
+            drc = run_drc(staged_board, evidence_ledger=EvidenceLedger(), project_context=project)
             _check_snapshot(restored_settings)
             non_connect_blockers = [
                 finding for finding in drc.findings

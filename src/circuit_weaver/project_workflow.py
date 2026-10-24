@@ -126,6 +126,10 @@ def _snapshot(root: Path, paths: list[str | Path]) -> list[dict[str, Any]]:
         if path.is_file():
             stat = path.stat()
             record.update({"sha256": file_sha256(path), "size": stat.st_size})
+        elif path.is_dir() and path.suffix.casefold() == ".pretty":
+            from .kicad_project_context import footprint_library_tree_sha256
+            record.update({"exists": True, "kind": "footprint_library_tree",
+                           "sha256": footprint_library_tree_sha256(path)})
         records.append(record)
     return records
 
@@ -710,6 +714,8 @@ def _execute_stage(
                 str(sch),
                 "--output",
                 str(out),
+                "--project-root",
+                str(root),
                 "--width",
                 str(width),
                 "--height",
@@ -1054,6 +1060,8 @@ def _stage_inputs(root: Path, stage: str, completed_outputs: list[str]) -> list[
             board = _latest_board(root, stage)
             paths.append(board)
             paths.extend(_existing_sidecars(board))
+            if stage in {"place", "route"}:
+                paths.extend(_native_footprint_context_inputs(board.parent))
             if stage == "place" and _project_has_spec(root):
                 paths.append(_spec_path(root))
             if stage == "preview":
@@ -1062,6 +1070,15 @@ def _stage_inputs(root: Path, stage: str, completed_outputs: list[str]) -> list[
             raise
     paths.extend(completed_outputs)
     return [path for path in paths if Path(path).name.casefold() not in _APPEND_ONLY_OUTPUTS]
+
+
+def _native_footprint_context_inputs(project: Path) -> list[Path]:
+    from .kicad_project_context import inspect_project_footprint_context
+    try:
+        context = inspect_project_footprint_context(project)
+    except (OSError, ValueError) as exc:
+        raise WorkflowError("invalid_library_context", str(exc)) from exc
+    return [Path(path) for path in context["watch_paths"]]
 
 
 def _project_has_spec(root: Path) -> bool:
@@ -1416,6 +1433,16 @@ def run_stage(
         missing_inputs = [path["path"] for path in _snapshot(root, inputs) if not path["exists"]]
         if missing_inputs:
             raise WorkflowError("input_missing", f"Stage input files are missing: {', '.join(missing_inputs)}")
+        # Required caller inputs were checked above; an absent optional library
+        # table is watched so its later creation invalidates this checkpoint.
+        inputs = list(inputs)
+        if stage in {"place", "route"}:
+            for raw in tuple(inputs):
+                board = Path(raw).expanduser()
+                if not board.is_absolute():
+                    board = root / board
+                if board.suffix.casefold() == ".kicad_pcb":
+                    inputs.extend(_native_footprint_context_inputs(board.resolve().parent))
         with _RunLock(root):
             # Load only this root's manifest. Descendant discovery is intended
             # for user-facing open/selection APIs, never for native hooks.
