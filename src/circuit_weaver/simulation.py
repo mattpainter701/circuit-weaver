@@ -581,7 +581,7 @@ def _verify_explicit_trace_target(
     result: SimulationResult, key: str, target: dict[str, Any], ref: str, recommendations: list[str]
 ) -> None:
     """Verify a unit-bearing voltage/current bound against one exact raw vector."""
-    allowed = {"metric", "trace", "unit", "comparator", "value", "min", "max", "sample"}
+    allowed = {"metric", "trace", "unit", "comparator", "value", "min", "max", "sample", "window", "statistic"}
     metric, trace, unit, comparator = (target.get(name) for name in ("metric", "trace", "unit", "comparator"))
     expected_units = {"voltage": "V", "current": "A", "ripple": "mV"}
     if (
@@ -594,6 +594,9 @@ def _verify_explicit_trace_target(
     ):
         result.target_checks[key] = "unverified"
         recommendations.append(f"{ref}: target {key} has an unsupported metric or unit schema")
+        return
+    if metric in {"voltage", "current"} and "window" in target:
+        _verify_transient_window_target(result, key, target, trace, metric, unit, comparator, ref, recommendations)
         return
     # ``bool`` is an ``int`` subclass in Python, but a JSON true/false value
     # is not a meaningful engineering limit. Reject it before float coercion.
@@ -689,3 +692,163 @@ def _verify_explicit_trace_target(
     result.target_checks[key] = "passed" if passed else "failed"
     if not passed:
         recommendations.append(f"{ref}: {trace}={measured:g} {unit} does not meet target {key}")
+
+
+def _verify_transient_window_target(
+    result: SimulationResult,
+    key: str,
+    target: dict[str, Any],
+    trace: str,
+    metric: str,
+    unit: str,
+    comparator: str,
+    ref: str,
+    recommendations: list[str],
+) -> None:
+    """Verify a voltage/current statistic over a fully covered transient window."""
+    expected_fields = {"metric", "trace", "unit", "comparator", "statistic", "window"}
+    expected_fields |= {"min", "max"} if comparator in {"between", "abs_between"} else {"value"}
+    window = target.get("window")
+    if (
+        result.sim_type != "tran"
+        or set(target) != expected_fields
+        or not isinstance(window, dict)
+        or set(window) != {"start_s", "stop_s"}
+        or not isinstance(target.get("statistic"), str)
+        or target.get("statistic") not in {"min", "max", "mean"}
+    ):
+        result.target_checks[key] = "unverified"
+        recommendations.append(f"{ref}: target {key} has an unsupported transient window schema")
+        return
+    bounds = (window.get("start_s"), window.get("stop_s"))
+    numeric_bounds = (*bounds, *(target.get(name) for name in ("min", "max") if name in target),
+                      *(target.get(name) for name in ("value",) if name in target))
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in numeric_bounds):
+        result.target_checks[key] = "unverified"
+        recommendations.append(f"{ref}: target {key} has non-numeric or boolean window/bounds")
+        return
+    try:
+        start, stop = (float(value) for value in bounds)
+        limit_values = [float(value) for value in numeric_bounds[2:]]
+    except (TypeError, ValueError, OverflowError):
+        start = stop = math.nan
+        limit_values = []
+    if not math.isfinite(start) or not math.isfinite(stop) or start < 0 or start >= stop or any(
+        not math.isfinite(value) for value in limit_values
+    ):
+        result.target_checks[key] = "unverified"
+        recommendations.append(f"{ref}: target {key} has invalid finite window bounds")
+        return
+    if comparator not in {"between", "abs_between", "le", "ge", "abs_le", "abs_ge"}:
+        result.target_checks[key] = "unverified"
+        recommendations.append(f"{ref}: target {key} has an unsupported comparator")
+        return
+    if (comparator in {"between", "abs_between"} and len(limit_values) != 2) or (
+        comparator not in {"between", "abs_between"} and len(limit_values) != 1
+    ):
+        result.target_checks[key] = "unverified"
+        recommendations.append(f"{ref}: target {key} has incomplete bounds")
+        return
+    if comparator in {"between", "abs_between"} and (
+        limit_values[0] > limit_values[1] or (comparator == "abs_between" and limit_values[0] < 0)
+    ):
+        result.target_checks[key] = "unverified"
+        recommendations.append(f"{ref}: target {key} has invalid comparator bounds")
+        return
+    axes = result.time_axis
+    matching = [(name, values) for name, values in result.traces.items() if name.casefold() == trace.casefold()]
+    if not result.evidence_verified or not isinstance(axes, list) or len(matching) != 1:
+        result.target_checks[key] = "unverified"
+        recommendations.append(f"{ref}: target {key} lacks fresh, unambiguous transient samples")
+        return
+    values = matching[0][1]
+    if len(axes) != len(values) or not axes or any(
+        isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value))
+        for value in axes
+    ):
+        result.target_checks[key] = "unverified"
+        recommendations.append(f"{ref}: target {key} has invalid or misaligned transient times")
+        return
+    times = [float(value) for value in axes]
+    if any(right <= left for left, right in zip(times, times[1:])) or times[0] > start or times[-1] < stop:
+        result.target_checks[key] = "unverified"
+        recommendations.append(f"{ref}: transient samples do not cover the complete window for {key}")
+        return
+    if any(isinstance(value, bool) or not isinstance(value, (int, float, complex)) for value in values):
+        result.target_checks[key] = "unverified"
+        recommendations.append(f"{ref}: target {key} has non-numeric transient samples")
+        return
+    numeric_values = [complex(value) for value in values]
+    if any(
+        not math.isfinite(value.real) or not math.isfinite(value.imag) or value.imag != 0 for value in numeric_values
+    ):
+        result.target_checks[key] = "unverified"
+        recommendations.append(f"{ref}: target {key} has non-real or non-finite transient samples")
+        return
+    selected = [
+        value.real for time_value, value in zip(times, numeric_values) if start <= time_value <= stop
+    ]
+    statistic = target["statistic"]
+    if statistic == "min":
+        if not selected:
+            result.target_checks[key] = "unverified"
+            recommendations.append(f"{ref}: target {key} has no samples inside its window")
+            return
+        measured = min(selected)
+    elif statistic == "max":
+        if not selected:
+            result.target_checks[key] = "unverified"
+            recommendations.append(f"{ref}: target {key} has no samples inside its window")
+            return
+        measured = max(selected)
+    else:
+        def interpolate_at(time_value: float) -> float:
+            for index, sample_time in enumerate(times):
+                if sample_time == time_value:
+                    return numeric_values[index].real / scale
+                if index + 1 < len(times) and sample_time < time_value < times[index + 1]:
+                    fraction = (time_value - sample_time) / (times[index + 1] - sample_time)
+                    left = numeric_values[index].real / scale
+                    right = numeric_values[index + 1].real / scale
+                    return left * (1.0 - fraction) + right * fraction
+            raise ValueError("window endpoint is not covered by transient samples")
+
+        first_after_start = next(index for index, sample_time in enumerate(times) if sample_time >= start)
+        last_before_stop = next(index for index, sample_time in enumerate(times) if sample_time >= stop)
+        first_relevant = first_after_start if times[first_after_start] == start else first_after_start - 1
+        scale = max(abs(value.real) for value in numeric_values[first_relevant : last_before_stop + 1])
+        if scale == 0:
+            measured = 0.0
+        else:
+            duration = stop - start
+            try:
+                window_samples = [(0.0, interpolate_at(start))]
+                window_samples.extend(
+                    ((time_value - start) / duration, value.real / scale)
+                    for time_value, value in zip(times, numeric_values)
+                    if start < time_value < stop
+                )
+                window_samples.append((1.0, interpolate_at(stop)))
+                normalized_mean = math.fsum(
+                    ((left_value + right_value) * 0.5) * (right_time - left_time)
+                    for (left_time, left_value), (right_time, right_value) in zip(
+                        window_samples, window_samples[1:]
+                    )
+                )
+                measured = normalized_mean * scale
+            except (OverflowError, ValueError):
+                result.target_checks[key] = "unverified"
+                recommendations.append(f"{ref}: target {key} transient mean overflowed or could not be interpolated")
+                return
+    if not math.isfinite(measured):
+        result.target_checks[key] = "unverified"
+        recommendations.append(f"{ref}: target {key} computed a non-finite statistic")
+        return
+    observed = abs(measured) if comparator.startswith("abs_") else measured
+    if comparator in {"between", "abs_between"}:
+        passed = limit_values[0] <= observed <= limit_values[1]
+    else:
+        passed = observed <= limit_values[0] if comparator.endswith("le") else observed >= limit_values[0]
+    result.target_checks[key] = "passed" if passed else "failed"
+    if not passed:
+        recommendations.append(f"{ref}: {trace} {statistic}={measured:g} {unit} does not meet target {key}")

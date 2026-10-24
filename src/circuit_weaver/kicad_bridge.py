@@ -28,7 +28,7 @@ def find_kicad_python(explicit: str | Path | None = None) -> str | None:
         try:
             probe = subprocess.run(
                 [executable, "-c", "import pcbnew; print('CW_PCBNEW_READY')"],
-                capture_output=True, text=True, timeout=10,
+                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10,
             )
         except (OSError, subprocess.TimeoutExpired):
             continue

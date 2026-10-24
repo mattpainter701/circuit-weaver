@@ -307,6 +307,16 @@ def _workflow_json(value: Any, *, field: str, expected: type) -> Any:
     return decoded
 
 
+def _board_review_tool(board_path: str, plan_json: str = "{}") -> str:
+    from .board_review import parse_review_plan, review_pcb
+
+    try:
+        source = _absolute_workflow_path(board_path, "board_path")
+        return json.dumps(review_pcb(source, parse_review_plan(plan_json)), default=str)
+    except (OSError, ValueError, TypeError) as exc:
+        return _error_json("board_review_failed", str(exc))
+
+
 def _absolute_workflow_path(value: str, field: str) -> Path:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field} must be a non-empty absolute path")
@@ -489,6 +499,12 @@ def _create_app() -> Any:
             return _as_mcp_tool_result(json.dumps(result, default=str))
         except (OSError, ValueError) as exc:
             return _as_mcp_tool_result(_error_json("library_access_failed", str(exc)))
+
+    @mcp.tool()
+    async def review_board(board_path: str, plan_json: str = "{}") -> Any:
+        """Review native placement and authored route limits without changing the board; inspect status explicitly."""
+        payload = await asyncio.to_thread(_capture_tool_stdout, _board_review_tool, board_path, plan_json)
+        return _as_mcp_tool_result(payload)
 
     @mcp.tool()
     def start_project(project_dir: str, spec_json: str = "", name: str = "") -> Any:

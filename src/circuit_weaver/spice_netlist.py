@@ -280,8 +280,8 @@ def _format_testbench_sources(sources: list[dict[str, Any]] | None, components: 
             values.extend([field.upper(), format(number, ".17g")])
         pulse = source.get("pulse")
         if pulse is not None:
-            if source_type.upper() != "V" or not isinstance(pulse, dict):
-                raise ValueError(f"simulation source {ref} pulse is supported only for voltage sources")
+            if not isinstance(pulse, dict):
+                raise ValueError(f"simulation source {ref} pulse must be an object")
             pulse_fields = ("v1", "v2", "delay", "rise", "fall", "width", "period")
             if set(pulse) != set(pulse_fields):
                 raise ValueError(f"simulation source {ref} pulse requires exactly {', '.join(pulse_fields)}")

@@ -209,6 +209,44 @@ class TestExportSpiceNetlist:
         with pytest.raises(ValueError, match="period must be positive"):
             export_spice_netlist(components, tmp_path / "bad-pulse.cir", sources=[source])
 
+    def test_structured_current_pulse_source_is_rendered_in_amperes(self, tmp_path):
+        components = [_make_passive("R1", "500", "VOUT", "GND"), _make_passive("C1", "1u", "VOUT", "GND")]
+        source = {
+            "ref": "ILOAD",
+            "type": "I",
+            "positive": "GND",
+            "negative": "VOUT",
+            "pulse": {"v1": 0, "v2": 0.01, "delay": 0, "rise": 1e-9, "fall": 1e-9, "width": 1e-3, "period": 2e-3},
+        }
+        out = export_spice_netlist(components, tmp_path / "current-pulse.cir", sources=[source])
+        assert "ILOAD 0 VOUT PULSE(0 0.01 0 1.0000000000000001e-09" in out.read_text()
+
+    @pytest.mark.parametrize(
+        ("pulse", "extra", "message"),
+        [
+            (
+                {"v1": 0, "v2": True, "delay": 0, "rise": 1e-9, "fall": 1e-9, "width": 1e-3, "period": 2e-3},
+                {},
+                "finite numeric",
+            ),
+            (
+                {"v1": 0, "v2": 0.01, "delay": 0, "rise": 1e-9, "fall": 1e-9, "width": 1e-3, "period": 2e-3},
+                {"dc": 0},
+                "cannot combine pulse",
+            ),
+            (
+                {"v1": 0, "v2": 0.01, "delay": -1, "rise": 1e-9, "fall": 1e-9, "width": 1e-3, "period": 2e-3},
+                {},
+                "outside its valid range",
+            ),
+        ],
+    )
+    def test_current_pulse_rejects_boolean_negative_time_and_dc_mix(self, tmp_path, pulse, extra, message):
+        components = [_make_passive("R1", "500", "VOUT", "GND")]
+        source = {"ref": "ILOAD", "type": "I", "positive": "GND", "negative": "VOUT", "pulse": pulse, **extra}
+        with pytest.raises(ValueError, match=message):
+            export_spice_netlist(components, tmp_path / "bad-current-pulse.cir", sources=[source])
+
     def test_explicit_source_rejects_unconnected_or_colliding_nodes(self, tmp_path):
         import pytest
 

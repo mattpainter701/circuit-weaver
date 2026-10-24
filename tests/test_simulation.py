@@ -159,6 +159,115 @@ class TestPlanSimulations:
         _verify_targets(result, {"op_voltage": target}, "U1", [])
         assert result.target_checks["op_voltage"] == "unverified"
 
+    def test_transient_window_statistic_uses_aligned_raw_vectors(self):
+        target = {
+            "metric": "voltage", "trace": "v(out)", "unit": "V", "comparator": "between",
+            "statistic": "mean", "window": {"start_s": 1.0, "stop_s": 3.0}, "min": 2.49, "max": 2.51,
+        }
+        result = SimulationResult(
+            status="ok", sim_type="tran", evidence_verified=True,
+            traces={"v(out)": [0.0, 2.0, 2.0, 4.0]}, time_axis=[0.0, 1.0, 2.0, 3.0],
+        )
+        _verify_targets(result, {"mean_v": target}, "U1", [])
+        assert result.target_checks["mean_v"] == "passed"
+
+    def test_transient_mean_is_time_weighted_for_uneven_sample_spacing(self):
+        target = {
+            "metric": "voltage", "trace": "v(out)", "unit": "V", "comparator": "between",
+            "statistic": "mean", "window": {"start_s": 0.0, "stop_s": 10.0}, "min": 8.9, "max": 9.1,
+        }
+        result = SimulationResult(
+            status="ok", sim_type="tran", evidence_verified=True,
+            traces={"v(out)": [0.0, 10.0, 10.0, 0.0]}, time_axis=[0.0, 1.0, 9.0, 10.0],
+        )
+        _verify_targets(result, {"weighted_mean": target}, "U1", [])
+        assert result.target_checks["weighted_mean"] == "passed"
+
+    def test_transient_mean_interpolates_both_window_boundaries(self):
+        target = {
+            "metric": "voltage", "trace": "v(out)", "unit": "V", "comparator": "between",
+            "statistic": "mean", "window": {"start_s": 0.5, "stop_s": 1.5}, "min": 1.99, "max": 2.01,
+        }
+        result = SimulationResult(
+            status="ok", sim_type="tran", evidence_verified=True,
+            traces={"v(out)": [0.0, 4.0]}, time_axis=[0.0, 2.0],
+        )
+        _verify_targets(result, {"interpolated_mean": target}, "U1", [])
+        assert result.target_checks["interpolated_mean"] == "passed"
+
+    def test_transient_mean_overflow_cannot_false_pass_ge_bound(self):
+        target = {
+            "metric": "voltage", "trace": "v(out)", "unit": "V", "comparator": "ge",
+            "statistic": "mean", "window": {"start_s": 0.0, "stop_s": 1.0}, "value": 1.5e308,
+        }
+        result = SimulationResult(
+            status="ok", sim_type="tran", evidence_verified=True,
+            traces={"v(out)": [1e308, 1e308]}, time_axis=[0.0, 1.0],
+        )
+        _verify_targets(result, {"huge_mean": target}, "U1", [])
+        assert result.target_checks["huge_mean"] == "failed"
+
+    def test_transient_mean_math_overflow_is_unverified(self, monkeypatch):
+        target = {
+            "metric": "voltage", "trace": "v(out)", "unit": "V", "comparator": "ge",
+            "statistic": "mean", "window": {"start_s": 0.0, "stop_s": 1.0}, "value": 0.0,
+        }
+        result = SimulationResult(
+            status="ok", sim_type="tran", evidence_verified=True,
+            traces={"v(out)": [1.0, 2.0]}, time_axis=[0.0, 1.0],
+        )
+
+        def overflow(_values):
+            raise OverflowError("simulated numeric overflow")
+
+        monkeypatch.setattr("circuit_weaver.simulation.math.fsum", overflow)
+        _verify_targets(result, {"overflow": target}, "U1", [])
+        assert result.target_checks["overflow"] == "unverified"
+
+    def test_transient_windows_fail_closed_on_missing_coverage_and_invalid_vectors(self):
+        target = {
+            "metric": "current", "trace": "i(vload)", "unit": "A", "comparator": "abs_le",
+            "statistic": "max", "window": {"start_s": 1.0, "stop_s": 2.0}, "value": 0.1,
+        }
+        results = [
+            SimulationResult(status="ok", sim_type="tran", evidence_verified=True,
+                             traces={"i(vload)": [0.01, 0.02]}, time_axis=[0.5, 1.5]),
+            SimulationResult(status="ok", sim_type="tran", evidence_verified=True,
+                             traces={"i(vload)": [0.01, 0.02]}, time_axis=[0.5, 1.5, 2.5]),
+            SimulationResult(status="ok", sim_type="tran", evidence_verified=True,
+                             traces={"i(vload)": [0.01, 0.02]}, time_axis=[0.5, float("nan")]),
+        ]
+        for result in results:
+            _verify_targets(result, {"window_current": target}, "U1", [])
+            assert result.target_checks["window_current"] == "unverified"
+
+    def test_transient_window_rejects_boolean_and_unsupported_analysis(self):
+        target = {
+            "metric": "voltage", "trace": "v(out)", "unit": "V", "comparator": "ge",
+            "statistic": "max", "window": {"start_s": True, "stop_s": 2.0}, "value": 0.0,
+        }
+        for sim_type in ("tran", "op"):
+            result = SimulationResult(status="ok", sim_type=sim_type, evidence_verified=True,
+                                      traces={"v(out)": [1.0]}, time_axis=[0.0])
+            _verify_targets(result, {"window": target}, "U1", [])
+            assert result.target_checks["window"] == "unverified"
+
+    def test_transient_window_rejects_ambiguous_trace_bad_unit_and_boolean_samples(self):
+        base = {
+            "metric": "voltage", "trace": "v(out)", "unit": "V", "comparator": "ge",
+            "statistic": "max", "window": {"start_s": 0.0, "stop_s": 1.0}, "value": 0.0,
+        }
+        cases = [
+            ({**base, "unit": "mV"}, {"v(out)": [1.0]}, [0.0, 1.0]),
+            (base, {"v(out)": [1.0], "V(OUT)": [1.0]}, [0.0]),
+            (base, {"v(out)": [True, 1.0]}, [0.0, 1.0]),
+        ]
+        for target, traces, axis in cases:
+            result = SimulationResult(status="ok", sim_type="tran", evidence_verified=True,
+                                      traces=traces, time_axis=axis)
+            _verify_targets(result, {"window": target}, "U1", [])
+            assert result.target_checks["window"] == "unverified"
+
     def test_detects_power_regulators(self):
         components = [
             _make_component("U1", mpn="TPS62300", category="buck", description="3.3V buck converter"),

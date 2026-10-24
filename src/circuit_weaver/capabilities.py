@@ -243,6 +243,17 @@ CAPABILITIES: Final[tuple[CapabilityRecord, ...]] = (
         evidence_kinds=("command-contract", "external-tool", "user-supplied"),
     ),
     _record(
+        "review-pcb",
+        "review-pcb",
+        maturity="review_only",
+        python="circuit_weaver.board_review:review_pcb",
+        mcp="review_board",
+        skill="circuit-weaver",
+        evidence_kinds=("command-contract", "external-tool", "user-supplied"),
+        output_guarantee="kicad-load",
+        since_version="0.38.0",
+    ),
+    _record(
         "plane-pcb",
         "plane-pcb",
         maturity="review_only",

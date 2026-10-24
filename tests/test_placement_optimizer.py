@@ -2070,6 +2070,121 @@ def test_functional_grouping_uses_block_then_section_and_excludes_support_parts(
     )
 
 
+def test_functional_affinity_softens_conflicting_category_anchors():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        PlacementConfig,
+        _cost_zone,
+        _total_cost,
+    )
+
+    config = PlacementConfig(strategy="balanced", board_width_mm=100, board_height_mm=80)
+    grouped = [
+        ComponentPlacement("U1", 45, 40, width=2, height=2, category="analog", block_id="receiver"),
+        ComponentPlacement("U2", 49, 40, width=2, height=2, category="comms", block_id="receiver"),
+    ]
+    scattered = [ComponentPlacement(**placement.__dict__) for placement in grouped]
+    scattered[0].x, scattered[0].y = 50, 55
+    scattered[1].x, scattered[1].y = 72, 40
+    pairs = {("U1", "U2"): 4.0}
+
+    assert _cost_zone(grouped, config, pairs) < _cost_zone(grouped, config)
+    assert _total_cost(grouped, config, pairs) < _total_cost(scattered, config, pairs)
+
+
+def test_zone_attraction_for_support_parts_inherits_owner_connectivity():
+    from circuit_weaver.placement_optimizer import ComponentPlacement, PlacementConfig, _cost_zone
+
+    config = PlacementConfig(board_width_mm=100, board_height_mm=80)
+    owner = ComponentPlacement("U1", 20, 20, category="analog")
+    support = ComponentPlacement("C1", 21, 20, category="passive", parent_ref="U1", parent_pin="5")
+    linked = ComponentPlacement("U2", 80, 60, category="digital")
+    pairs = {("U1", "U2"): 2.0}
+
+    family_cost = _cost_zone([owner, support, linked], config, pairs)
+    independent_cost = _cost_zone([owner, support, linked], config)
+
+    assert family_cost < independent_cost
+
+
+def test_connected_category_families_keep_fixed_and_edge_constraints_exact():
+    from circuit_weaver.placement_optimizer import PlacementConfig, optimize_placement
+
+    analog = _make_comp("U1", category="analog", footprint="SOIC-8")
+    comms = _make_comp("U2", category="comms", footprint="SOIC-8")
+    analog.pin_nets = {"1": "RX_DATA"}
+    comms.pin_nets = {"1": "RX_DATA"}
+
+    result = optimize_placement(
+        [analog, comms],
+        config=PlacementConfig(board_width_mm=100, board_height_mm=80, iterations=10, seed=11),
+        constraints=[
+            {"kind": "placement", "target": "board", "board_width_mm": 100, "board_height_mm": 80},
+            {"kind": "placement", "target": "U1", "x_mm": 12.125, "y_mm": 14.25},
+            {"kind": "placement", "target": "U2", "edge": "right", "max_distance_mm": 0},
+        ],
+    )
+
+    fixed = result["placements"]["U1"]
+    edge = result["placements"]["U2"]
+    assert (fixed["x"], fixed["y"], fixed["constraint_locked"]) == (12.125, 14.25, True)
+    assert edge["x"] == pytest.approx(100 - result["constraint_evaluation"]["effective_board"]["edge_clearance_mm"] - 3)
+    assert edge["edge_constrained"] is True
+    assert result["constraint_evaluation"]["violations"] == []
+
+
+def test_large_seed_uses_centered_functional_family_grid_without_anchor_clamping():
+    from circuit_weaver.placement_optimizer import (
+        PlacementConfig,
+        _ConstraintPlan,
+        _init_placements,
+    )
+
+    components = [
+        _make_comp(f"U{index:02d}", category="analog" if index < 24 else "connector", footprint="0402")
+        for index in range(48)
+    ]
+    for component in components[:4]:
+        component.block_id = "rf_front_end"
+    for component in components:
+        component.pin_nets = {}
+    for index in range(10):
+        components[index].pin_nets[f"out{index}"] = f"TRACE_{index}"
+        components[index + 1].pin_nets[f"in{index}"] = f"TRACE_{index}"
+    components[0].pin_nets["rf"] = "RF_IN"
+    support = _make_comp("C100", category="passive", footprint="0402")
+    support.placement_parent_ref = "U00"
+    support.placement_parent_pin = "1"
+    support.pin_nets = {"1": "RF_IN"}
+    components.append(support)
+
+    config = PlacementConfig(board_width_mm=260, board_height_mm=190, seed=31)
+    plan = _ConstraintPlan(
+        fixed={"U46": {"x_mm": 30.125, "y_mm": 24.25, "rotation": 0}},
+        edges={"U47": {"edge": "right", "max_distance_mm": 0}},
+    )
+    placements = _init_placements(components, config, {}, {}, plan)
+    by_ref = {placement.ref: placement for placement in placements}
+    movable_roots = [by_ref[f"U{index:02d}"] for index in range(46)]
+
+    assert all(1.5 <= item.x <= 258.5 and 1.5 <= item.y <= 188.5 for item in movable_roots)
+    assert len({(item.x, item.y) for item in movable_roots}) == 46
+    assert max(item.x for item in movable_roots) < 258
+    assert max(item.y for item in movable_roots) < 188
+    block = [by_ref[f"U{index:02d}"] for index in range(4)]
+    assert max(math.dist((a.x, a.y), (b.x, b.y)) for a in block for b in block) < 15
+    connected_neighbor = math.dist((by_ref["U03"].x, by_ref["U03"].y), (by_ref["U04"].x, by_ref["U04"].y))
+    unrelated_pair = math.dist((by_ref["U04"].x, by_ref["U04"].y), (by_ref["U20"].x, by_ref["U20"].y))
+    assert connected_neighbor < unrelated_pair
+    assert (by_ref["U46"].x, by_ref["U46"].y) == (30.125, 24.25)
+    assert by_ref["U46"].constraint_locked is True
+    assert by_ref["U47"].x == pytest.approx(260 - config.edge_clearance_mm - 0.5)
+    assert by_ref["U47"].edge_constrained is True
+    assert by_ref["C100"].parent_ref == "U00"
+    assert by_ref["C100"].pin_nets == {"1": "RF_IN"}
+    assert by_ref["U00"].pin_nets == components[0].pin_nets
+
+
 def test_result_reports_functional_group_span_and_optimizer_preserves_group_metadata():
     from circuit_weaver.placement_optimizer import PlacementConfig, optimize_placement
 

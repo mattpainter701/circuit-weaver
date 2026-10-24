@@ -75,6 +75,14 @@ boundary. A successful stage means only what its evidence records: planning,
 preview, or placement does not claim a completed native KiCad build or route.
 Never imply manufacture approval from a workflow status.
 
+After placement/routing, use `review-pcb <absolute-board-path> --plan <review.json>
+--json` or MCP `review_board(board_path, plan_json)` for read-only geometry and
+authored route checks. Inspect verified/review_required/unverified states;
+invocation success is not design acceptance. Put authored routing contracts in
+shared workflow `options.route_contracts` to gate staged routing publication.
+Missing evidence or failed limits must retain a failed workflow stage. See
+`docs/board-quality-review.md` for schema, measurement limits and CLI exit codes.
+
 For MCP, call `runtime_info` first and use the same explicit interpreter to
 launch `python -m circuit_weaver.mcp_server`. Invoke `start_project`,
 `open_project`, `adopt_project`, `plan_workflow`, `run_workflow`, `workflow_status`,

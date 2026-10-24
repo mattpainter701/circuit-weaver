@@ -420,6 +420,10 @@ def _normalize_options(options: dict[str, Any] | None) -> dict[str, Any]:
         return {}
     if not isinstance(options, dict):
         raise WorkflowError("invalid_options", "options must be a JSON object")
+    raw_contracts = options.get("route_contracts")
+    if isinstance(raw_contracts, dict) and isinstance(raw_contracts.get("routes"), dict):
+        if any(not isinstance(key, str) or not key.strip() for key in raw_contracts["routes"]):
+            raise WorkflowError("invalid_options", "route_contracts route IDs must be nonempty strings")
     try:
         normalized = json.loads(json.dumps(options, allow_nan=False))
     except (TypeError, ValueError) as exc:
@@ -445,6 +449,11 @@ def _normalize_options(options: dict[str, Any] | None) -> dict[str, Any]:
             "fast", "medium", "high"
         }:
             raise WorkflowError("invalid_options", "route_effort must be fast, medium, or high")
+    if "route_contracts" in normalized:
+        contracts = normalized["route_contracts"]
+        if (not isinstance(contracts, dict) or not isinstance(contracts.get("routes"), dict)
+                or not contracts["routes"] or set(contracts) - {"schema_version", "routes", "pairs"}):
+            raise WorkflowError("invalid_options", "route_contracts requires a nonempty explicit routes object")
     return normalized
 
 
@@ -773,8 +782,39 @@ def _execute_stage(
                 stage, args, root, min(max(int(options.get("route_timeout", 300)) + 30, 60), _STAGE_TIMEOUTS[stage])
             )
             _require_ok(result, stage)
+            extras = [(out, root / out.name)]
+            publish_hashes = None
+            if "route_contracts" in options:
+                from .board_review import review_pcb
+
+                publish_hashes = {
+                    path: file_sha256(path) if path.is_file() else None
+                    for path in (routed_board, out, routed_board.with_suffix(".kicad_pro"),
+                                 routed_board.with_suffix(".kicad_dru"))
+                }
+                review = review_pcb(routed_board, {"routing": options["route_contracts"]},
+                                    kicad_python_path=options.get("kicad_python_path"))
+                quality = {
+                    **review.get("routing", {"status": "unverified"}),
+                    "board_sha256": review["source_sha256"],
+                    "contract_sha256": _digest(options["route_contracts"]),
+                    "sources_unchanged": review["sources_unchanged"],
+                }
+                report = attempt / "route-quality.json"
+                report.write_text(json.dumps(quality, indent=2) + "\n", encoding="utf-8")
+                if quality["board_sha256"] != publish_hashes[routed_board]:
+                    raise WorkflowError("stage_output_changed", "Routed candidate changed before quality review")
+                if quality["status"] != "verified":
+                    raise WorkflowError(
+                        "route_contract_failed",
+                        f"Authored route checks are {quality['status']}; candidate and report retained in {attempt}",
+                    )
+                result["route_quality"] = quality
+                extras.append((report, root / report.name))
+                publish_hashes[report] = file_sha256(report)
             outputs = _publish_attempt(
-                attempt, root, routed_board, root / routed_board.name, result, extras=[(out, root / out.name)]
+                attempt, root, routed_board, root / routed_board.name, result, extras=extras,
+                expected_hashes=publish_hashes,
             )
         else:
             appearance = options.get("appearance", "layers")
@@ -849,6 +889,7 @@ def _publish_attempt(
     result: dict[str, Any],
     *,
     extras: list[tuple[Path, Path]] | None = None,
+    expected_hashes: dict[Path, str | None] | None = None,
 ) -> list[str]:
     staged = [(primary, destination)]
     staged.extend(
@@ -857,6 +898,13 @@ def _publish_attempt(
         if primary.with_suffix(suffix).is_file()
     )
     staged.extend(extras or [])
+
+    def check_hashes() -> None:
+        for path, expected in (expected_hashes or {}).items():
+            if (file_sha256(path) if path.is_file() else None) != expected:
+                raise WorkflowError("stage_output_changed", f"Reviewed stage output changed: {path}")
+
+    check_hashes()
     for source, target in staged:
         if not source.is_file():
             raise WorkflowError("stage_output_missing", f"Expected staged output is missing: {source}")
@@ -864,24 +912,31 @@ def _publish_attempt(
             raise WorkflowError("output_exists", f"Refusing to replace existing workflow output: {target}")
     published: list[Path] = []
     linked_sources: dict[Path, tuple[int, int]] = {}
+    linked_targets: dict[Path, tuple[int, int]] = {}
     try:
         for source, target in staged:
             # Hard-link creation is atomic and fails if a concurrent writer
             # created the destination after our preflight check.
             os.link(source, target)
             published.append(target)
-            source_stat = source.stat()
-            linked_sources[source] = (source_stat.st_dev, source_stat.st_ino)
-    except OSError as exc:
+            target_stat = target.stat()
+            identity = (target_stat.st_dev, target_stat.st_ino)
+            linked_sources[source] = identity
+            linked_targets[target] = identity
+            check_hashes()
+            expected = (expected_hashes or {}).get(source)
+            if expected is not None and file_sha256(target) != expected:
+                raise WorkflowError("stage_output_changed", f"Published bytes do not match reviewed output: {target}")
+    except (OSError, WorkflowError) as exc:
         for target in reversed(published):
             try:
                 target_stat = target.stat()
-                source = next(source for source, candidate in staged if candidate == target)
-                source_stat = source.stat()
-                if (target_stat.st_dev, target_stat.st_ino) == (source_stat.st_dev, source_stat.st_ino):
+                if (target_stat.st_dev, target_stat.st_ino) == linked_targets.get(target):
                     target.unlink(missing_ok=True)
             except OSError:
                 pass
+        if isinstance(exc, WorkflowError):
+            raise
         raise WorkflowError("publish_failed", f"Could not publish native stage outputs: {exc}") from exc
     for source, target in staged:
         try:

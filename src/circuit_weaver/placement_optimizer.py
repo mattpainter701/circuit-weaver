@@ -642,6 +642,302 @@ def _build_constraint_plan(
     return effective_config, plan
 
 
+def _family_grid_seed_positions(
+    components: list[ComponentDef], config: PlacementConfig,
+) -> dict[str, tuple[float, float]]:
+    """Return a compact, connection-aware seed for large owner-family sets."""
+    roots = [
+        component for component in components
+        if component.source_ref and not str(getattr(component, "placement_parent_ref", "") or "").strip()
+    ]
+    if len(roots) < 40 or config.strategy == "simple":
+        return {}
+
+    family_children: dict[str, list[ComponentDef]] = {}
+    root_refs = {str(component.source_ref) for component in roots}
+    for component in components:
+        parent_ref = str(getattr(component, "placement_parent_ref", "") or "").strip()
+        if parent_ref in root_refs:
+            family_children.setdefault(parent_ref, []).append(component)
+
+    def _category(component: ComponentDef) -> str:
+        category = str(component.category or "other").lower()
+        if category not in _ZONE_ANCHORS:
+            category = "passive" if str(component.source_ref)[0] in "RCL" else "other"
+        return category
+
+    def _group_key(component: ComponentDef) -> tuple[str, str]:
+        block = str(getattr(component, "block_id", "") or "").strip().casefold()
+        section = str(getattr(component, "functional_section", "") or "").strip().casefold()
+        if block:
+            return ("block", block)
+        if section:
+            return ("section", section)
+        return ("family", str(component.source_ref))
+
+    # Precompute owner-plus-support extents. Grid pitch uses these family
+    # extents, avoiding board-wide spacing when the fitted layout is compact.
+    family_records: dict[str, dict[str, Any]] = {}
+    for root in roots:
+        ref = str(root.source_ref)
+        width, height = estimate_component_size(root)
+        children = family_children.get(ref, [])
+        max_child_width = max((estimate_component_size(child)[0] for child in children), default=0.0)
+        max_child_height = max((estimate_component_size(child)[1] for child in children), default=0.0)
+        support_rings = max(0, math.ceil(len(children) / 8) - 1)
+        gap = config.min_component_gap_mm + 0.6
+        half_width = width / 2 + (max_child_width / 2 + gap + support_rings * (max_child_width + 0.6)
+                                  if children else 0.0)
+        half_height = height / 2 + (max_child_height / 2 + gap + support_rings * (max_child_height + 0.6)
+                                    if children else 0.0)
+        family_records[ref] = {
+            "component": root,
+            "group": _group_key(root),
+            "category": _category(root),
+            "half_width": half_width,
+            "half_height": half_height,
+        }
+
+    # Derive root-family connectivity directly from named nets. Shared grounds
+    # and voltage rails provide no local placement identity and are excluded.
+    root_by_ref = {str(component.source_ref): str(component.source_ref) for component in roots}
+    for component in components:
+        ref = str(component.source_ref or "")
+        parent_ref = str(getattr(component, "placement_parent_ref", "") or "").strip()
+        if ref and parent_ref in family_records:
+            root_by_ref[ref] = parent_ref
+    root_edges: dict[tuple[str, str], float] = {}
+    for net, refs in _build_net_component_map(components).items():
+        weight = _net_weight(net)
+        if weight <= 0.5 or _is_voltage_rail(net):
+            continue
+        owners = sorted({root_by_ref[ref] for ref in refs if ref in root_by_ref and root_by_ref[ref] in family_records})
+        if len(owners) < 2:
+            continue
+        for left, right in combinations(owners, 2):
+            root_edges[(left, right)] = root_edges.get((left, right), 0.0) + weight / (len(owners) - 1)
+
+    # Authored block/section members form one ordering unit. Unlabeled roots
+    # remain individual units; category is a stable tie-breaker for isolates.
+    units: dict[tuple[str, str], list[str]] = {}
+    unit_of: dict[str, tuple[str, str]] = {}
+    for ref, record in family_records.items():
+        unit = record["group"]
+        units.setdefault(unit, []).append(ref)
+        unit_of[ref] = unit
+    for refs in units.values():
+        refs.sort()
+
+    unit_edges: dict[tuple[str, str], float] = {}
+    root_adjacency: dict[str, dict[str, float]] = {}
+    for (left, right), weight in root_edges.items():
+        root_adjacency.setdefault(left, {})[right] = weight
+        root_adjacency.setdefault(right, {})[left] = weight
+        first, second = unit_of[left], unit_of[right]
+        if first == second:
+            continue
+        edge = tuple(sorted((first, second)))
+        unit_edges[edge] = unit_edges.get(edge, 0.0) + weight
+
+    unit_adjacency: dict[tuple[str, str], dict[tuple[str, str], float]] = {}
+    for (left, right), weight in unit_edges.items():
+        unit_adjacency.setdefault(left, {})[right] = weight
+        unit_adjacency.setdefault(right, {})[left] = weight
+
+    def _unit_category(unit: tuple[str, str]) -> str:
+        return min(family_records[ref]["category"] for ref in units[unit])
+
+    def _unit_key(unit: tuple[str, str]) -> tuple[Any, ...]:
+        return (unit[0], unit[1], _unit_category(unit), min(units[unit]))
+
+    # Greedy deterministic graph walk: each next unit has the strongest total
+    # connection to the already placed prefix. This maps electrical neighbors
+    # to nearby cells while explicit units stay contiguous.
+    ordered_units: list[tuple[str, str]] = []
+    remaining = set(units)
+    while remaining:
+        if not ordered_units:
+            current = min(
+                remaining,
+                key=lambda unit: (-sum(unit_adjacency.get(unit, {}).values()), _unit_key(unit)),
+            )
+        else:
+            prefix = set(ordered_units)
+            previous_category = _unit_category(ordered_units[-1])
+            current = min(
+                remaining,
+                key=lambda unit: (
+                    -sum(weight for neighbor, weight in unit_adjacency.get(unit, {}).items() if neighbor in prefix),
+                    _unit_category(unit) != previous_category,
+                    _unit_key(unit),
+                ),
+            )
+        ordered_units.append(current)
+        remaining.remove(current)
+
+    unit_layouts: dict[tuple[str, str], dict[str, Any]] = {}
+    for unit in ordered_units:
+        pending = set(units[unit])
+        placed_in_unit: set[str] = set()
+        ordered_members: list[str] = []
+        while pending:
+            if not placed_in_unit:
+                current_ref = min(
+                    pending,
+                    key=lambda ref: (-sum(root_adjacency.get(ref, {}).values()), ref),
+                )
+            else:
+                current_ref = min(
+                    pending,
+                    key=lambda ref: (
+                        -sum(
+                            weight
+                            for neighbor, weight in root_adjacency.get(ref, {}).items()
+                            if neighbor in placed_in_unit
+                        ),
+                        ref,
+                    ),
+                )
+            ordered_members.append(current_ref)
+            pending.remove(current_ref)
+            placed_in_unit.add(current_ref)
+
+        # Authored block/section members stay in one compact tile. The outer
+        # grid spaces connected tiles while preserving internal cohesion.
+        local_columns = min(
+            len(ordered_members),
+            max(1, math.ceil(math.sqrt(len(ordered_members) * config.board_width_mm / config.board_height_mm))),
+        )
+        local_rows = math.ceil(len(ordered_members) / local_columns)
+        local_slots = []
+        for index in range(len(ordered_members)):
+            row, offset = divmod(index, local_columns)
+            column = offset if row % 2 == 0 else local_columns - 1 - offset
+            local_slots.append((row, column))
+        local_gap = max(config.min_component_gap_mm, min(2.0, min(config.board_width_mm, config.board_height_mm) / 100))
+        local_column_widths = [0.0] * local_columns
+        local_row_heights = [0.0] * local_rows
+        for ref, (row, column) in zip(ordered_members, local_slots, strict=True):
+            record = family_records[ref]
+            local_column_widths[column] = max(local_column_widths[column], record["half_width"] * 2)
+            local_row_heights[row] = max(local_row_heights[row], record["half_height"] * 2)
+        local_width = sum(local_column_widths) + local_gap * max(0, local_columns - 1)
+        local_height = sum(local_row_heights) + local_gap * max(0, local_rows - 1)
+        offsets: dict[str, tuple[float, float]] = {}
+        cursor = -local_width / 2
+        column_centers = []
+        for width in local_column_widths:
+            column_centers.append(cursor + width / 2)
+            cursor += width + local_gap
+        cursor = -local_height / 2
+        row_centers = []
+        for height in local_row_heights:
+            row_centers.append(cursor + height / 2)
+            cursor += height + local_gap
+        for ref, (row, column) in zip(ordered_members, local_slots, strict=True):
+            offsets[ref] = (column_centers[column], row_centers[row])
+        unit_layouts[unit] = {
+            "refs": ordered_members,
+            "width": local_width,
+            "height": local_height,
+            "offsets": offsets,
+        }
+
+    family_count = len(ordered_units)
+    if family_count == 0:
+        return {}
+    # Keep a small routing lane between family tiles, bounded on large boards.
+    gap = max(config.min_component_gap_mm, min(2.0, min(config.board_width_mm, config.board_height_mm) / 100))
+    usable_width = max(0.0, config.board_width_mm - 2 * config.edge_clearance_mm)
+    usable_height = max(0.0, config.board_height_mm - 2 * config.edge_clearance_mm)
+    def _grid(columns: int) -> tuple[float, float, list[float], list[float], list[tuple[int, int]]]:
+        rows = math.ceil(family_count / columns)
+        slots = []
+        for index in range(family_count):
+            row, offset = divmod(index, columns)
+            column = offset if row % 2 == 0 else columns - 1 - offset
+            slots.append((row, column))
+        column_widths = [0.0] * columns
+        row_heights = [0.0] * rows
+        for unit, (row, column) in zip(ordered_units, slots, strict=True):
+            layout = unit_layouts[unit]
+            column_widths[column] = max(column_widths[column], layout["width"])
+            row_heights[row] = max(row_heights[row], layout["height"])
+        packed_width = sum(column_widths) + gap * max(0, columns - 1)
+        packed_height = sum(row_heights) + gap * max(0, rows - 1)
+        return packed_width, packed_height, column_widths, row_heights, slots
+
+    board_aspect = usable_width / usable_height if usable_height > 0 else config.board_width_mm / config.board_height_mm
+    ideal_columns = max(1, math.ceil(math.sqrt(family_count * board_aspect)))
+    column_radius = max(4, math.ceil(ideal_columns / 2))
+    candidate_columns = {
+        1,
+        family_count,
+        *range(max(1, ideal_columns - column_radius), min(family_count, ideal_columns + column_radius) + 1),
+    }
+    candidates = []
+    for columns in sorted(candidate_columns):
+        packed_width, packed_height, column_widths, row_heights, slots = _grid(columns)
+        if packed_width <= 0 or packed_height <= 0:
+            continue
+        fit_scale = min(
+            usable_width / packed_width if packed_width else 1.0,
+            usable_height / packed_height if packed_height else 1.0,
+        )
+        # Preserve natural cell pitch whenever it fits. Shrink only when every
+        # candidate would otherwise exceed the authored board outline.
+        scale = min(1.0, fit_scale)
+        aspect_error = abs(math.log(max(1e-9, (packed_width / packed_height) / board_aspect)))
+        shrink = max(0.0, 1.0 - fit_scale)
+        candidates.append((shrink, aspect_error, packed_width * packed_height, columns,
+                           column_widths, row_heights, slots, packed_width, packed_height, scale))
+    if not candidates:
+        return {}
+    (
+        _shrink,
+        _aspect_error,
+        _natural_area,
+        _columns,
+        column_widths,
+        row_heights,
+        slots,
+        packed_width,
+        packed_height,
+        scale,
+    ) = min(candidates)
+    scaled_width = packed_width * scale
+    scaled_height = packed_height * scale
+    origin_x = (config.board_width_mm - scaled_width) / 2
+    origin_y = (config.board_height_mm - scaled_height) / 2
+    column_starts = []
+    cursor = origin_x
+    for width in column_widths:
+        column_starts.append(cursor)
+        cursor += (width + gap) * scale
+    row_starts = []
+    cursor = origin_y
+    for height in row_heights:
+        row_starts.append(cursor)
+        cursor += (height + gap) * scale
+
+    result: dict[str, tuple[float, float]] = {}
+    for unit, (row, column) in zip(ordered_units, slots, strict=True):
+        layout = unit_layouts[unit]
+        center_x = column_starts[column] + column_widths[column] * scale / 2
+        center_y = row_starts[row] + row_heights[row] * scale / 2
+        for ref in layout["refs"]:
+            record = family_records[ref]
+            offset_x, offset_y = layout["offsets"][ref]
+            x = center_x + offset_x
+            y = center_y + offset_y
+            x = max(config.edge_clearance_mm + record["half_width"],
+                    min(x, config.board_width_mm - config.edge_clearance_mm - record["half_width"]))
+            y = max(config.edge_clearance_mm + record["half_height"],
+                    min(y, config.board_height_mm - config.edge_clearance_mm - record["half_height"]))
+            result[ref] = (x, y)
+    return result
+
+
 def _init_placements(
     components: list[ComponentDef],
     config: PlacementConfig,
@@ -652,6 +948,7 @@ def _init_placements(
     """Create initial placement state with zone-based positions."""
     placements: list[ComponentPlacement] = []
     placement_by_ref: dict[str, ComponentPlacement] = {}
+    family_grid = _family_grid_seed_positions(components, config)
     zone_counters: dict[str, int] = {}
     support_counters: dict[str, int] = {}
     support_seed_counters: dict[tuple[str, str, str, tuple[str, ...]], int] = {}
@@ -708,16 +1005,20 @@ def _init_placements(
             if pad_seed is not None:
                 x, y = pad_seed
         else:
-            zone_cx, zone_cy = _zone_center_mm(cat, config)
+            seeded_position = family_grid.get(comp.source_ref)
+            if seeded_position is not None:
+                x, y = seeded_position
+            else:
+                zone_cx, zone_cy = _zone_center_mm(cat, config)
 
-            idx = zone_counters.get(cat, 0)
-            zone_counters[cat] = idx + 1
-            cols = max(1, int(math.sqrt(idx + 1)))
-            row, col = divmod(idx, cols)
-            offset_x = col * (w + config.min_component_gap_mm + 1.0)
-            offset_y = row * (h + config.min_component_gap_mm + 1.0)
-            x = zone_cx + offset_x
-            y = zone_cy + offset_y
+                idx = zone_counters.get(cat, 0)
+                zone_counters[cat] = idx + 1
+                cols = max(1, int(math.sqrt(idx + 1)))
+                row, col = divmod(idx, cols)
+                offset_x = col * (w + config.min_component_gap_mm + 1.0)
+                offset_y = row * (h + config.min_component_gap_mm + 1.0)
+                x = zone_cx + offset_x
+                y = zone_cy + offset_y
 
         x = max(
             config.edge_clearance_mm + w / 2,
@@ -1185,13 +1486,46 @@ def _cost_thermal(placements: list[ComponentPlacement]) -> float:
     return total * 10.0
 
 
-def _cost_zone(placements: list[ComponentPlacement], config: PlacementConfig) -> float:
-    """Penalty for components far from their preferred zone."""
+def _cost_zone(
+    placements: list[ComponentPlacement],
+    config: PlacementConfig,
+    connectivity_pairs: dict[tuple[str, str], float] | None = None,
+) -> float:
+    """Penalty for drifting from category zones, softened by family affinity.
+
+    Category anchors are useful for isolated components, but can split a
+    connected block when its members have different categories. Scale the
+    anchor term by the root's bounded electrical and explicit grouping degree;
+    generated support parts also inherit their owner's affinity.
+    """
     total = 0.0
+    by_ref = {placement.ref: placement for placement in placements}
+    root_affinity: dict[str, float] = {}
+    for (left, right), weight in (connectivity_pairs or {}).items():
+        if not math.isfinite(weight) or weight <= 0:
+            continue
+        if left in by_ref:
+            root_affinity[left] = root_affinity.get(left, 0.0) + weight
+        if right in by_ref:
+            root_affinity[right] = root_affinity.get(right, 0.0) + weight
+
+    for members in _functional_groups(placements).values():
+        if len(members) < 2:
+            continue
+        for member in members:
+            root_affinity[member.ref] = root_affinity.get(member.ref, 0.0) + min(len(members) - 1, 3)
+
     for p in placements:
         ideal_x, ideal_y = _zone_center_mm(p.category, config)
         dist = math.hypot(p.x - ideal_x, p.y - ideal_y)
-        total += dist * 0.1
+        root_ref = p.parent_ref or p.ref
+        affinity = root_affinity.get(root_ref, 0.0)
+        # Keep at least 30% of the original anchor pull. The square-root
+        # response prevents high-fanout nets from erasing category intent.
+        attraction = max(0.3, 1.0 / (1.0 + math.sqrt(affinity)))
+        if p.parent_ref:
+            attraction = min(attraction, 0.3)
+        total += dist * 0.1 * attraction
     return total
 
 
@@ -2118,7 +2452,7 @@ def _total_cost(
         cost += _cost_connectivity(placements, connectivity_pairs or {})
         cost += _cost_noise_separation(placements)
     if config.strategy in ("cost", "balanced"):
-        cost += _cost_zone(placements, config)
+        cost += _cost_zone(placements, config, connectivity_pairs)
         cost += _cost_compactness(placements, config)
 
     return cost

@@ -47,6 +47,13 @@ def add_parsers(subparsers) -> None:
         action.add_argument("document", help="Manifest JSON for plan; saved plan JSON for apply")
         action.add_argument("--project-root", default=".")
         action.add_argument("--json", dest="json_output", action="store_true")
+    review = subparsers.add_parser(
+        "review-pcb", help="Review native placement and explicit route constraints read-only"
+    )
+    review.add_argument("kicad_pcb")
+    review.add_argument("--plan", help="JSON with placement review options and optional authored routing contracts")
+    review.add_argument("--kicad-python-path")
+    review.add_argument("--json", dest="json_output", action="store_true")
     workflow = subparsers.add_parser("workflow", help="Plan, execute and resume checkpointed prototype work")
     actions = workflow.add_subparsers(dest="workflow_action", required=True)
     for name in ("plan", "run", "status", "resume", "cancel"):
@@ -63,6 +70,12 @@ def add_parsers(subparsers) -> None:
 
 def dispatch(args) -> dict[str, Any] | None:
     from . import project_workflow as workflow
+
+    if args.command == "review-pcb":
+        from .board_review import parse_review_plan, review_pcb
+
+        plan = parse_review_plan(Path(args.plan).read_text(encoding="utf-8-sig")) if args.plan else {}
+        return review_pcb(args.kicad_pcb, plan, kicad_python_path=args.kicad_python_path)
 
     if args.command == "library-bundle":
         from .library_bundle import apply_library_bundle, plan_library_bundle

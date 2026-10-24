@@ -253,8 +253,9 @@ def _rectangular_outline_bounds_iu(edges, pcbnew):
     return (x0, y0, x1 - x0, y1 - y0) if x1 > x0 and y1 > y0 else None
 
 
-def _inspect(board, pcbnew):
+def _inspect(board, pcbnew, include_route_geometry=False):
     footprints = []
+    tracks, vias = [], []
     copper_layer_ids, copper_layer_inventory_complete = _native_copper_layer_inventory(board, pcbnew)
     known_copper_layer_ids, known_copper_layer_inventory_complete = (
         _native_known_copper_layer_inventory(pcbnew)
@@ -405,6 +406,35 @@ def _inspect(board, pcbnew):
             "reference_size_mm": reference_size_mm,
             "pads": pads,
         })
+    # Export centerline geometry in millimetres for read-only route metrics.
+    # Copper shapes are deliberately not converted into inferred connectivity.
+    if include_route_geometry:
+        for item in board.GetTracks():
+            net = str(item.GetNetname())
+            kind_name = type(item).__name__.upper()
+            if "VIA" in kind_name:
+                try:
+                    vias.append({
+                        "net": net,
+                        "x_mm": pcbnew.ToMM(item.GetPosition().x),
+                        "y_mm": pcbnew.ToMM(item.GetPosition().y),
+                        "layer_ids": sorted({int(item.TopLayer()), int(item.BottomLayer())}),
+                        "kind": "via",
+                    })
+                except (AttributeError, RuntimeError, TypeError, ValueError):
+                    vias.append({"net": net, "kind": "unknown"})
+                continue
+            kind = "arc" if "ARC" in kind_name else "segment"
+            try:
+                tracks.append({
+                    "net": net,
+                    "start_mm": [pcbnew.ToMM(item.GetStart().x), pcbnew.ToMM(item.GetStart().y)],
+                    "end_mm": [pcbnew.ToMM(item.GetEnd().x), pcbnew.ToMM(item.GetEnd().y)],
+                    "layer_id": int(item.GetLayer()),
+                    "kind": kind,
+                })
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                tracks.append({"net": net, "kind": "unknown"})
     box = board.GetBoardEdgesBoundingBox()
     edges = [d for d in board.GetDrawings() if d.GetLayer() == pcbnew.Edge_Cuts]
     outline_bounds = _rectangular_outline_bounds_iu(edges, pcbnew)
@@ -412,10 +442,30 @@ def _inspect(board, pcbnew):
     # them through rectangular_outline. Verified rectangles use the actual
     # cut boundary independent of line width and direction.
     bounds = outline_bounds or (box.GetX(), box.GetY(), box.GetWidth(), box.GetHeight())
-    return {"footprints": footprints, "track_count": len(list(board.GetTracks())),
-            "zone_count": len(list(board.Zones())),
+    result = {"footprints": footprints,
+            "track_count": len(list(board.GetTracks())), "zone_count": len(list(board.Zones())),
             "rectangular_outline": outline_bounds is not None,
             "bounds": dict(zip(("x", "y", "width", "height"), (pcbnew.ToMM(value) for value in bounds)))}
+    if include_route_geometry:
+        zone_nets = []
+        zone_net_inventory_complete = True
+        for zone in board.Zones():
+            try:
+                zone_net = zone.GetNetname()
+                if not isinstance(zone_net, str) or not zone_net:
+                    zone_net_inventory_complete = False
+                else:
+                    zone_nets.append(zone_net)
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                zone_net_inventory_complete = False
+        result.update(tracks=tracks, vias=vias)
+        result.update(
+            zone_nets=zone_nets,
+            zone_net_inventory_complete=(
+                zone_net_inventory_complete and len(zone_nets) == result["zone_count"]
+            ),
+        )
+    return result
 
 
 def _box(item, pcbnew, margin_mm=0.0):
@@ -1197,7 +1247,8 @@ def execute(request):
     original_layout = None
     original_board_geometry = None
     if operation == "inspect":
-        return {"status": "ok", **_inspect(board, pcbnew)}
+        return {"status": "ok", **_inspect(board, pcbnew,
+                                             include_route_geometry=bool(request.get("include_route_geometry")))}
     if operation == "export_dsn":
         if not pcbnew.ExportSpecctraDSN(board, request["output"]):
             raise ValueError("KiCad Specctra export failed; check the board outline and netlist")

@@ -286,3 +286,6 @@ Plans bind source bytes and existing tables with SHA-256, preserve unrelated
 table entries and literal `${KIPRJMOD}` paths, reject stale or conflicting
 state, and roll back touched assets if apply fails. Native validation and
 engineering inspection still follow asset import.
+
+Native `review-pcb`, the shared authored routing gate and transient acceptance
+windows are documented in [board quality review](board-quality-review.md).
