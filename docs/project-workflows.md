@@ -122,6 +122,11 @@ positive copper anchors, and no pending plane-net pad attachments. Plane
 creation currently requires a rectangular outline and no existing zones;
 saved-fill verification accepts single-layer copper zones.
 
+The generated `ground-plane.json` and `route-quality.json` files remain project
+reports when opening or resuming a native PCB directory. They are excluded from
+design-spec selection; `design.yaml` still takes precedence over other design
+files, and differently named JSON designs remain supported.
+
 | Option | Native routing flag | Accepted values |
 | --- | --- | --- |
 | `copper_layers` | `build-pcb --copper-layers` | Integer `2` or `4`; default `2` |

@@ -50,6 +50,8 @@ _CHILD_ENV = "CIRCUIT_WEAVER_WORKFLOW_CHILD"
 _STAGE_TIMEOUTS = {"build": 900, "place": 300, "route": 1800, "preview": 180}
 _APPEND_ONLY_OUTPUTS = {"design.log", "circuit-weaver.log"}
 _PROJECT_INPUT_SUFFIXES = {".kicad_pro", ".kicad_sch", ".kicad_pcb", ".zip", ".yaml", ".yml", ".json"}
+_SPEC_SUFFIXES = {".yaml", ".yml", ".json"}
+_GENERATED_REPORT_FILENAMES = {"ground-plane.json", "route-quality.json"}
 _PROJECT_MODEL_SUFFIXES = {".step", ".stp", ".wrl", ".wrz", ".iges", ".igs", ".obj", ".stl", ".ply"}
 
 
@@ -147,25 +149,46 @@ def _checkpoint_output_paths(checkpoint: dict[str, Any]) -> list[str]:
     ]
 
 
-def _spec_path(root: Path) -> Path:
+def _spec_candidates(root: Path, paths: Any = None) -> list[Path]:
+    """Return candidate design files, excluding known generated root reports."""
+    candidates = root.iterdir() if paths is None else paths
+    return sorted(
+        (
+            path for path in candidates
+            if path.is_file()
+            and path.suffix.casefold() in _SPEC_SUFFIXES
+            and path.name.casefold() not in _GENERATED_REPORT_FILENAMES
+        ),
+        key=lambda path: path.name.casefold(),
+    )
+
+
+def _select_spec(root: Path, paths: Any = None, *, required: bool = True) -> Path | None:
+    candidates = _spec_candidates(root, paths)
     candidate = root / "design.yaml"
-    if candidate.is_file():
+    if candidate.is_file() and candidate in candidates:
         return candidate
-    candidates = sorted(root.glob("*.yaml")) + sorted(root.glob("*.yml")) + sorted(root.glob("*.json"))
     if len(candidates) == 1:
         return candidates[0]
     if not candidates:
+        if not required:
+            return None
         raise WorkflowError("spec_missing", f"No design spec found in {root}")
-    raise WorkflowError("ambiguous_spec", f"Multiple design specs found in {root}; use design.yaml")
+    raise WorkflowError(
+        "ambiguous_spec",
+        f"Multiple design specs found in {root}; use design.yaml",
+        [str(path) for path in candidates],
+    )
+
+
+def _spec_path(root: Path) -> Path:
+    selected = _select_spec(root)
+    assert selected is not None
+    return selected
 
 
 def _has_spec(root: Path) -> bool:
-    return (
-        (root / "design.yaml").is_file()
-        or any(root.glob("*.yaml"))
-        or any(root.glob("*.yml"))
-        or any(root.glob("*.json"))
-    )
+    return bool(_spec_candidates(root))
 
 
 def _stage_requires_spec(stage: str) -> bool:
@@ -316,23 +339,11 @@ def adopt_project(target: str | Path, name: str | None = None) -> dict[str, Any]
                 (path for path in root.iterdir() if path.is_file() and _is_adoptable_input(path)),
                 key=lambda path: path.name.casefold(),
             )
-            specs = [path for path in files if path.suffix.casefold() in {".yaml", ".yml", ".json"}]
-            canonical_spec = root / "design.yaml"
-            if canonical_spec.is_file():
-                spec = canonical_spec
-            elif len(specs) == 1:
-                spec = specs[0]
-            elif len(specs) > 1:
-                raise WorkflowError(
-                    "ambiguous_spec",
-                    f"Multiple project specs found in {root}; name one design.yaml",
-                    [str(path) for path in specs],
-                )
-            else:
-                spec = None
+            specs = _spec_candidates(root, files)
+            spec = _select_spec(root, files, required=False)
             if spec is not None:
                 files = [path for path in files if path not in specs or path == spec]
-            if not files:
+            if not files or all(path.name.casefold() in _GENERATED_REPORT_FILENAMES for path in files):
                 raise WorkflowError("unsupported_target", f"No supported project inputs found in {root}")
 
             project_name = root.name or "project"
@@ -764,12 +775,7 @@ def _execute_stage(
                 *_tool_args(options, "kicad_python_path"),
                 "--tidy-references",
             ]
-            has_design = (
-                (root / "design.yaml").is_file()
-                or any(root.glob("*.yaml"))
-                or any(root.glob("*.yml"))
-                or any(root.glob("*.json"))
-            )
+            has_design = _has_spec(root)
             design = _spec_path(root) if has_design else None
             if design is not None:
                 args.extend(["--design", str(design)])
@@ -1184,12 +1190,7 @@ def _native_footprint_context_inputs(project: Path) -> list[Path]:
 
 
 def _project_has_spec(root: Path) -> bool:
-    return (
-        (root / "design.yaml").is_file()
-        or any(root.glob("*.yaml"))
-        or any(root.glob("*.yml"))
-        or any(root.glob("*.json"))
-    )
+    return _has_spec(root)
 
 
 def _hierarchical_schematic_inputs(root: Path, selected_root: Path) -> list[Path]:
