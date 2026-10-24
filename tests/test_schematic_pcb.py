@@ -7,6 +7,10 @@ from pathlib import Path
 import pytest
 
 from circuit_weaver.footprint_lib import KiCadFootprintLibrary
+from circuit_weaver.pcb_stackup import (
+    expected_copper_layer_names,
+    validate_copper_layers,
+)
 from circuit_weaver.schematic_pcb import (
     _annotation_errors_present,
     _copy_schematic_project,
@@ -15,6 +19,21 @@ from circuit_weaver.schematic_pcb import (
     _worker_result,
     schematic_to_pcb,
 )
+
+
+@pytest.mark.parametrize("count,names", [
+    (2, ("F.Cu", "B.Cu")),
+    (4, ("F.Cu", "In1.Cu", "In2.Cu", "B.Cu")),
+])
+def test_supported_copper_layer_arrangements(count, names):
+    assert validate_copper_layers(count) == count
+    assert expected_copper_layer_names(count) == names
+
+
+@pytest.mark.parametrize("count", [True, False, 3, 6, 2.0, "4", None])
+def test_copper_layer_count_rejects_bool_noninteger_and_unsupported(count):
+    with pytest.raises(ValueError, match="integer 2 or 4"):
+        validate_copper_layers(count)
 
 
 def _fixture_library(tmp_path: Path, pads: tuple[str, ...] = ("1", "2")) -> KiCadFootprintLibrary:
@@ -112,6 +131,8 @@ def test_overwrite_publishes_the_same_derived_project_settings_that_drc_validate
         }))
         return SimpleNamespace(returncode=0, stderr="", stdout="CW_SCHEMATIC_PCB_RESULT=" + json.dumps({
             "status": "ok", "footprints": 1, "pads": 2, "nets": 1,
+            "copper_layer_count": request["copper_layers"],
+            "copper_layer_names": list(expected_copper_layer_names(request["copper_layers"])),
         }))
 
     def drc(board, **kwargs):

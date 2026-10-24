@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -132,7 +133,6 @@ def test_table_parser_rejects_unterminated_quotes_and_malformed_scalar_fields(tm
 
 
 def _mock_public_workflow(monkeypatch, tmp_path: Path, *, mapped_path: str, global_alias: bool):
-    import json
     import shutil
     from types import SimpleNamespace
 
@@ -173,10 +173,19 @@ def _mock_public_workflow(monkeypatch, tmp_path: Path, *, mapped_path: str, glob
             return SimpleNamespace(returncode=0, stderr="", stdout="KiCad 10.0")
         request = json.loads(kwargs["input"])
         Path(request["board"]).write_text("mock board", encoding="utf-8")
+        from circuit_weaver.pcb_stackup import expected_copper_layer_names
+
+        count = request["copper_layers"]
         return SimpleNamespace(
             returncode=0,
             stderr="",
-            stdout='CW_SCHEMATIC_PCB_RESULT={"status":"ok","footprints":1,"pads":2}',
+            stdout=(
+                'CW_SCHEMATIC_PCB_RESULT=' + json.dumps({
+                    "status": "ok", "footprints": 1, "pads": 2,
+                    "copper_layer_count": count,
+                    "copper_layer_names": list(expected_copper_layer_names(count)),
+                })
+            ),
         )
 
     monkeypatch.setattr(module.subprocess, "run", run)
@@ -218,4 +227,4 @@ def test_public_schematic_to_pcb_does_not_use_global_lookalike_for_missing_expli
     assert "unresolved KiCad footprint" in result["message"]
     assert global_mod.is_file()
     assert not output.exists()
-    assert len(calls) == 1  # export only; worker/publication never run
+    assert not calls  # reject the missing explicit library before exporting or publishing

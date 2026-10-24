@@ -697,6 +697,12 @@ def import_routing_session(
                                  python_path=kicad_python_path)
             if imported["status"] != "ok":
                 return imported
+            zone_refill = imported.get("zone_refill")
+            if imported.get("zone_count", 0) and (
+                not isinstance(zone_refill, dict) or zone_refill.get("status") != "verified"
+                or zone_refill.get("saved_fill_geometry_verified") is not True
+            ):
+                return {"status": "error", "message": "Imported routing lacks verified fresh zone fills"}
             _restore_settings(source, staged, snapshots)
             drc = run_drc(staged, evidence_ledger=EvidenceLedger(), project_context=source.parent)
             if not drc.passed:
@@ -705,6 +711,7 @@ def import_routing_session(
             _publish(staged, destination, snapshots, overwrite)
         return {"status": "ok", "output_path": str(destination), "output_kind": "routed_kicad_board",
                 "drc": {**drc.to_dict(), "board": str(destination)},
+                **({"zone_refill": zone_refill} if zone_refill is not None else {}),
                 "routing_complete": True, "fabrication_ready": False}
     except (OSError, ValueError) as exc:
         return {"status": "error", "message": str(exc)}

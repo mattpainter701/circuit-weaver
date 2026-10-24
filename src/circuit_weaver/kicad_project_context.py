@@ -99,7 +99,10 @@ def _checked_local_library(project: Path, relative: str) -> Path:
         cursor = cursor / part
         if _is_link_or_reparse(cursor):
             raise ValueError(f"symlink in project footprint-library path: {cursor}")
-    resolved = candidate.resolve(strict=True)
+    try:
+        resolved = candidate.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise ValueError(f"unresolved KiCad footprint library: {relative!r}") from exc
     if not resolved.is_relative_to(project) or not resolved.is_dir():
         raise ValueError(f"project footprint library is missing or escapes project: {relative!r}")
     if _is_link_or_reparse(resolved):

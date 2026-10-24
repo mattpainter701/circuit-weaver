@@ -1,4 +1,4 @@
-"""Native, fail-closed ground-plane creation for simple two-layer boards.
+"""Native, fail-closed ground-plane creation on selected enabled copper layers.
 
 The caller supplies KiCad's pcbnew module.  This module only adds two native
 zones and fills them; it never edits existing tracks, vias, footprints, or text.
@@ -82,15 +82,33 @@ def _trace_route(graph, row):
             "trace_only_vias": int(route["vias"])}
 
 
-def _connected_ground_pads(board, net):
+def _connected_ground_pads(board, net, *, allow_unconnected=False):
     board.BuildConnectivity()
     unconnected = []
     for fp in board.GetFootprints():
         for pad in fp.Pads():
             if str(pad.GetNetname()) == str(net) and not pad.IsConnected():
                 unconnected.append(f"{fp.GetReference()}.{pad.GetNumber()}")
-    if unconnected:
+    if unconnected and not allow_unconnected:
         raise ValueError("filled ground plane leaves pads unconnected: " + ", ".join(unconnected))
+    return unconnected
+
+
+def _copper_layer_ids(board, pcbnew):
+    """Resolve actual enabled copper layer names from this board's native stack."""
+    stack = board.GetEnabledLayers().CuStack()
+    seq = getattr(stack, "Seq", None)
+    values = seq() if callable(seq) else stack
+    result = {}
+    for raw in values:
+        layer_id = int(raw)
+        name = str(board.GetLayerName(layer_id))
+        if name in result or not name.endswith(".Cu"):
+            raise ValueError("board exposes an invalid or duplicate enabled copper layer name")
+        result[name] = layer_id
+    if len(result) != int(board.GetDesignSettings().GetCopperLayerCount()):
+        raise ValueError("board copper layer inventory is incomplete")
+    return result
 
 
 def _zone_pad_anchors(board, zone):
@@ -131,7 +149,9 @@ def _zone_stats(zone, pcbnew, layer_name):
 
 
 def _ground_zones(board, pcbnew, net, layers):
-    layer_ids = {"F.Cu": pcbnew.F_Cu, "B.Cu": pcbnew.B_Cu}
+    layer_ids = _copper_layer_ids(board, pcbnew)
+    if any(name not in layer_ids for name in layers):
+        raise ValueError("requested ground-plane layer is not enabled copper on this board")
     found = {}
     for zone in board.Zones():
         if str(zone.GetNetname()) != str(net):
@@ -173,20 +193,22 @@ def _create_zone(board, pcbnew, net_item, layer, bounds, options):
 
 
 def apply(board, pcbnew, *, net="GND", layers=("F.Cu", "B.Cu"), options=None,
-          protected_connections=()):
-    """Add and fill one ground zone on each requested outer copper layer.
+          protected_connections=(), pre_route=False):
+    """Add and fill one ground zone on each requested enabled copper layer.
 
-    The board must have a rectangular outline, two copper layers, no existing
-    zones, and an existing named net.  Existing copper objects are preserved.
+    The board must have a rectangular outline, enabled copper layers, no
+    existing zones, and an existing named net. Existing copper objects are preserved.
     """
     options = dict(options or {})
-    if int(board.GetDesignSettings().GetCopperLayerCount()) != 2:
-        raise ValueError("native ground planes support two-layer boards only")
+    if not isinstance(pre_route, bool):
+        raise ValueError("pre_route must be a boolean")
     if list(board.Zones()):
         raise ValueError("native ground planes require a board without existing zones")
-    layer_ids = {"F.Cu": pcbnew.F_Cu, "B.Cu": pcbnew.B_Cu}
-    if not isinstance(layers, (tuple, list)) or len(layers) != 2 or set(layers) != {"F.Cu", "B.Cu"}:
-        raise ValueError("layers must contain F.Cu and B.Cu exactly once")
+    layer_ids = _copper_layer_ids(board, pcbnew)
+    if (not isinstance(layers, (tuple, list)) or not layers
+            or any(not isinstance(name, str) or name not in layer_ids for name in layers)
+            or len(layers) != len(set(layers))):
+        raise ValueError("layers must contain unique enabled copper layer names from this board")
     bounds = _outline_bounds(board, pcbnew)
     net_item = next((item for item in board.GetNetInfo().NetsByName().values()
                      if str(item.GetNetname()) == str(net)), None)
@@ -228,7 +250,7 @@ def apply(board, pcbnew, *, net="GND", layers=("F.Cu", "B.Cu"), options=None,
     after = sum(1 for _ in board.GetTracks())
     if before != after:
         raise ValueError("ground-plane fill changed the existing track/via inventory")
-    _connected_ground_pads(board, net)
+    unconnected_ground_pads = _connected_ground_pads(board, net, allow_unconnected=pre_route)
     zones = _ground_zones(board, pcbnew, net, layers)
     stats = [_zone_stats(zone, pcbnew, name) for zone, name in zip(zones, layers)]
     return {"status": "ok", "net": str(net), "layers": list(layers), "added_zones": len(zones),
@@ -236,11 +258,13 @@ def apply(board, pcbnew, *, net="GND", layers=("F.Cu", "B.Cu"), options=None,
             "filled_area_mm2": round(sum(row["area_mm2"] for row in stats), 6),
             "island_count": sum(row["island_count"] for row in stats), "zone_stats": stats,
             "track_count_before": before, "track_count_after": after,
-            "tracks_preserved": True, "protected_connections": rows}
+            "tracks_preserved": True, "protected_connections": rows,
+            "unconnected_ground_pads": unconnected_ground_pads,
+            "routing_complete": not pre_route, "requires_route": bool(pre_route)}
 
 
 def verify(board, pcbnew, expected_report, *, net="GND", layers=("F.Cu", "B.Cu"),
-           protected_connections=()):
+           protected_connections=(), pre_route=False):
     """Verify native zone fill and connectivity after saving and reloading."""
     zones = _ground_zones(board, pcbnew, net, layers)
     if any(not zone.IsFilled() or not zone.HasFilledPolysForLayer(zone.GetLayer()) for zone in zones):
@@ -249,7 +273,7 @@ def verify(board, pcbnew, expected_report, *, net="GND", layers=("F.Cu", "B.Cu")
     if stats != expected_report.get("zone_stats"):
         raise ValueError("saved filled-polygon geometry differs from the native fill report")
     anchors = [_zone_pad_anchors(board, zone) for zone in zones]
-    _connected_ground_pads(board, net)
+    unconnected_ground_pads = _connected_ground_pads(board, net, allow_unconnected=pre_route)
     track_count = sum(1 for _ in board.GetTracks())
     if expected_report.get("track_count_before") != track_count:
         raise ValueError("saved board track/via inventory count differs from source")
@@ -272,4 +296,5 @@ def verify(board, pcbnew, expected_report, *, net="GND", layers=("F.Cu", "B.Cu")
             "island_count": sum(row["island_count"] for row in stats),
             "zone_connected_copper_counts": [len(items) for items in anchors], "tracks_preserved": True,
             "saved_fill_geometry_verified": True, "saved_connectivity_verified": True,
-            "protected_connections": checked}
+            "protected_connections": checked, "unconnected_ground_pads": unconnected_ground_pads,
+            "routing_complete": not pre_route, "requires_route": bool(pre_route)}

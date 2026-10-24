@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Build review boards with an explicit 2- or 4-copper-layer count, and select enabled copper layers for ground planes in shared workflows; reports record copper count and order without claiming dielectric stackup or impedance qualification.
 - Review native board placement, endpoint route lengths, via counts and authored clock-pair skew through CLI, Python and MCP. Gate shared workflow publication on explicit route contracts and retain failed candidates for inspection.
 - Add time-window voltage/current acceptance, time-weighted transient means and structured pulsed current sources, with distinct IoT input, industrial current-burden and transmitter bias regression circuits.
 - Seed large assemblies by connected owner/support families and authored functional groups, using compact tiles and natural routing channels while preserving fixed and edge constraints. Bound high fanout seed graphs with a deterministic sparse cycle that retains every owner.

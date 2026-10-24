@@ -137,8 +137,15 @@ def execute(request):
     width, height = float(request["width_mm"]), float(request["height_mm"])
     if not math.isfinite(width) or not math.isfinite(height) or width <= 0 or height <= 0:
         raise ValueError("Board dimensions must be finite positive numbers")
+    requested_layers = request.get("copper_layers", 2)
+    if (
+        isinstance(requested_layers, bool)
+        or not isinstance(requested_layers, int)
+        or requested_layers not in {2, 4}
+    ):
+        raise ValueError("copper_layers must be the integer 2 or 4")
     board = pcbnew.BOARD()
-    board.SetCopperLayerCount(2)
+    board.SetCopperLayerCount(requested_layers)
     minimum_drill_mm = request.get("minimum_drill_mm")
     if minimum_drill_mm is not None:
         minimum_drill_mm = float(minimum_drill_mm)
@@ -239,6 +246,24 @@ def execute(request):
     reloaded = pcbnew.LoadBoard(output)
     if reloaded is None:
         raise ValueError("KiCad could not reload the saved prototype board")
+    actual_count = int(reloaded.GetCopperLayerCount())
+    enabled = reloaded.GetEnabledLayers()
+    stack = enabled.CuStack()
+    native_ids = stack.Seq() if callable(getattr(stack, "Seq", None)) else stack
+    enabled_copper_layers = [{"id": int(layer), "name": str(reloaded.GetLayerName(int(layer)))}
+                             for layer in native_ids]
+    expected_names = (
+        ["F.Cu", "B.Cu"] if requested_layers == 2
+        else ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+    )
+    by_name = {layer["name"]: layer for layer in enabled_copper_layers}
+    if (
+        actual_count != requested_layers
+        or len(by_name) != len(enabled_copper_layers)
+        or [row["name"] for row in enabled_copper_layers] != expected_names
+    ):
+        raise ValueError("Saved board copper layer count or enabled copper layers changed during round trip")
+    copper_layers = enabled_copper_layers
     for footprint in reloaded.GetFootprints():
         if footprint.GetReference() in npth_by_ref:
             _assert_npth_geometry(footprint, npth_by_ref[footprint.GetReference()], pcbnew)
@@ -259,6 +284,9 @@ def execute(request):
         "footprints": len(actual),
         "pads": sum(len(pads) for pads in actual.values()),
         "nets": len(net_by_name),
+        "copper_layer_count": actual_count,
+        "copper_layer_names": [layer["name"] for layer in copper_layers],
+        "copper_layers": copper_layers,
     }
     if physical_only_refs:
         result["physical_only_footprints"] = len(physical_only_refs)

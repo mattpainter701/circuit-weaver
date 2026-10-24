@@ -19,7 +19,7 @@ PLAN = {
 
 @pytest.mark.parametrize("content", [
     "{}",
-    json.dumps({**PLAN, "layers": ["F.Cu"]}),
+    json.dumps({**PLAN, "layers": []}),
     json.dumps({**PLAN, "layers": ["F.Cu", "F.Cu"]}),
     json.dumps({**PLAN, "extra": True}),
     json.dumps({**PLAN, "clearance_mm": 0}),
@@ -33,6 +33,39 @@ def test_ground_plane_plan_is_strict(tmp_path, content):
     path.write_text(content, encoding="utf-8")
     with pytest.raises(ValueError):
         load_ground_plane_plan(path)
+
+
+def test_ground_plane_plan_accepts_named_inner_copper_layers(tmp_path):
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps({**PLAN, "layers": ["In1.Cu", "In2.Cu"]}), encoding="utf-8")
+    assert load_ground_plane_plan(path)["layers"] == ["In1.Cu", "In2.Cu"]
+
+
+def test_pre_route_drc_exception_is_limited_to_unconnected_items():
+    from circuit_weaver.pcb_ground_plane import _pre_route_drc_allowed
+
+    assert _pre_route_drc_allowed(DrcResult(
+        status="ok", board="board.kicad_pcb", raw_report={
+            "violations": [], "schematic_parity": [], "unconnected_items": [{"type": "unconnected_items"}],
+        },
+    ))
+    assert not _pre_route_drc_allowed(DrcResult(
+        status="ok", board="board.kicad_pcb", raw_report={
+            "violations": [{"type": "clearance"}], "schematic_parity": [],
+            "unconnected_items": [{"type": "unconnected_items"}],
+        },
+    ))
+
+
+def test_pre_route_preserves_library_warnings_but_rejects_misclassified_physical_faults():
+    from circuit_weaver.pcb_ground_plane import _pre_route_drc_allowed
+    assert _pre_route_drc_allowed(DrcResult(status="ok", board="board.kicad_pcb", raw_report={
+        "violations": [{"type": "lib_footprint_issues", "severity": "warning"}],
+        "schematic_parity": [], "unconnected_items": [{"type": "unconnected_items"}],
+    }))
+    assert not _pre_route_drc_allowed(DrcResult(status="ok", board="board.kicad_pcb", raw_report={
+        "violations": [], "schematic_parity": [], "unconnected_items": [{"type": "clearance"}],
+    }))
 
 
 def _drc(path: Path, *, fail=False):
@@ -57,6 +90,7 @@ def _report():
         ],
         "zone_connected_copper_counts": [3, 3],
         "track_count_before": 4, "track_count_after": 4, "tracks_preserved": True,
+        "routing_complete": True, "requires_route": False,
         "original_footprints_and_text_preserved": True, "original_board_geometry_preserved": True,
         "saved_fill_geometry_verified": True,
         "saved_connectivity_verified": True,

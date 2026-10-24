@@ -432,6 +432,18 @@ def _normalize_options(options: dict[str, Any] | None) -> dict[str, Any]:
         normalized = json.loads(json.dumps(options, allow_nan=False))
     except (TypeError, ValueError) as exc:
         raise WorkflowError("invalid_options", "options must contain JSON-safe values") from exc
+    if "copper_layers" in normalized:
+        from .pcb_stackup import validate_copper_layers
+        try:
+            normalized["copper_layers"] = validate_copper_layers(normalized["copper_layers"])
+        except ValueError as exc:
+            raise WorkflowError("invalid_options", str(exc)) from exc
+    if "ground_plane" in normalized:
+        from .pcb_ground_plane import _validate_plan
+        try:
+            normalized["ground_plane"] = _validate_plan(normalized["ground_plane"])
+        except (TypeError, ValueError) as exc:
+            raise WorkflowError("invalid_options", str(exc)) from exc
     for key in ("clearance_mm", "minimum_drill_mm"):
         if key not in normalized:
             continue
@@ -716,6 +728,7 @@ def _execute_stage(
                 str(out),
                 "--project-root",
                 str(root),
+                *(["--copper-layers", str(options["copper_layers"])] if "copper_layers" in options else []),
                 "--width",
                 str(width),
                 "--height",
@@ -733,6 +746,8 @@ def _execute_stage(
         return result, outputs
     if stage in {"place", "route", "preview"}:
         board = _latest_board(root, stage)
+        if "copper_layers" in options:
+            _require_workflow_stackup(board, options)
         if stage == "place":
             iterations = options.get("iterations", 5000)
             if isinstance(iterations, bool) or not isinstance(iterations, int) or not 1 <= iterations <= 100000:
@@ -760,11 +775,33 @@ def _execute_stage(
                 args.extend(["--design", str(design)])
             result = _cli(stage, args, root, _STAGE_TIMEOUTS[stage])
             _require_ok(result, stage)
+            if "copper_layers" in options:
+                _require_workflow_stackup(out, options)
             outputs = _publish_attempt(attempt, root, out, root / out.name, result)
         elif stage == "route":
             attempt = _attempt_dir(root, stage)
             out = attempt / "routed.ses"
             routed_board = attempt / "routed.kicad_pcb"
+            plane_preparation = None
+            if "ground_plane" in options:
+                from .kicad_project_context import stage_project_footprint_context
+                from .pcb_ground_plane import add_ground_plane
+                plane_board = attempt / "plane-input.kicad_pcb"
+                plane_preparation = add_ground_plane(
+                    board, plane_board, options["ground_plane"], pre_route=True,
+                    kicad_python_path=options.get("kicad_python_path"),
+                )
+                (attempt / "ground-plane-before.json").write_text(
+                    json.dumps(plane_preparation, indent=2) + "\n", encoding="utf-8"
+                )
+                _require_ok(plane_preparation, "ground_plane")
+                _require_outputs("ground_plane", plane_preparation, [plane_board])
+                # The routed working copy needs the same project footprint table;
+                # it remains private and is never published over project assets.
+                stage_project_footprint_context(board.parent, attempt)
+                board = plane_board
+                if "copper_layers" in options:
+                    _require_workflow_stackup(board, options)
             args = [
                 "autoroute",
                 str(board),
@@ -790,14 +827,34 @@ def _execute_stage(
             _require_ok(result, stage)
             extras = [(out, root / out.name)]
             publish_hashes = None
-            if "route_contracts" in options:
-                from .board_review import review_pcb
-
+            if any(key in options for key in ("route_contracts", "ground_plane", "copper_layers")):
                 publish_hashes = {
                     path: file_sha256(path) if path.is_file() else None
                     for path in (routed_board, out, routed_board.with_suffix(".kicad_pro"),
                                  routed_board.with_suffix(".kicad_dru"))
                 }
+            if "copper_layers" in options:
+                result["copper_layers"] = _require_workflow_stackup(routed_board, options)
+            if plane_preparation is not None:
+                (attempt / "ground-plane-after.json").write_text(
+                    json.dumps({"plan": options["ground_plane"], "after_route": result.get("zone_refill")},
+                               indent=2) + "\n", encoding="utf-8"
+                )
+                _require_workflow_planes(result.get("zone_refill"), options["ground_plane"])
+                report = attempt / "ground-plane.json"
+                plane_report = {
+                    "plan": options["ground_plane"], "plan_sha256": _digest(options["ground_plane"]),
+                    "pre_route": plane_preparation, "after_route": result["zone_refill"],
+                    "board_sha256": publish_hashes[routed_board], "routing_complete": True,
+                    "electrical_or_manufacturing_approval": False,
+                }
+                report.write_text(json.dumps(plane_report, indent=2) + "\n", encoding="utf-8")
+                result["ground_plane"] = plane_report
+                extras.append((report, root / report.name))
+                publish_hashes[report] = file_sha256(report)
+            if "route_contracts" in options:
+                from .board_review import review_pcb
+
                 review = review_pcb(routed_board, {"routing": options["route_contracts"]},
                                     kicad_python_path=options.get("kicad_python_path"))
                 quality = {
@@ -847,6 +904,51 @@ def _execute_stage(
         _require_outputs(stage, result, [Path(value) for value in outputs])
         return result, outputs
     raise WorkflowError("unknown_stage", stage)
+
+
+def _require_workflow_stackup(board: Path, options: dict[str, Any]) -> dict[str, Any]:
+    from .kicad_bridge import run_kicad
+    from .pcb_stackup import expected_copper_layer_names
+    inspection = run_kicad("inspect", board=str(board), python_path=options.get("kicad_python_path"))
+    expected = expected_copper_layer_names(options["copper_layers"])
+    if (inspection.get("status") != "ok" or inspection.get("copper_layer_inventory_complete") is not True
+            or type(inspection.get("copper_layer_count")) is not int
+            or inspection.get("copper_layer_count") != options["copper_layers"]
+            or tuple(inspection.get("copper_layer_names") or ()) != expected):
+        raise WorkflowError("stackup_mismatch", "Native board does not verify the explicitly requested copper layers")
+    return {"count": len(expected), "ordered_names": list(expected),
+            "scope": "copper_count_and_order_only; dielectric_and_impedance_not_assessed"}
+
+
+def _require_workflow_planes(report: Any, plan: dict[str, Any]) -> None:
+    if (not isinstance(report, dict) or report.get("status") != "verified"
+            or any(report.get(key) is not True for key in (
+                "saved_fill_geometry_verified", "zone_definitions_preserved", "copper_layers_preserved"))
+            or not isinstance(report.get("zones"), list)):
+        raise WorkflowError("plane_verification_failed", "Routed planes lack fresh native saved-fill evidence")
+    if (type(report.get("zone_count")) is not int or report["zone_count"] <= 0
+            or report["zone_count"] != len(report["zones"])):
+        raise WorkflowError("plane_verification_failed", "Routed plane count is inconsistent")
+    remaining = report.get("unconnected_pads_by_net")
+    anchors = report.get("connected_copper")
+    if not isinstance(remaining, dict) or remaining.get(plan["net"]) != [] or not isinstance(anchors, list):
+        raise WorkflowError("plane_verification_failed", "Routed plane net has incomplete native pad/anchor evidence")
+    for layer in plan["layers"]:
+        rows = [row for row in report["zones"] if isinstance(row, dict)
+                and row.get("net") == plan["net"] and row.get("layer_name") == layer]
+        if len(rows) != 1:
+            raise WorkflowError("plane_verification_failed", "Routed plane inventory does not match the authored plan")
+        row = rows[0]
+        connections = [item for item in anchors if isinstance(item, dict) and item.get("id") == row.get("id")]
+        if (len(connections) != 1 or not row.get("id")
+                or type(connections[0].get("connected_copper_count")) is not int
+                or connections[0]["connected_copper_count"] <= 0):
+            raise WorkflowError("plane_verification_failed", "Routed plane has no proven native copper anchor")
+        area, islands, digest = row.get("area_mm2"), row.get("island_count"), row.get("polygon_sha256")
+        if (isinstance(area, bool) or not isinstance(area, (int, float)) or not math.isfinite(area) or area <= 0
+                or type(islands) is not int or islands != 0 or not isinstance(digest, str) or len(digest) != 64
+                or any(char not in "0123456789abcdef" for char in digest.lower())):
+            raise WorkflowError("plane_verification_failed", "Routed planes contain unverified fill or isolated copper")
 
 
 def _tool_args(options: dict[str, Any], *keys: str) -> list[str]:

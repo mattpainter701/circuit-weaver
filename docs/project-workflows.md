@@ -82,8 +82,43 @@ artifacts are absent.
 The shared runner accepts these routing controls in `options_json` through
 CLI, Python and MCP. They are included in checkpoint option hashes.
 
+`copper_layers` selects the native board's copper count during `build`: use the
+integer `2` (default) or `4`. The four-layer order is `F.Cu`, `In1.Cu`,
+`In2.Cu`, `B.Cu`. A route-stage `ground_plane` object uses the same strict plan
+fields as `plane-pcb` and selects specific enabled copper layers for the named
+net's zones. For example, a four-layer board can add inner-layer GND zones:
+
+```json
+{
+  "copper_layers": 4,
+  "ground_plane": {
+    "net": "GND",
+    "layers": ["In1.Cu", "In2.Cu"],
+    "edge_clearance_mm": 0.5,
+    "clearance_mm": 0.25,
+    "min_thickness_mm": 0.2,
+    "thermal_gap_mm": 0.25,
+    "thermal_spoke_width_mm": 0.3,
+    "protected_connections": []
+  }
+}
+```
+
+Pass those options through the shared CLI workflow like this:
+
+```text
+circuit-weaver workflow run <project> --stages build place route --options-json '{"copper_layers":4,"ground_plane":{"net":"GND","layers":["In1.Cu","In2.Cu"],"edge_clearance_mm":0.5,"clearance_mm":0.25,"min_thickness_mm":0.2,"thermal_gap_mm":0.25,"thermal_spoke_width_mm":0.3,"protected_connections":[]}}' --json
+```
+
+Build evidence verifies the native copper count and layer order. Route evidence
+verifies selected zone layers, saved fill geometry and connectivity. These
+reports record copper count/order and zone results only; they do not define
+dielectric materials or thicknesses, or qualify impedance.
+
 | Option | Native routing flag | Accepted values |
 | --- | --- | --- |
+| `copper_layers` | `build-pcb --copper-layers` | Integer `2` or `4`; default `2` |
+| `ground_plane` | route-stage zone plan | Object with `net`, `layers`, `edge_clearance_mm`, `clearance_mm`, `min_thickness_mm`, `thermal_gap_mm`, `thermal_spoke_width_mm`, and `protected_connections` |
 | `route_timeout` | `--timeout` | Positive seconds |
 | `route_max_passes` | `--max-passes` | Integer 0–9,999; 0 leaves the pass count unlimited |
 | `route_optimization_threads` | `--optimization-threads` | Integer 0–1,024; 0 disables optimization threads |

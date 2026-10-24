@@ -108,3 +108,26 @@ def test_zone_anchor_query_uses_stable_pad_and_track_methods():
 
     assert calls == ["pads", "tracks"]
     assert [item.GetClass() for item in anchors] == ["PAD", "PCB_VIA", "PCB_TRACK"]
+
+
+def test_enabled_copper_names_are_resolved_from_native_board_stack():
+    class LayerStack(list):
+        def Seq(self):
+            return list(self)
+
+    class Enabled:
+        def CuStack(self):
+            return LayerStack([0, 2, 4, 31])
+
+    class Settings:
+        def GetCopperLayerCount(self):
+            return 4
+
+    board = SimpleNamespace(
+        GetEnabledLayers=lambda: Enabled(),
+        GetLayerName=lambda layer: {0: "F.Cu", 2: "In1.Cu", 4: "In2.Cu", 31: "B.Cu"}[layer],
+        GetDesignSettings=lambda: Settings(),
+    )
+    assert ground._copper_layer_ids(board, SimpleNamespace()) == {
+        "F.Cu": 0, "In1.Cu": 2, "In2.Cu": 4, "B.Cu": 31,
+    }

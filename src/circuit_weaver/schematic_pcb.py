@@ -24,6 +24,7 @@ from .evidence import EvidenceLedger
 from .footprint_lib import KiCadFootprintLibrary, _parse_kicad_sexp
 from .kicad_bridge import find_kicad_python
 from .pcb_handoff import _pcb_output_lock, _publish_staged_transaction
+from .pcb_stackup import expected_copper_layer_names, validate_copper_layers
 
 _SHEET_FILE_RE = re.compile(r'\(property\s+"Sheetfile"\s+"([^"\\]*(?:\\.[^"\\]*)*)"', re.IGNORECASE)
 _PINLESS_PHYSICAL_SYMBOLS = {("Mechanical", "MountingHole"), ("Mechanical", "Fiducial")}
@@ -512,6 +513,7 @@ def schematic_to_pcb(
     height_mm: float = 60,
     clearance_mm: float | None = None,
     minimum_drill_mm: float | None = None,
+    copper_layers: int = 2,
     overwrite: bool = False,
     kicad_python_path: str | Path | None = None,
     project_root: str | Path | None = None,
@@ -522,6 +524,7 @@ def schematic_to_pcb(
     try:
         if source.suffix.lower() != ".kicad_sch" or not source.is_file():
             raise ValueError("Input must be an existing .kicad_sch schematic")
+        copper_layers = validate_copper_layers(copper_layers)
         if target.suffix.lower() != ".kicad_pcb":
             raise ValueError("Output must use the .kicad_pcb suffix")
         if source == target:
@@ -649,6 +652,7 @@ def schematic_to_pcb(
                 "height_mm": float(height_mm),
                 "clearance_mm": float(clearance_mm) if clearance_mm is not None else None,
                 "minimum_drill_mm": float(minimum_drill_mm) if minimum_drill_mm is not None else None,
+                "copper_layers": copper_layers,
                 "components": model["components"],
                 "nets": model["nets"],
                 "explicit_no_connects": model["explicit_no_connects"],
@@ -666,6 +670,9 @@ def schematic_to_pcb(
                 raise RuntimeError(worker.get("message", "KiCad failed to create the prototype board"))
             if not staged_board.is_file():
                 raise RuntimeError("KiCad worker did not create the board")
+            if (worker.get("copper_layer_count") != copper_layers or
+                    tuple(worker.get("copper_layer_names", ())) != expected_copper_layer_names(copper_layers)):
+                raise RuntimeError("KiCad worker did not verify the requested copper layer arrangement")
 
             _check_snapshot(source_settings_snapshot)
             # Native SaveBoard can replace even an existing staged .kicad_pro
@@ -738,6 +745,11 @@ def schematic_to_pcb(
                      **({"minimum_drill_mm": float(minimum_drill_mm)}
                         if minimum_drill_mm is not None else {})}
                 ),
+                "copper_layers": {
+                    "count": int(worker["copper_layer_count"]),
+                    "ordered_names": list(worker["copper_layer_names"]),
+                    "scope": "copper_count_and_order_only; dielectric_and_impedance_not_assessed",
+                },
             }
             if physical_only_components:
                 validation["physical_only_components"] = {

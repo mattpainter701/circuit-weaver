@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import sys
@@ -88,6 +89,177 @@ def _native_copper_layer_inventory(board, pcbnew):
         return layer_ids, complete
     except (AttributeError, RuntimeError, TypeError, ValueError):
         return [], False
+
+
+def _native_copper_layer_stack(board, pcbnew):
+    """Return enabled copper IDs in native physical stack order, fail-closed."""
+    known_ids, known_complete = _native_known_copper_layer_inventory(pcbnew)
+    try:
+        stack = board.GetEnabledLayers().CuStack()
+        seq = getattr(stack, "Seq", None)
+        layer_ids = [int(layer) for layer in (seq() if callable(seq) else stack)]
+        complete = (known_complete and len(layer_ids) == len(set(layer_ids))
+                    and len(layer_ids) == int(board.GetCopperLayerCount())
+                    and set(layer_ids) <= set(known_ids)
+                    and {int(pcbnew.F_Cu), int(pcbnew.B_Cu)} <= set(layer_ids))
+        return layer_ids, complete
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return [], False
+
+
+def _native_stack_state(board, pcbnew):
+    layer_ids, complete = _native_copper_layer_stack(board, pcbnew)
+    if not complete:
+        raise ValueError("native copper stack inventory is incomplete")
+    layers = [{"id": layer_id, "name": str(board.GetLayerName(layer_id))}
+              for layer_id in layer_ids]
+    names = [row["name"] for row in layers]
+    if (any(not name.endswith(".Cu") for name in names)
+            or len(names) != len(set(names))):
+        raise ValueError("native copper stack has invalid or duplicate layer names")
+    return {"count": len(layers), "layers": layers}
+
+
+def _zone_definition_state(board, pcbnew):
+    """Fingerprint zone outlines/settings separately from mutable fill geometry."""
+    rows = []
+    for zone in board.Zones():
+        try:
+            uuid = str(zone.m_Uuid.AsString())
+            outline = zone.Outline().Format(False)
+            row = {
+                "id": uuid,
+                "net": str(zone.GetNetname()),
+                "layer_id": int(zone.GetLayer()),
+                "layer_name": str(zone.GetLayerName()),
+                "layer_ids": sorted(int(layer) for layer in zone.GetLayerSet().Seq()),
+                "rule_area": _zone_is_rule_area(zone),
+                "outline_sha256": hashlib.sha256(outline.encode("utf-8")).hexdigest(),
+                "settings": {
+                    "clearance_iu": int(zone.GetLocalClearance()),
+                    "min_thickness_iu": int(zone.GetMinThickness()),
+                    "thermal_gap_iu": int(zone.GetThermalReliefGap()),
+                    "thermal_spoke_width_iu": int(zone.GetThermalReliefSpokeWidth()),
+                    "pad_connection": int(zone.GetPadConnection()),
+                    "island_removal_mode": int(zone.GetIslandRemovalMode()),
+                    "min_island_area_iu2": int(zone.GetMinIslandArea()),
+                    "priority": int(zone.GetAssignedPriority()),
+                },
+            }
+            if row["rule_area"]:
+                row["keepout"] = {name: bool(getattr(zone, name)()) for name in (
+                    "GetDoNotAllowTracks", "GetDoNotAllowVias", "GetDoNotAllowPads",
+                    "GetDoNotAllowZoneFills", "GetDoNotAllowFootprints")}
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+            raise ValueError("native zone definition could not be captured completely") from exc
+        rows.append(row)
+    if len({row["id"] for row in rows}) != len(rows):
+        raise ValueError("native zone identities are not unique")
+    return sorted(rows, key=lambda row: row["id"])
+
+
+def _zone_is_rule_area(zone):
+    for name in ("GetIsRuleArea", "IsRuleArea"):
+        member = getattr(zone, name, None)
+        if callable(member):
+            return bool(member())
+        if member is not None:
+            return bool(member)
+    return False
+
+
+def _zone_fill_state(board, pcbnew):
+    rows = []
+    keepout_count = 0
+    non_copper_count = 0
+    for zone in board.Zones():
+        if _zone_is_rule_area(zone):
+            keepout_count += 1
+            continue
+        if not str(zone.GetLayerName()).endswith(".Cu"):
+            non_copper_count += 1
+            continue
+        layer = int(zone.GetLayer())
+        if sorted(int(value) for value in zone.GetLayerSet().Seq()) != [layer]:
+            raise ValueError("saved fill verification currently requires single-layer copper zones")
+        if not zone.IsFilled() or not zone.HasFilledPolysForLayer(layer):
+            raise ValueError(f"zone {zone.GetNetname()} on {zone.GetLayerName()} has no saved fill")
+        polygons = zone.GetFilledPolysList(layer)
+        polygon_count = int(polygons.OutlineCount())
+        islands = sum(bool(zone.IsIsland(layer, index)) for index in range(polygon_count))
+        area_mm2 = float(zone.CalculateFilledArea()) / 1e12
+        if not math.isfinite(area_mm2) or area_mm2 < 0:
+            raise ValueError("native zone fill has invalid area")
+        rows.append({
+            "id": str(zone.m_Uuid.AsString()), "net": str(zone.GetNetname()),
+            "layer_name": str(zone.GetLayerName()), "area_mm2": round(area_mm2, 6),
+            "island_count": islands,
+            "polygon_sha256": hashlib.sha256(polygons.Format(False).encode("utf-8")).hexdigest(),
+        })
+    return {"rows": sorted(rows, key=lambda row: row["id"]),
+            "fillable_zone_count": len(rows), "keepout_zone_count": keepout_count,
+            "non_copper_zone_count": non_copper_count}
+
+
+def _zone_connected_counts(board):
+    board.BuildConnectivity()
+    connectivity = board.GetConnectivity()
+    result = []
+    for zone in board.Zones():
+        if _zone_is_rule_area(zone) or not str(zone.GetLayerName()).endswith(".Cu"):
+            continue
+        connected = list(connectivity.GetConnectedPads(zone)) + list(connectivity.GetConnectedTracks(zone))
+        count = sum(1 for item in connected
+                    if item.GetClass() != "ZONE" and str(item.GetNetname()) == str(zone.GetNetname()))
+        result.append({"id": str(zone.m_Uuid.AsString()), "connected_copper_count": count})
+    return sorted(result, key=lambda row: row["id"])
+
+
+def _refill_imported_zones(board, pcbnew, original_definitions, original_stack):
+    if (_zone_definition_state(board, pcbnew) != original_definitions
+            or _native_stack_state(board, pcbnew) != original_stack):
+        raise ValueError("SES import changed existing zone definitions or copper stackup")
+    native_zones = board.Zones()
+    if not pcbnew.ZONE_FILLER(board).Fill(native_zones):
+        raise ValueError("KiCad native zone refill failed after SES import")
+    if (_zone_definition_state(board, pcbnew) != original_definitions
+            or _native_stack_state(board, pcbnew) != original_stack):
+        raise ValueError("zone refill changed existing zone definitions or copper stackup")
+    fill_state = _zone_fill_state(board, pcbnew)
+    return {"status": "pending_saved_verification", "zone_definitions": original_definitions,
+            "copper_stack": original_stack, **fill_state,
+            "connected_copper": _zone_connected_counts(board)}
+
+
+def _verify_saved_imported_zones(board, pcbnew, report):
+    if (_zone_definition_state(board, pcbnew) != report["zone_definitions"]
+            or _native_stack_state(board, pcbnew) != report["copper_stack"]):
+        raise ValueError("saved SES board changed zone definitions or copper stackup")
+    saved_fill_state = _zone_fill_state(board, pcbnew)
+    if saved_fill_state != {key: report[key] for key in (
+            "rows", "fillable_zone_count", "keepout_zone_count", "non_copper_zone_count")}:
+        raise ValueError("saved SES zone-fill geometry differs from fresh native refill")
+    connected = _zone_connected_counts(board)
+    # _zone_connected_counts rebuilt connectivity once. Inspect every pad once,
+    # rather than rebuilding it for every net on a large board.
+    unconnected_pads_by_net = {row["net"]: [] for row in saved_fill_state["rows"]}
+    for footprint in board.GetFootprints():
+        for pad in footprint.Pads():
+            net = str(pad.GetNetname())
+            if net in unconnected_pads_by_net and not pad.IsConnected():
+                unconnected_pads_by_net[net].append(f"{footprint.GetReference()}.{pad.GetNumber()}")
+    for pads in unconnected_pads_by_net.values():
+        pads.sort()
+    unconnected_ground_pads = unconnected_pads_by_net.get("GND", [])
+    report.update({"status": "verified", "saved_fill_geometry_verified": True,
+                   "zone_definitions_preserved": True, "copper_stackup_preserved": True,
+                   "copper_layers_preserved": True,
+                   "zone_count": saved_fill_state["fillable_zone_count"],
+                   "total_zone_count": len(report["zone_definitions"]),
+                   "zones": saved_fill_state["rows"], "connected_copper": connected,
+                   "unconnected_ground_pads": unconnected_ground_pads,
+                   "unconnected_pads_by_net": unconnected_pads_by_net})
+    return report
 
 
 def _native_known_copper_layer_inventory(pcbnew):
@@ -257,6 +429,20 @@ def _inspect(board, pcbnew, include_route_geometry=False):
     footprints = []
     tracks, vias = [], []
     copper_layer_ids, copper_layer_inventory_complete = _native_copper_layer_inventory(board, pcbnew)
+    copper_stack_ids, copper_stack_complete = _native_copper_layer_stack(board, pcbnew)
+    board_copper_layers = []
+    if copper_stack_complete:
+        try:
+            board_copper_layers = [{"id": layer_id, "name": str(board.GetLayerName(layer_id))}
+                             for layer_id in copper_stack_ids]
+            names = [row["name"] for row in board_copper_layers]
+            copper_stack_complete = (all(name.endswith(".Cu") for name in names)
+                                     and len(names) == len(set(names)))
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            board_copper_layers = []
+            copper_stack_complete = False
+    if not copper_stack_complete:
+        board_copper_layers = []
     known_copper_layer_ids, known_copper_layer_inventory_complete = (
         _native_known_copper_layer_inventory(pcbnew)
     )
@@ -444,6 +630,10 @@ def _inspect(board, pcbnew, include_route_geometry=False):
     bounds = outline_bounds or (box.GetX(), box.GetY(), box.GetWidth(), box.GetHeight())
     result = {"footprints": footprints,
             "track_count": len(list(board.GetTracks())), "zone_count": len(list(board.Zones())),
+            "copper_layer_count": len(board_copper_layers) if copper_stack_complete else None,
+            "copper_layer_names": [row["name"] for row in board_copper_layers] if copper_stack_complete else None,
+            "copper_layers": board_copper_layers if copper_stack_complete else None,
+            "copper_layer_inventory_complete": copper_stack_complete,
             "rectangular_outline": outline_bounds is not None,
             "bounds": dict(zip(("x", "y", "width", "height"), (pcbnew.ToMM(value) for value in bounds)))}
     if include_route_geometry:
@@ -1246,6 +1436,7 @@ def execute(request):
     original_copper = None
     original_layout = None
     original_board_geometry = None
+    zone_refill = None
     if operation == "inspect":
         return {"status": "ok", **_inspect(board, pcbnew,
                                              include_route_geometry=bool(request.get("include_route_geometry")))}
@@ -1256,6 +1447,8 @@ def execute(request):
     if operation == "import_ses":
         placements = {f.GetReference(): (f.GetPosition().x, f.GetPosition().y, f.GetOrientationDegrees(), f.GetLayer())
                       for f in board.GetFootprints()}
+        original_zone_definitions = _zone_definition_state(board, pcbnew) if list(board.Zones()) else None
+        original_copper_stack = _native_stack_state(board, pcbnew) if original_zone_definitions else None
         if not pcbnew.ImportSpecctraSES(board, request["session"]):
             raise ValueError("KiCad could not import the Specctra session")
         for f in board.GetFootprints():
@@ -1264,6 +1457,10 @@ def execute(request):
                 raise ValueError(f"Session unexpectedly changed footprint {f.GetReference()}: "
                                  f"{placements[f.GetReference()]} -> "
                                  f"{(f.GetPosition().x, f.GetPosition().y, f.GetOrientationDegrees(), f.GetLayer())}")
+        if original_zone_definitions is not None:
+            zone_refill = _refill_imported_zones(
+                board, pcbnew, original_zone_definitions, original_copper_stack,
+            )
     elif operation == "refine_returns":
         from _native_return_paths import refine
 
@@ -1319,6 +1516,7 @@ def execute(request):
                 "thermal_spoke_width_mm",
             )},
             protected_connections=plan["protected_connections"],
+            pre_route=request.get("pre_route", False),
         )
         if not isinstance(ground_plane, dict) or ground_plane.get("status") != "ok":
             raise ValueError("Native ground-plane operation did not return a successful report")
@@ -1447,6 +1645,8 @@ def execute(request):
     reloaded = pcbnew.LoadBoard(request["output"])
     if reloaded is None or _identity(reloaded) != identity:
         raise ValueError("Saved board failed pad/net identity verification")
+    if zone_refill is not None:
+        zone_refill = _verify_saved_imported_zones(reloaded, pcbnew, zone_refill)
     if refinement is not None and (original_copper - _copper_state(reloaded)
                                    or original_layout != _fixed_layout_state(reloaded)):
         raise ValueError("Saved return refinement failed original geometry preservation")
@@ -1491,6 +1691,8 @@ def execute(request):
         if not cleanup.get("all_pads_connected") or not cleanup.get("protected_paths_preserved"):
             raise ValueError("Saved cleanup failed native pad connectivity or protected-path verification")
     result = {"status": "ok", "version": pcbnew.Version(), **_inspect(reloaded, pcbnew)}
+    if zone_refill is not None:
+        result["zone_refill"] = zone_refill
     if tidy_summary is not None:
         result["silkscreen"] = _reference_conflict_report(
             reloaded, pcbnew, tidy_summary["moved_count"],
@@ -1532,7 +1734,9 @@ def execute(request):
             )
         verification = verify_ground_plane_after_reload(
             reloaded, pcbnew, ground_plane, net=request["plan"]["net"],
+            layers=tuple(request["plan"]["layers"]),
             protected_connections=request["plan"]["protected_connections"],
+            pre_route=request.get("pre_route", False),
         )
         if not isinstance(verification, dict) or verification.get("status") != "ok":
             raise ValueError("Saved ground-plane board failed fill geometry or connectivity verification")

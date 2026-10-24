@@ -4016,6 +4016,8 @@ def main() -> None:
     )
     build_p.add_argument("--width", type=float, default=80.0, help="Rectangular board width in mm")
     build_p.add_argument("--height", type=float, default=60.0, help="Rectangular board height in mm")
+    build_p.add_argument("--copper-layers", type=int, choices=[2, 4], default=2,
+                         help="Number of copper layers (2 or 4; default: 2)")
     build_p.add_argument("--clearance", type=float, help="Explicit default clearance in mm for a new prototype project")
     build_p.add_argument("--minimum-drill", type=float, help="Explicit minimum drill in mm for a new prototype project")
     build_p.add_argument("--overwrite", action="store_true")
@@ -5428,6 +5430,7 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
         result = native_stage(
             "build", args.schematic, args.output, vars(args), lambda: _run_with_stderr_capture(lambda: schematic_to_pcb(
             args.schematic, args.output, width_mm=args.width, height_mm=args.height,
+            copper_layers=args.copper_layers,
             clearance_mm=args.clearance, minimum_drill_mm=args.minimum_drill,
             overwrite=args.overwrite, kicad_python_path=args.kicad_python_path,
             project_root=args.project_root,
