@@ -138,6 +138,8 @@ def test_parser_drift_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     board.write_text("(kicad_pcb)", encoding="utf-8")
 
     def fake_run(command, **_kwargs):
+        if command[1:] == ["version"]:
+            return MagicMock(returncode=0, stdout="9.0.2\n", stderr="")
         Path(command[command.index("--output") + 1]).write_text(
             '{"violations": "not-a-list"}',
             encoding="utf-8",

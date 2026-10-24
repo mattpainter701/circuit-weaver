@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Add an explicit Python current-budget checker for authored simultaneous-load cases, preserving unknown limits and evidence mismatches; include a corpus audit and nominal/overload/missing-input controls without implying device or thermal qualification.
+- Reject nonfinite, boolean and nonnumeric rail envelopes and invalid sequencing values before they become PCB constraints; reject peak current below the declared steady load while retaining signed rails and unknown limits.
+- Stage the selected KiCad installation's stock footprint context privately for native DRC while preserving project-local tables, so isolated validation can resolve stock libraries without altering user configuration or suppressing warnings.
 - Distinguish interrupted workflows from active runs using the live advisory lock when opening projects or checking status, while preserving saved checkpoints for guarded resume.
 - Add representative four-layer circuit acceptance checks below 500 physical components, with separate preflight, CAD, resource and electrical qualification evidence.
 - Allow Python validation to disable native schematic export explicitly while retaining generated-text and determinism checks; report whether the native export ran and require a nonempty SVG before accepting it.

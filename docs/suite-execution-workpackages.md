@@ -6,6 +6,12 @@ remain in [the first-wave report](suite-enhancement-results.md). Each package
 must retain its inputs, failed attempts and measured acceptance evidence.
 Measured outcomes and open gates are recorded in [the next-wave results](suite-roadmap-execution-results.md).
 
+The active [October 24 follow-up](suite-roadmap-followup.md) assigns phase 3/7
+current-budget contracts to the electrical lane, phase 4 bounded stock lookup
+to the library lane, and phase 6 native scale evidence to the root serial queue.
+The new checker is exposed in Python; shared CLI/MCP invocation is a remaining
+integration item rather than an implied capability.
+
 | Phase | Current work package | Dependency and acceptance | Owner lane |
 | --- | --- | --- | --- |
 | 1. Representative boards | Compare revised SDR placement using identical native input, seed and budget; then rerun routing/assembly; retry BLE when placement is improved | Native pad-net identity and physical gates preserved; compare actual geometry and routed constraints, not just a rendered image | Placement agent + root native queue |

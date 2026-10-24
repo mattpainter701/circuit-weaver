@@ -4,6 +4,11 @@ Started October 23, 2026 from `295e321`, continuing the existing PR #39 task. Ea
 
 The current execution wave is broken into [owned work packages](suite-execution-workpackages.md), with measured outcomes and remaining gates in [the next-wave results](suite-roadmap-execution-results.md).
 
+The [October 24 follow-up](suite-roadmap-followup.md) advances explicit current
+operating cases, stock-library context and the native four-layer scale ladder.
+It records the new memory cost exposed by complete stock-catalog lookup and
+keeps CAD completion separate from device qualification.
+
 | Phase | Enhancement and workflow | Acceptance criteria | Execution status |
 | --- | --- | --- | --- |
 | 1 | Complete representative native boards, beginning with the 236-part SDR clock carrier and 150-part BLE sensor node | Preserve declared connectivity through placement/routing; native DRC and reference labels checked; assembled preview from actual native board; explicit runtime and memory limits | SDR placement/routing/DRC/contracts/assembled preview passed; BLE placement passed, routing stopped by RAM reserve at 3 opens |

@@ -129,9 +129,13 @@ envelope bounds and nonoverlap. Three cases required reducing the extra
 seed-layout gap from 3 to 1.5 mm; board rules and final native DRC remain
 unchanged. This is an initial packing result, not final native placement.
 
-The native IoT candidate passed an independent KiCad DRC with zero blockers.
+The native IoT candidate completed all six CAD stages through verified resume,
+published its route and rendered all 25 actual component models. Its initial
+native DRC had zero blockers and 25 library-configuration warnings; the
+[roadmap follow-up](suite-roadmap-followup.md) records an exact-board repeat
+that removed those warnings with explicit stock context.
 The trials exposed repeated USB-C shield-pad handling, internal via-layer
 contacts, plated connector-pad transitions and enabled-versus-known layer
-inventory gaps. Those checks have targeted regressions; completed native
-publication and model rendering must still be demonstrated by per-run proof.
+inventory gaps. Those checks have targeted regressions; each larger case still
+requires its own completed native publication and model-rendering proof.
 The broader 96–482-part native routing campaign remains an acceptance gate.

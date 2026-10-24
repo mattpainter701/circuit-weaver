@@ -8,6 +8,7 @@ representation. KiCad output remains derived from this IR.
 from __future__ import annotations
 
 import copy
+import math
 import zlib
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -138,12 +139,30 @@ class PowerDomain:
         net = str(self.net or "").strip()
         if not net:
             raise ValueError("Power domain net must be non-empty")
+        for key in ("v_min", "v_nominal", "v_max", "i_peak_ma", "i_steady_ma", "tolerance"):
+            value = getattr(self, key)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"Power domain {key} must be a finite number")
+            try:
+                finite = math.isfinite(value)
+            except OverflowError:
+                finite = False
+            if not finite:
+                raise ValueError(f"Power domain {key} must be a finite number")
+        if self.sequence_order is not None and (
+            isinstance(self.sequence_order, bool) or not isinstance(self.sequence_order, int)
+        ):
+            raise ValueError("Power domain sequence_order must be a non-negative integer")
         if self.v_min is not None and self.v_max is not None and self.v_min > self.v_max:
             raise ValueError("Power domain v_min cannot exceed v_max")
         if self.v_min is not None and self.v_nominal is not None and self.v_nominal < self.v_min:
             raise ValueError("Power domain v_nominal cannot be below v_min")
         if self.v_max is not None and self.v_nominal is not None and self.v_nominal > self.v_max:
             raise ValueError("Power domain v_nominal cannot exceed v_max")
+        if self.i_peak_ma is not None and self.i_steady_ma is not None and self.i_peak_ma < self.i_steady_ma:
+            raise ValueError("Power domain i_peak_ma cannot be below i_steady_ma")
         for key, value in (
             ("i_peak_ma", self.i_peak_ma),
             ("i_steady_ma", self.i_steady_ma),

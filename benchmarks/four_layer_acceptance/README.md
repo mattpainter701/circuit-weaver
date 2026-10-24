@@ -22,3 +22,9 @@ The serialized relay fixture builder applies the relay-driver template's single-
 Structured controls include an endpoint net swap, a missing-library entry, a two-layer stackup against a four-layer request, and removal of key electrical limits. The weak-limits control is reported as unverified metadata; the corpus does not claim the harness has an oracle that detects every inadequate limit. The ground-anchorless variant keeps the USB-C connector's plated pads on `POWER_RETURN` and joins that return to GND through an SMD zero-ohm link, so its contract requires zero plated GND anchors without claiming the connector itself is all-SMD.
 
 Run `tests/test_four_layer_acceptance_corpus.py` and `tests/test_unseen_scale_cases.py` in the repository's guarded serial test workflow. The former checks corpus determinism, schema completeness, family diversity, size bounds, four-layer plane declarations, endpoint contracts, and the negative-control set. The latter adds compiled endpoint regression for partial relay drivers. Neither test invokes KiCad or routes boards.
+
+`operating_case_audit.py --output <new-report.json>` runs the separate authored
+current-budget checker against missing corpus operating cases and five synthetic
+controls. Missing concurrency, feed ratings and provenance stay unverified;
+all-active relay arithmetic is explicitly conditional. It does not claim device
+function or thermal qualification. See [the Python API](../../docs/operating-cases.md).
