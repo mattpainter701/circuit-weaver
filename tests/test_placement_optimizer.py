@@ -2185,6 +2185,27 @@ def test_large_seed_uses_centered_functional_family_grid_without_anchor_clamping
     assert by_ref["U00"].pin_nets == components[0].pin_nets
 
 
+def test_family_seed_high_fanout_graph_is_sparse_and_preserves_owner_strength():
+    from circuit_weaver.placement_optimizer import _family_seed_net_edges
+
+    owners = [f"U{index:04d}" for index in range(1200)]
+    weight = 3.0
+    edges = _family_seed_net_edges(owners, weight)
+
+    assert len(edges) == len(owners)
+    assert all(edge_weight == weight / 2 for _, _, edge_weight in edges)
+    incident_weight = {owner: 0.0 for owner in owners}
+    for left, right, edge_weight in edges:
+        incident_weight[left] += edge_weight
+        incident_weight[right] += edge_weight
+    assert set(incident_weight.values()) == {weight}
+
+    ordinary_fanout = owners[:8]
+    ordinary_edges = _family_seed_net_edges(ordinary_fanout, weight)
+    assert len(ordinary_edges) == math.comb(len(ordinary_fanout), 2)
+    assert all(edge_weight == weight / (len(ordinary_fanout) - 1) for _, _, edge_weight in ordinary_edges)
+
+
 def test_result_reports_functional_group_span_and_optimizer_preserves_group_metadata():
     from circuit_weaver.placement_optimizer import PlacementConfig, optimize_placement
 

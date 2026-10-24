@@ -642,6 +642,28 @@ def _build_constraint_plan(
     return effective_config, plan
 
 
+def _family_seed_net_edges(
+    owners: list[str], weight: float, *, clique_limit: int = 32,
+) -> list[tuple[str, str, float]]:
+    """Build a bounded deterministic approximation of one net's owner graph.
+
+    Normal fanout keeps the existing weighted clique. For high fanout, a cycle
+    retains every owner and gives each the same total incident attraction as
+    the normalized clique, while avoiding quadratic edge creation.
+    """
+    if len(owners) < 2:
+        return []
+    if len(owners) <= clique_limit:
+        edge_weight = weight / (len(owners) - 1)
+        return [(left, right, edge_weight) for left, right in combinations(owners, 2)]
+
+    edge_weight = weight / 2
+    return [
+        (owners[index], owners[(index + 1) % len(owners)], edge_weight)
+        for index in range(len(owners))
+    ]
+
+
 def _family_grid_seed_positions(
     components: list[ComponentDef], config: PlacementConfig,
 ) -> dict[str, tuple[float, float]]:
@@ -714,8 +736,9 @@ def _family_grid_seed_positions(
         owners = sorted({root_by_ref[ref] for ref in refs if ref in root_by_ref and root_by_ref[ref] in family_records})
         if len(owners) < 2:
             continue
-        for left, right in combinations(owners, 2):
-            root_edges[(left, right)] = root_edges.get((left, right), 0.0) + weight / (len(owners) - 1)
+        for left, right, edge_weight in _family_seed_net_edges(owners, weight):
+            edge = tuple(sorted((left, right)))
+            root_edges[edge] = root_edges.get(edge, 0.0) + edge_weight
 
     # Authored block/section members form one ordering unit. Unlabeled roots
     # remain individual units; category is a stable tie-breaker for isolates.

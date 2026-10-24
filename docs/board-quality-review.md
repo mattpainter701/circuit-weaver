@@ -18,7 +18,9 @@ The endpoints and 1 mm limit illustrate the schema, not device requirements.
 Routes can also set `max_length_mm` and `max_vias`. Measurements use the shortest
 explicit centerline path and proven via transitions, omitting via barrel length
 and copper inside pads. Missing pad contact, ambiguous pads, incomplete
-geometry, arcs, copper zones and oversized graphs remain unverified. They do
+geometry, arcs, same-net copper zones, incomplete zone inventories and oversized
+graphs remain unverified. Completely inventoried zones on unrelated nets do not
+block explicit trace measurements. They do
 not establish impedance, propagation delay or RF performance.
 
 Placement reports rotated native envelopes and the largest empty axis-aligned

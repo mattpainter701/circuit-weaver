@@ -4,7 +4,7 @@
 
 - Review native board placement, endpoint route lengths, via counts and authored clock-pair skew through CLI, Python and MCP. Gate shared workflow publication on explicit route contracts and retain failed candidates for inspection.
 - Add time-window voltage/current acceptance, time-weighted transient means and structured pulsed current sources, with distinct IoT input, industrial current-burden and transmitter bias regression circuits.
-- Seed large assemblies by connected owner/support families and authored functional groups, using compact tiles and natural routing channels while preserving fixed and edge constraints.
+- Seed large assemblies by connected owner/support families and authored functional groups, using compact tiles and natural routing channels while preserving fixed and edge constraints. Bound high fanout seed graphs with a deterministic sparse cycle that retains every owner.
 - Keep native tool probes separate from MCP protocol input, allowing KiCad review to run reliably through real stdio clients.
 
 - Keep explicitly selected circuit directories separate from unrelated ancestor state. Preserve recorded source/output ownership and canonical generated output folders, and checkpoint separately requested native outputs in their own directory.
