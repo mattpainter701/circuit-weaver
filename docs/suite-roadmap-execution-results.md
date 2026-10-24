@@ -26,7 +26,7 @@ The results above are completed work packages, not a claim that their correspond
 | --- | --- |
 | SDR native route retry `after04` | **COMPLETED.** Endpoint-gated routing and native assembly passed. The diagnostic review still requires attention for five clock pairs. |
 | DAC438 native route | **INCOMPLETE.** New placement passed. The 300-second router 2.4.1 trial reached 155 opens after its last completed pass; the 600-second retry produced no acceptable session. An isolated official 2.5.0 experiment used the same placement/budget through the immutable previous installed wheel; its last completed pass had 142 opens before the 2 GiB RAM reserve stopped and reaped it. No routed DAC board was accepted. [600-second result](../../automation_validation_results/roadmap-execution-20261023/dac438-routing02/result.json), [2.5 supervisor result](../../automation_validation_results/roadmap-execution-20261023/dac438-routing03-job/d8.json) |
-| Fresh installed wheel | **PENDING.** Root to record the candidate identity, install checks, and outcome. |
+| Fresh installed wheel | **PASSED for packaging and pure client operations.** An exact committed-source wheel/sdist and new venv verified all 225 package files against source/wheel/install. The fresh interpreter passed 17 CLI/Python/real stdio MCP lifecycle/local-bundle/private-skill operations with 18 registered tools. This deliberately used validation-only continuation; fresh native generation/review remains held by the 2 GiB RAM reserve. [Package proof](../../automation_validation_results/roadmap-execution-20261023/candidate01/proof.json), [fresh client proof](../../automation_validation_results/roadmap-execution-20261023/fresh-surfaces-pure01/proof.json) |
 | Large-fanout placement regression | **PASSED.** Included in the 129-test placement batch and 650 total. |
 | Full eight-phase roadmap and release gates | **INCOMPLETE.** Fresh final-head CI, required native routing/board checks, and any remaining roadmap phase evidence must be recorded before claiming completion. |
 
@@ -46,5 +46,7 @@ by the fixed project-local issue.
 
 RAM later fell below 1 GiB. Pure Python tests continued with a 128 MiB cap and
 512 MiB reserve; single-threaded lint avoided its default thread-pool allocation.
-Native jobs retained the 2 GiB reserve. The 2.5 routing experiment and named-net
-native fixture retry remain incomplete rather than being relabeled as passing.
+Native jobs retained the 2 GiB reserve. Packaging and real stdio client checks
+used a 384 MiB cap with the 512 MiB reserve. The 2.5 routing experiment and
+named-net native fixture retry remain incomplete rather than being relabeled
+as passing.
