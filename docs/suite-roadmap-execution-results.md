@@ -18,9 +18,9 @@ This page records the next execution wave for the [suite enhancement roadmap](su
 
 ## Eight-phase roadmap status
 
-The results above are completed work packages, not a claim that their corresponding roadmap phases are fully closed. Placement and accepted SDR routing advance phase 1; phase 3 has a generic transient acceptance suite; phase 4 has a native library load/replay trial; and phase 5 has broader client-surface coverage. Phase 2 retains the first-wave zero-crossing evidence; its generator did not change here. Phase 6 still needs accepted 438/1,202-part routing, and phase 7 remains limited to generic authored fixtures rather than qualified product-family behavior. Phase 8 still needs the pending fresh-wheel validation and external final-head CI. No RF or device-specific electrical claims are made.
+The results above are completed work packages, not a claim that their corresponding roadmap phases are fully closed. Placement and accepted SDR routing advance phase 1; phase 3 has a generic transient acceptance suite; phase 4 has native library load/replay and staging checks; and phase 5 has broader client-surface coverage. Phase 2 retains the first-wave zero-crossing evidence; its generator did not change here. Phase 6 still needs accepted 438/1,202-part routing, and phase 7 remains limited to generic authored fixtures rather than qualified product-family behavior. Phase 8 still needs fresh native operations when RAM allows and external final-head CI. No RF or device-specific electrical claims are made.
 
-## Pending validation
+## Validation and open gates
 
 | Item | Status |
 | --- | --- |
