@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Distinguish interrupted workflows from active runs using the live advisory lock when opening projects or checking status, while preserving saved checkpoints for guarded resume.
+- Add representative four-layer circuit acceptance checks below 500 physical components, with separate preflight, CAD, resource and electrical qualification evidence.
+- Allow Python validation to disable native schematic export explicitly while retaining generated-text and determinism checks; report whether the native export ran and require a nonempty SVG before accepting it.
+- Preserve internal-layer via contacts and plated component-pad layer joins in authored route checks instead of reporting valid four-layer paths as disconnected.
+- Support repeated physical shield pads on one connector pin when checking ground-plane connectivity, while retaining UUID, net-consistency and duplicate-reference checks.
+- Retry initial board packing with bounded gaps between verified component envelopes, preserving board dimensions, electrical rules and native DRC and reporting the gap used.
 - Build review boards with an explicit 2- or 4-copper-layer count, and select enabled copper layers for ground planes in shared workflows; reports record copper count and order without claiming dielectric stackup or impedance qualification.
 - Correct ground-plane attachment reports for unrouted pads by checking native connectivity clusters instead of KiCad's object-type flag.
 - Keep generated ground-plane and route-quality reports out of design-spec discovery when opening or resuming native PCB projects.

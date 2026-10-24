@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from benchmarks.unseen_scale.build_stress_fixtures import build_suite
+from benchmarks.unseen_scale.build_stress_fixtures import _relay_paths, build_serial_relay_output_card, build_suite
 from circuit_weaver.assembly_manifest import build_assembly_manifest
 from circuit_weaver.design_loader import compile_design_ir
 
@@ -212,3 +212,44 @@ def test_channel_topology_is_genuinely_repeated_and_connected():
     } == {f"J{i}" for i in range(2, 74)}
     assert len(analog_case["required_paths"]) == 110
     assert len({case["family"] for case in suite["cases"]}) == 3
+
+
+def test_serial_relay_partial_driver_channel_nets_follow_template_single_channel_contract():
+    output_pads = ["15", "1", "2", "3", "4", "5", "6", "7"]
+    for channels in (7, 8, 13, 15, 288):
+        spec = build_serial_relay_output_card(channels)
+        if channels >= 161:
+            # The corpus adapter gives the SWD header a reference outside its
+            # output-connector range before compiling the high-count variant.
+            spec["connectors"][0]["ref"] = "J9000"
+        nets = _pad_nets(spec)
+        paths = _relay_paths(channels)
+        assert len(paths) == channels
+
+        for index in range(channels):
+            shift_register_index, shift_bit = divmod(index, 8)
+            driver_index, driver_channel = divmod(index, 7)
+            channels_used = min(7, channels - 7 * driver_index)
+            driver_ref = f"U{200 + driver_index}"
+            drive_net = f"COIL_DRV_{driver_ref}"
+            load_net = f"LOAD_{driver_ref}"
+            if channels_used != 1:
+                drive_net = f"{drive_net}_{driver_channel + 1}"
+                load_net = f"{load_net}_{driver_channel + 1}"
+            register_ref = f"U{100 + shift_register_index}"
+            connector_ref = f"J{index + 2}"
+            input_pad = str(driver_channel + 1)
+            output_pad = str(16 - driver_channel)
+            register_pad = output_pads[shift_bit]
+
+            assert nets[(register_ref, register_pad)] == drive_net, (channels, index, "register")
+            assert nets[(driver_ref, input_pad)] == drive_net, (channels, index, "driver input")
+            assert nets[(driver_ref, output_pad)] == load_net, (channels, index, "driver output")
+            assert nets[(connector_ref, "2")] == load_net, (channels, index, "connector")
+
+        for path in paths:
+            for segment in path["segments"]:
+                assert all(nets[(e["ref"], str(e["pad"]))] == segment["net"] for e in segment["endpoints"]), (
+                    channels,
+                    path["id"],
+                )

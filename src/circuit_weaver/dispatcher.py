@@ -1516,6 +1516,13 @@ def _find_root_schematic(files: list[str], project_name: str) -> Path | None:
     return sch_files[0] if sch_files else None
 
 
+def _set_native_export_status(report: dict[str, Any] | None, **values: Any) -> None:
+    if report is None:
+        return
+    report.clear()
+    report.update(values)
+
+
 def _generate_compiled_artifacts(
     compiled: CompiledDesign,
     output_dir: Path,
@@ -1525,6 +1532,7 @@ def _generate_compiled_artifacts(
     readiness_gate: bool = True,
     evidence_manifest: str | None = None,
     evidence_ids: Iterable[str] | None = None,
+    native_export_report: dict[str, Any] | None = None,
 ) -> tuple[list[str], Path | None]:
     output_dir.mkdir(parents=True, exist_ok=True)
     profile = compiled.metadata.get("presentation_profile", "default")
@@ -1554,17 +1562,75 @@ def _generate_compiled_artifacts(
         evidence_ids=evidence_ids,
     )
     root = _find_root_schematic(files, compiled.metadata.get("project", "project"))
-    if export_svg and root is not None:
+    if not export_svg:
+        _set_native_export_status(
+            native_export_report,
+            status="not_run",
+            scope="KiCad CLI schematic SVG export",
+            reason="native export was explicitly disabled",
+        )
+    elif root is None:
+        _set_native_export_status(
+            native_export_report,
+            status="not_run",
+            scope="KiCad CLI schematic SVG export",
+            reason="no root schematic was generated",
+        )
+    else:
+        _set_native_export_status(
+            native_export_report,
+            status="running",
+            scope="KiCad CLI schematic SVG export",
+            tool="kicad-cli",
+        )
         cli = _kicad_cli_path()
-        if cli is not None:
+        if cli is None:
+            _set_native_export_status(
+                native_export_report,
+                status="unverified",
+                scope="KiCad CLI schematic SVG export",
+                reason="KiCad CLI was not found",
+            )
+        else:
             svg_dir = _contained_output_path(output_dir, "svg")
             svg_dir.mkdir(parents=True, exist_ok=True)
-            subprocess.run(
-                [str(cli), "sch", "export", "svg", "-o", str(svg_dir), str(root)],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+            try:
+                subprocess.run(
+                    [str(cli), "sch", "export", "svg", "-o", str(svg_dir), str(root)],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except Exception as exc:
+                _set_native_export_status(
+                    native_export_report,
+                    status="failed",
+                    scope="KiCad CLI schematic SVG export",
+                    tool="kicad-cli",
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                raise
+            if native_export_report is not None:
+                svg_count = sum(
+                    1 for path in svg_dir.rglob("*.svg") if path.is_file() and path.stat().st_size > 0
+                )
+                if not svg_count:
+                    error = "KiCad CLI returned successfully but produced no nonempty SVG files"
+                    _set_native_export_status(
+                        native_export_report,
+                        status="failed",
+                        scope="KiCad CLI schematic SVG export",
+                        tool="kicad-cli",
+                        error=error,
+                    )
+                    raise RuntimeError(error)
+                _set_native_export_status(
+                    native_export_report,
+                    status="passed",
+                    scope="KiCad CLI schematic SVG export",
+                    tool="kicad-cli",
+                    svg_count=svg_count,
+                )
     return files, root
 
 
@@ -1695,6 +1761,7 @@ def validate_design(
     strict: bool = False,
     check_determinism: bool = True,
     use_kicad: bool = True,
+    check_native_export: bool = True,
 ) -> ValidationReport:
     """Validate a design spec against the strict MVP profile.
 
@@ -1707,7 +1774,13 @@ def validate_design(
     that are about to generate real artifacts anyway pass
     ``check_determinism=False`` to avoid the redundant 2x generation
     overhead (Sprint 45 Bug 3 — was 3 generations per CLI invocation).
+
+    ``check_native_export=False`` skips KiCad CLI schematic SVG export while
+    retaining pure compiled artifact generation and text/determinism checks.
+    The report marks this native export scope as ``not_run``.
     """
+    if type(check_native_export) is not bool:
+        raise TypeError("check_native_export must be a bool")
     profile = _ensure_profile(profile)
     compiled = compile_design_ir(spec, enrich_parts=enrich_parts, use_kicad=use_kicad)
 
@@ -1780,10 +1853,20 @@ def validate_design(
         and not _has_errors(categories["implementation"])
         and not _has_errors(categories["placement_readiness"])
     )
+    native_export_report: dict[str, Any] = {
+        "status": "not_run",
+        "scope": "KiCad CLI schematic SVG export",
+        "reason": "artifact-generation gate was not reached",
+    }
     if can_check_artifacts:
         with tempfile.TemporaryDirectory(prefix="schematic_mvp_validate_a_") as tmp_a:
             try:
-                files_a, root_a = _generate_compiled_artifacts(compiled, Path(tmp_a), export_svg=True)
+                files_a, root_a = _generate_compiled_artifacts(
+                    compiled,
+                    Path(tmp_a),
+                    export_svg=check_native_export,
+                    native_export_report=native_export_report,
+                )
                 if root_a is None:
                     categories["implementation"].append(
                         ValidationMessage(
@@ -1820,6 +1903,14 @@ def validate_design(
                 categories["presentation"].extend(_presentation_issues(Path(tmp_a)))
             except subprocess.CalledProcessError as exc:
                 detail = (exc.stderr or exc.stdout or str(exc)).strip()
+                if native_export_report.get("status") == "running":
+                    _set_native_export_status(
+                        native_export_report,
+                        status="failed",
+                        scope="KiCad CLI schematic SVG export",
+                        tool="kicad-cli",
+                        error=detail,
+                    )
                 categories["implementation"].append(
                     ValidationMessage(
                         category="implementation",
@@ -1830,10 +1921,22 @@ def validate_design(
                     )
                 )
             except Exception as exc:
+                if native_export_report.get("status") == "running":
+                    _set_native_export_status(
+                        native_export_report,
+                        status="failed",
+                        scope="KiCad CLI schematic SVG export",
+                        tool="kicad-cli",
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
                 categories["implementation"].append(
                     ValidationMessage(
                         category="implementation",
-                        code="artifact-generation-failed",
+                        code=(
+                            "kicad-export-failed"
+                            if check_native_export and native_export_report.get("status") == "failed"
+                            else "artifact-generation-failed"
+                        ),
                         level="error",
                         subject=compiled.metadata.get("project", "project"),
                         message=f"Derived artifact generation failed: {exc}",
@@ -1856,6 +1959,7 @@ def validate_design(
             "project": compiled.metadata.get("project", "project"),
             "component_count": len(compiled.components),
             "block_count": len(compiled.ir.blocks),
+            "native_export": native_export_report,
         },
     )
     from .evidence import build_validation_evidence

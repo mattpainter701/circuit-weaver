@@ -80,6 +80,14 @@ def test_protected_path_requires_existing_trace_only_route():
         ground._trace_route(graph, {"from_ref": "U1", "from_pad": "1", "to_ref": "J1", "to_pad": "1"})
 
 
+def test_protected_logical_endpoint_with_multiple_physical_members_fails_closed():
+    first = object()
+    second = object()
+
+    with pytest.raises(ValueError, match="repeated physical pad endpoint.*ambiguous"):
+        ground._ensure_protected_endpoints_unambiguous(([first, second], [object()]), 0)
+
+
 def test_zone_anchor_query_uses_stable_pad_and_track_methods():
     calls = []
 

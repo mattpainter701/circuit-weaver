@@ -9,6 +9,7 @@ marked so integrations can avoid recording duplicate checkpoints.
 from __future__ import annotations
 
 import contextlib
+import errno
 import hashlib
 import importlib.resources
 import json
@@ -277,12 +278,23 @@ def open_project(target: str | Path = ".") -> dict[str, Any]:
             )
         summary = get_project_state_summary(root)
         run = _runner(state)
+        workflow_view = dict(run)
+        persisted_status = str(run.get("status", "idle"))
+        activity = _workflow_activity(root, persisted_status)
+        if persisted_status == "running":
+            # Keep the durable runner/checkpoints available to guarded resume,
+            # while making the outward status reflect lock ownership.
+            workflow_view["persisted_status"] = persisted_status
+            if activity["state"] == "interrupted":
+                workflow_view["status"] = "interrupted"
+        outward_status = "interrupted" if activity["state"] == "interrupted" else persisted_status
         return _result(
             True,
-            str(run.get("status", summary.get("status", "open"))),
+            str(outward_status or summary.get("status", "open")),
             project_dir=str(root),
             summary=summary,
-            workflow=run,
+            workflow=workflow_view,
+            workflow_activity=activity,
         )
     except Exception as exc:
         return _result(False, "error", error=_error(exc), choices=getattr(exc, "choices", None))
@@ -576,6 +588,60 @@ class _RunLock:
 
             fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
         self.handle.close()
+
+
+def _probe_run_lock(root: Path) -> tuple[str, str | None]:
+    """Inspect existing advisory lock ownership without creating or changing files.
+
+    Returns ``("active" | "free" | "unknown", diagnostic)``. Lock metadata
+    is deliberately ignored: only the OS lock can establish live ownership.
+    """
+    path = root / ".circuit-weaver" / _LOCK_NAME
+    try:
+        handle = path.open("r+b")
+    except FileNotFoundError:
+        return "free", None
+    except OSError as exc:
+        return "unknown", f"{type(exc).__name__}: {exc}"
+
+    try:
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                if exc.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                    return "active", None
+                return "unknown", f"{type(exc).__name__}: {exc}"
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                if exc.errno in {errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK}:
+                    return "active", None
+                return "unknown", f"{type(exc).__name__}: {exc}"
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return "free", None
+    except Exception as exc:
+        return "unknown", f"{type(exc).__name__}: {exc}"
+    finally:
+        handle.close()
+
+
+def _workflow_activity(root: Path, persisted_status: str) -> dict[str, Any]:
+    if persisted_status != "running":
+        return {"state": "idle", "basis": "persisted_status"}
+    ownership, diagnostic = _probe_run_lock(root)
+    if ownership == "active":
+        return {"state": "active", "basis": "advisory_lock"}
+    if ownership == "free":
+        return {"state": "interrupted", "basis": "advisory_lock"}
+    return {"state": "unknown", "basis": "advisory_lock", "diagnostic": diagnostic}
 
 
 def record_stage(

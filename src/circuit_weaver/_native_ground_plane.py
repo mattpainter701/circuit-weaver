@@ -62,15 +62,42 @@ def _outline_bounds(board, pcbnew):
 
 
 def _pad_map(board):
+    """Index logical ref.pad names without discarding their physical members."""
     result = {}
+    identities = set()
+    references = set()
     for fp in board.GetFootprints():
         ref = str(fp.GetReference())
-        for pad in fp.Pads():
+        physical_pads = list(fp.Pads())
+        if physical_pads:
+            if ref in references:
+                raise ValueError(f"duplicate footprint reference {ref}")
+            references.add(ref)
+        for pad in physical_pads:
             key = (ref, str(pad.GetNumber()))
-            if key in result:
-                raise ValueError(f"duplicate physical pad {ref}.{key[1]}")
-            result[key] = pad
+            pad_id = _native_item_id(pad)
+            if pad_id in identities:
+                raise ValueError("native pad connectivity identities are not unique")
+            identities.add(pad_id)
+            result.setdefault(key, []).append(pad)
+    for (ref, number), members in result.items():
+        nets = {str(pad.GetNetname()) for pad in members}
+        if len(nets) != 1:
+            raise ValueError(f"physical members of logical pad {ref}.{number} have conflicting assigned nets")
     return result
+
+
+def _pad_label(reference, pad, *, disambiguate=False):
+    label = f"{reference}.{pad.GetNumber()}"
+    return f"{label}[{_native_item_id(pad)}]" if disambiguate else label
+
+
+def _ensure_protected_endpoints_unambiguous(endpoint_groups, index):
+    """The trace graph addresses ref.pad logically, so it cannot bound each duplicate member."""
+    if any(len(group) > 1 for group in endpoint_groups):
+        raise ValueError(
+            f"protected_connections[{index}] uses a repeated physical pad endpoint whose trace-only route is ambiguous"
+        )
 
 
 def _trace_route(graph, row):
@@ -115,7 +142,13 @@ def _unconnected_plane_pads_by_net(board, nets, *, rebuild=True):
                 and zone.HasFilledPolysForLayer(zone.GetLayer())):
             zone_ids[net].add(_native_item_id(zone))
     cached = {net: {} for net in result}
+    _pad_map(board)  # Validate identity and net consistency for every physical pad.
     pad_ids = set()
+    logical_counts = {}
+    for footprint in board.GetFootprints():
+        for pad in footprint.Pads():
+            key = (str(footprint.GetReference()), str(pad.GetNumber()))
+            logical_counts[key] = logical_counts.get(key, 0) + 1
     for footprint in board.GetFootprints():
         for pad in footprint.Pads():
             net = str(pad.GetNetname())
@@ -135,7 +168,8 @@ def _unconnected_plane_pads_by_net(board, nets, *, rebuild=True):
                     if str(item.GetClass()) == "PAD":
                         cached[net][_native_item_id(item)] = attached
             if not cached[net][pad_id]:
-                result[net].append(f"{footprint.GetReference()}.{pad.GetNumber()}")
+                key = (str(footprint.GetReference()), str(pad.GetNumber()))
+                result[net].append(_pad_label(key[0], pad, disambiguate=logical_counts[key] > 1))
     return {net: sorted(pads) for net, pads in result.items()}
 
 
@@ -276,8 +310,10 @@ def apply(board, pcbnew, *, net="GND", layers=("F.Cu", "B.Cu"), options=None,
         keys = ((str(row["from_ref"]), str(row["from_pad"])), (str(row["to_ref"]), str(row["to_pad"])))
         if any(key not in pads for key in keys):
             raise ValueError(f"protected_connections[{index}] names an unknown physical pad")
-        if not str(pads[keys[0]].GetNetname()) or str(pads[keys[0]].GetNetname()) != str(pads[keys[1]].GetNetname()):
+        first_net, last_net = str(pads[keys[0]][0].GetNetname()), str(pads[keys[1]][0].GetNetname())
+        if not first_net or first_net != last_net:
             raise ValueError(f"protected_connections[{index}] endpoints must use the same assigned net")
+        _ensure_protected_endpoints_unambiguous((pads[keys[0]], pads[keys[1]]), index)
         route = _trace_route(trace_graph, {"from_ref": keys[0][0], "from_pad": keys[0][1],
                                            "to_ref": keys[1][0], "to_pad": keys[1][1]})
         if "max_length_mm" in row:
@@ -331,9 +367,14 @@ def verify(board, pcbnew, expected_report, *, net="GND", layers=("F.Cu", "B.Cu")
     if expected_report.get("track_count_before") != track_count:
         raise ValueError("saved board track/via inventory count differs from source")
     graph = CopperGraph(board, pcbnew)
+    pads = _pad_map(board) if protected_connections else {}
     checked = []
     for index, row in enumerate(protected_connections):
         keys = (str(row["from_ref"]), str(row["from_pad"]), str(row["to_ref"]), str(row["to_pad"]))
+        if any(key not in pads for key in ((keys[0], keys[1]), (keys[2], keys[3]))):
+            raise ValueError("saved board protected path names an unknown physical pad")
+        _ensure_protected_endpoints_unambiguous(
+            (pads[(keys[0], keys[1])], pads[(keys[2], keys[3])]), index)
         route = _trace_route(graph, dict(zip(("from_ref", "from_pad", "to_ref", "to_pad"), keys)))
         if index >= len(expected_report.get("protected_connections", [])):
             raise ValueError("saved board has more protected paths than the native report")

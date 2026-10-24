@@ -86,7 +86,10 @@ class Board:
         self.build_count = 0
 
     def GetFootprints(self):
-        return [Footprint(pad.ref, [pad]) for pad in self.pads]
+        grouped = {}
+        for pad in self.pads:
+            grouped.setdefault(pad.ref, []).append(pad)
+        return [Footprint(ref, pads) for ref, pads in grouped.items()]
 
     def Zones(self):
         return self.zones
@@ -188,6 +191,59 @@ def test_connectivity_is_built_once_and_connected_pad_component_is_cached():
     assert pending(board) == {"GND": []}
     assert board.build_count == 1
     assert board.connectivity.calls == ["p1"]
+
+
+def test_repeated_logical_pad_members_are_counted_as_distinct_connected_pads():
+    first = Pad("shield-tab-1", "J1", "SH")
+    second = Pad("shield-tab-2", "J1", "SH")
+    zone = Zone("zone-gnd")
+    cluster = [first, second, zone]
+    board = Board([first, second], [zone], {first.uuid: cluster, second.uuid: cluster})
+
+    assert pending(board) == {"GND": []}
+    # One cluster query is enough, but both UUIDs are retained as physical members.
+    assert board.connectivity.calls == ["shield-tab-1"]
+
+
+def test_unattached_duplicate_physical_pad_remains_pending_when_sibling_is_attached():
+    attached = Pad("shield-tab-1", "J1", "SH")
+    floating = Pad("shield-tab-2", "J1", "SH")
+    zone = Zone("zone-gnd")
+    board = Board([attached, floating], [zone], {
+        attached.uuid: [attached, zone], floating.uuid: [floating],
+    })
+
+    assert pending(board) == {"GND": ["J1.SH[shield-tab-2]"]}
+    assert board.connectivity.calls == ["shield-tab-1", "shield-tab-2"]
+
+
+def test_repeated_logical_pad_with_conflicting_nets_fails_closed():
+    gnd = Pad("shield-gnd", "J1", "SH", "GND")
+    vcc = Pad("shield-vcc", "J1", "SH", "VCC")
+    board = Board([gnd, vcc], [Zone("zone-gnd")], {})
+
+    with pytest.raises(ValueError, match="conflicting assigned nets"):
+        pending(board)
+
+
+def test_distinct_footprints_with_duplicate_references_remain_invalid():
+    first = Pad("first-pad", "J1", "1")
+    second = Pad("second-pad", "J1", "2")
+    board = Board([first, second], [Zone("zone-gnd")], {})
+    board.GetFootprints = lambda: [Footprint("J1", [first]), Footprint("J1", [second])]
+
+    with pytest.raises(ValueError, match="duplicate footprint reference J1"):
+        pending(board)
+
+
+@pytest.mark.parametrize("uuids", [("same", "same"), ("", "second")])
+def test_repeated_logical_pad_with_nonunique_or_missing_uuid_fails_closed(uuids):
+    first = Pad(uuids[0], "J1", "SH")
+    second = Pad(uuids[1], "J1", "SH")
+    board = Board([first, second], [Zone("zone-gnd")], {})
+
+    with pytest.raises(ValueError, match="UUID|identities are not unique"):
+        pending(board)
 
 
 def test_rebuild_false_does_not_rebuild_connectivity():

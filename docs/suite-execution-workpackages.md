@@ -25,11 +25,13 @@ When RAM later fell below 1 GiB, pure Python batches used a 512 MiB reserve
 and 128 MiB cap; packaging may use a bounded 384 MiB cap with that same reserve.
 Native jobs still require the 2 GiB reserve.
 
-The routing package must also add an explicit authored copper stackup for
-generated boards. The current native schematic-to-board worker creates two
-copper layers. Larger RF/SBC routing cannot be qualified by silently changing
-that benchmark to four layers; new stackups need input/checkpoint plumbing,
-native layer/pad/via verification and separate measured trials.
+The native builder now supports explicit two- and four-copper-layer boards,
+with input/checkpoint plumbing and native saved count/order verification.
+Selected-layer GND planes and post-session saved refill checks are implemented;
+a small native four-layer route passed. Both matched 438-part DAC routing arms
+stopped at the RAM reserve, so that larger route remains unaccepted. The next
+work package is the [under-500 four-layer acceptance campaign](four-layer-acceptance.md),
+which broadens circuit families and records missing gates explicitly.
 
 The board review measures conservative grid footprint occupancy and the largest
 empty axis-aligned rectangle, with authored reservations recorded explicitly.

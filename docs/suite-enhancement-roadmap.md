@@ -19,6 +19,13 @@ Validation jobs run serially under the pinned owned-process supervisor. Native j
 
 The previous [diverse trials](diverse-system-stress.md) establish native import and connectivity at 1,202 parts and passive SPICE oracles at 1,280 parts. The new work must extend that evidence into routed boards, active behavior, reliable part onboarding and usable client workflows. Full RF device models, electromagnetic analysis, hardware measurements and device-specific timing/thermal requirements remain separate engineering gates.
 
+The next routing milestone is the [four-layer, under-500 acceptance campaign](four-layer-acceptance.md):
+ten connected variants and controls across six families, measured at 25–482
+physical parts. Explicit four-layer generation and plane support are now
+implemented. The new sweep separates pure compilation, local CAD access,
+packing, native DRC/routing, actual model rendering and product qualification;
+its measured results and missing gates replace component-count-only claims.
+
 Current execution details and retained failures are in [the enhancement results](suite-enhancement-results.md). The next placement work must address functional zones, empty-space distribution, power/return loop geometry, clock-pair requirements and measured route lengths; a zero-open DRC result alone cannot meet those criteria.
 
 The placement review now measures empty axis-aligned interior rectangles and

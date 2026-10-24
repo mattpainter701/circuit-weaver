@@ -107,6 +107,62 @@ def _native_copper_layer_stack(board, pcbnew):
         return [], False
 
 
+def _native_via_layer_span(via, copper_stack_ids, stack_complete):
+    """Expand a via's physical end layers through the enabled copper stack.
+
+    ``TopLayer``/``BottomLayer`` identify the span endpoints; they do not list
+    every internal layer crossed by a through via. Preserve the board's native
+    physical order (which is not numeric layer-ID order) and fail closed when
+    either endpoint or the stack cannot be verified.
+    """
+    if not stack_complete or not isinstance(copper_stack_ids, (list, tuple)):
+        return None
+    try:
+        stack = [int(layer) for layer in copper_stack_ids]
+        if len(stack) < 2 or len(stack) != len(set(stack)):
+            return None
+        top, bottom = int(via.TopLayer()), int(via.BottomLayer())
+        if top == bottom or top not in stack or bottom not in stack:
+            return None
+        top_index, bottom_index = stack.index(top), stack.index(bottom)
+        first, last = sorted((top_index, bottom_index))
+        span = stack[first:last + 1]
+        return span if len(span) >= 2 else None
+    except (AttributeError, RuntimeError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def _native_pad_is_plated_through(pad, pcbnew):
+    """Return exact PAD_ATTRIB_PTH evidence, or None if the API cannot prove it."""
+    try:
+        pth_attribute = getattr(pcbnew, "PAD_ATTRIB_PTH", None)
+        if pth_attribute is None:
+            return None
+        attribute = int(pad.GetAttribute())
+        if attribute == int(pth_attribute):
+            return True
+        other_attributes = {
+            int(value) for name in ("PAD_ATTRIB_SMD", "PAD_ATTRIB_CONN", "PAD_ATTRIB_NPTH")
+            if (value := getattr(pcbnew, name, None)) is not None
+        }
+        if attribute not in other_attributes:
+            return None
+        return False
+    except (AttributeError, RuntimeError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def _native_pad_enabled_copper_layers(pad_layer_ids, enabled_layer_ids, enabled_inventory_complete):
+    """Intersect a pad's known copper-layer set with the board-enabled stack."""
+    if (not enabled_inventory_complete or not isinstance(pad_layer_ids, (list, tuple))
+            or not isinstance(enabled_layer_ids, (list, tuple))):
+        return None
+    if any(not isinstance(layer, int) or isinstance(layer, bool)
+           for layer in (*pad_layer_ids, *enabled_layer_ids)):
+        return None
+    return sorted(set(pad_layer_ids) & set(enabled_layer_ids))
+
+
 def _native_stack_state(board, pcbnew):
     layer_ids, complete = _native_copper_layer_stack(board, pcbnew)
     if not complete:
@@ -450,6 +506,8 @@ def _inspect(board, pcbnew, include_route_geometry=False):
         _native_known_copper_layer_inventory(pcbnew)
     )
     known_copper_layer_id_set = set(known_copper_layer_ids)
+    enabled_copper_layer_id_set = set(copper_layer_ids) if copper_layer_inventory_complete else None
+    pad_connectivity_inventory_complete = True
     for footprint in board.GetFootprints():
         position = footprint.GetPosition()
         rotation = footprint.GetOrientationDegrees()
@@ -461,10 +519,17 @@ def _inspect(board, pcbnew, include_route_geometry=False):
                 layers = sorted(int(layer) for layer in pad.GetLayerSet().Seq())
                 copper_layers = sorted(set(layers) & known_copper_layer_id_set)
                 attribute = int(pad.GetAttribute())
-            except (AttributeError, RuntimeError, TypeError, ValueError):
+            except (AttributeError, RuntimeError, TypeError, ValueError, OverflowError):
                 layers = None
                 copper_layers = None
                 attribute = None
+            enabled_copper_layers = _native_pad_enabled_copper_layers(
+                copper_layers, list(enabled_copper_layer_id_set or ()),
+                enabled_copper_layer_id_set is not None and copper_layer_inventory_complete,
+            )
+            plated_through = _native_pad_is_plated_through(pad, pcbnew)
+            if plated_through is None or enabled_copper_layers is None:
+                pad_connectivity_inventory_complete = False
             pads.append({
                 "number": pad.GetNumber(),
                 "net": pad.GetNetname(),
@@ -472,7 +537,9 @@ def _inspect(board, pcbnew, include_route_geometry=False):
                 "y": pcbnew.ToMM(pad.GetPosition().y),
                 "layers": layers,
                 "copper_layers": copper_layers,
+                "enabled_copper_layers": enabled_copper_layers,
                 "attribute": attribute,
+                "plated_through": plated_through,
             })
         pad_geometry = []
         for pad in footprint.Pads():
@@ -603,15 +670,18 @@ def _inspect(board, pcbnew, include_route_geometry=False):
             kind_name = type(item).__name__.upper()
             if "VIA" in kind_name:
                 try:
+                    layer_span = _native_via_layer_span(item, copper_stack_ids, copper_stack_complete)
                     vias.append({
                         "net": net,
                         "x_mm": pcbnew.ToMM(item.GetPosition().x),
                         "y_mm": pcbnew.ToMM(item.GetPosition().y),
-                        "layer_ids": sorted({int(item.TopLayer()), int(item.BottomLayer())}),
+                        "layer_ids": layer_span,
+                        "layer_span_complete": layer_span is not None,
                         "kind": "via",
                     })
-                except (AttributeError, RuntimeError, TypeError, ValueError):
-                    vias.append({"net": net, "kind": "unknown"})
+                except (AttributeError, RuntimeError, TypeError, ValueError, OverflowError):
+                    vias.append({"net": net, "kind": "unknown", "layer_ids": None,
+                                 "layer_span_complete": False})
                 continue
             kind = "arc" if "ARC" in kind_name else "segment"
             try:
@@ -637,6 +707,7 @@ def _inspect(board, pcbnew, include_route_geometry=False):
             "copper_layer_names": [row["name"] for row in board_copper_layers] if copper_stack_complete else None,
             "copper_layers": board_copper_layers if copper_stack_complete else None,
             "copper_layer_inventory_complete": copper_stack_complete,
+            "pad_connectivity_inventory_complete": pad_connectivity_inventory_complete,
             "rectangular_outline": outline_bounds is not None,
             "bounds": dict(zip(("x", "y", "width", "height"), (pcbnew.ToMM(value) for value in bounds)))}
     if include_route_geometry:

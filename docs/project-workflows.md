@@ -176,6 +176,15 @@ persisted checkpoints when called with `resume=True`; `resume_workflow`
 executes the verified saved plan from its first incomplete stage. Use
 `plan_workflow` to save a plan without execution.
 
+`open_project` and `workflow_status` report live ownership in
+`workflow_activity`. A persisted running workflow with a held advisory lock is
+`active`; if the existing lock is free or missing, the outward status becomes
+`interrupted` and `workflow.persisted_status` retains `running`. Status does not
+rewrite the saved checkpoints or lock metadata. Permission or probe failures
+produce `unknown` activity rather than declaring the run interrupted. Guarded
+resume still acquires the workflow lock and verifies the saved plan, inputs and
+completed outputs before continuing.
+
 ## MCP
 
 Install the optional dependency with the same interpreter that will launch the

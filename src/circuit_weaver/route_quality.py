@@ -93,8 +93,24 @@ def _endpoint(inspection, endpoint, net):
                 return None
             if str(pad.get("number", "")) == pad_number and pad.get("net") == net:
                 point = _point((pad.get("x"), pad.get("y")))
-                layers = pad.get("copper_layers")
-                if point is not None and isinstance(layers, Sequence) and layers:
+                layers = pad.get("enabled_copper_layers")
+                stack = _native_copper_stack_ids(inspection)
+                if "enabled_copper_layers" not in pad:
+                    # Older planar inventories explicitly identified one pad
+                    # layer but had no stack metadata. No layer transition is
+                    # inferred from this backward-compatible contact proof.
+                    raw = pad.get("copper_layers")
+                    if (point is not None and isinstance(raw, Sequence)
+                            and not isinstance(raw, (str, bytes)) and len(raw) == 1
+                            and type(raw[0]) is int and (stack is None or raw[0] in stack)):
+                        matches.append((point, tuple(raw)))
+                    continue
+                if (point is not None and isinstance(layers, Sequence)
+                        and not isinstance(layers, (str, bytes)) and layers
+                        and all(isinstance(layer, int) and not isinstance(layer, bool)
+                                for layer in layers)
+                        and len(layers) == len(set(layers)) and stack is not None
+                        and all(layer in stack for layer in layers)):
                     matches.append((point, tuple(layers)))
     return matches[0] if len(matches) == 1 else None
 
@@ -105,6 +121,50 @@ def _valid_limit(value):
 
 def _valid_id(value):
     return isinstance(value, str) and bool(value.strip())
+
+
+def _native_copper_stack_ids(inspection):
+    """Read a complete native physical copper order, never sort layer IDs."""
+    rows = inspection.get("copper_layers")
+    count = inspection.get("copper_layer_count")
+    if (inspection.get("copper_layer_inventory_complete") is not True
+            or not isinstance(rows, Sequence) or isinstance(rows, (str, bytes))
+            or type(count) is not int or count < 2 or len(rows) != count):
+        return None
+    ids, names = [], []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            return None
+        layer_id, name = row.get("id"), row.get("name")
+        if (not isinstance(layer_id, int) or isinstance(layer_id, bool)
+                or not isinstance(name, str) or not name.endswith(".Cu")):
+            return None
+        ids.append(layer_id)
+        names.append(name)
+    if (len(ids) != len(set(ids)) or len(names) != len(set(names))
+            or names[0] != "F.Cu" or names[-1] != "B.Cu"):
+        return None
+    return ids
+
+
+def _via_layer_span(inspection, via):
+    """Validate the worker's ordered via span against the native board stack."""
+    layers = via.get("layer_ids")
+    stack = _native_copper_stack_ids(inspection)
+    if (via.get("kind") != "via" or via.get("layer_span_complete") is not True
+            or stack is None or not isinstance(layers, Sequence) or isinstance(layers, (str, bytes))
+            or len(layers) < 2
+            or any(not isinstance(layer, int) or isinstance(layer, bool) for layer in layers)
+            or len(layers) != len(set(layers))):
+        return None
+    if any(layer not in stack for layer in layers):
+        return None
+    first, last = stack.index(layers[0]), stack.index(layers[-1])
+    if first == last:
+        return None
+    low, high = min(first, last), max(first, last)
+    expected = stack[low:high + 1]
+    return list(layers) if list(layers) == expected else None
 
 
 def _route(inspection, route_id, spec):
@@ -181,6 +241,7 @@ def _route(inspection, route_id, spec):
     adj = defaultdict(list)
     split_points = [[a, b] for a, b, _layer in tracks]
     via_contacts = []
+    plated_pad_contacts = []
     raw_vias = inspection.get("vias")
     if not isinstance(raw_vias, Sequence) or isinstance(raw_vias, (str, bytes)):
         result["reason"] = "native inspection has no complete via geometry inventory"
@@ -200,10 +261,8 @@ def _route(inspection, route_id, spec):
         return result
     for via in route_vias:
         center = _point((via.get("x_mm"), via.get("y_mm")))
-        layers = via.get("layer_ids")
-        if (center is None or not isinstance(layers, Sequence) or len(layers) != 2
-                or any(not isinstance(layer, int) or isinstance(layer, bool) for layer in layers)
-                or layers[0] == layers[1]):
+        layers = _via_layer_span(inspection, via)
+        if center is None or layers is None:
             result["reason"] = "same-net via layer transition evidence is incomplete or unsupported"
             return result
         contacts = set()
@@ -212,6 +271,46 @@ def _route(inspection, route_id, spec):
                 contacts.add(_key(center, layer))
                 split_points[index].append(center)
         via_contacts.append(contacts)
+
+    # A plated through-hole pad joins its native copper layers without adding
+    # a routed via. Use only exact pad-center contacts: this is conservative
+    # and avoids inferring connectivity from pad bounding boxes or shapes.
+    footprints = inspection.get("footprints")
+    if not isinstance(footprints, Sequence) or isinstance(footprints, (str, bytes)):
+        result["reason"] = "native inspection has no complete footprint pad inventory"
+        return result
+    stack = _native_copper_stack_ids(inspection)
+    for footprint in footprints:
+        if not isinstance(footprint, Mapping):
+            result["reason"] = "native inspection contains malformed footprint pad inventory"
+            return result
+        pads = footprint.get("pads")
+        if not isinstance(pads, Sequence) or isinstance(pads, (str, bytes)):
+            result["reason"] = "native inspection has incomplete footprint pad inventory"
+            return result
+        for pad in pads:
+            if not isinstance(pad, Mapping):
+                result["reason"] = "native inspection contains malformed pad inventory"
+                return result
+            if pad.get("net") != net or pad.get("plated_through") is not True:
+                continue
+            center = _point((pad.get("x"), pad.get("y")))
+            layers = pad.get("enabled_copper_layers")
+            if (center is None or stack is None
+                    or not isinstance(layers, Sequence) or isinstance(layers, (str, bytes))
+                    or len(layers) < 2
+                    or any(not isinstance(layer, int) or isinstance(layer, bool) for layer in layers)
+                    or len(layers) != len(set(layers))
+                    or any(layer not in stack for layer in layers)):
+                result["reason"] = "plated through-hole pad layer evidence is incomplete"
+                return result
+            contacts = set()
+            for index, (a, b, layer) in enumerate(tracks):
+                if layer in layers and _on_segment(center, a, b):
+                    contacts.add(_key(center, layer))
+                    split_points[index].append(center)
+            if len(contacts) > 1:
+                plated_pad_contacts.append(contacts)
     for i, (a, b, layer) in enumerate(tracks):
         for j in range(i):
             c, d, other_layer = tracks[j]
@@ -232,12 +331,19 @@ def _route(inspection, route_id, spec):
             adj[first].append((second, length, 0))
             adj[second].append((first, length, 0))
 
-    # Via centers were inserted before splitting, so interior vias become nodes.
+    # One physical via can connect tracks on any layers in its verified span.
+    # Every cross-layer edge has unit cost, so traversing a 4-layer through via
+    # still counts as one via rather than three layer transitions.
     for contacted in via_contacts:
-        if len(contacted) == 2:
-            first, second = sorted(contacted)
-            adj[first].append((second, 0.0, 1))
-            adj[second].append((first, 0.0, 1))
+        for index, first in enumerate(sorted(contacted)):
+            for second in sorted(contacted)[index + 1:]:
+                adj[first].append((second, 0.0, 1))
+                adj[second].append((first, 0.0, 1))
+    for contacted in plated_pad_contacts:
+        for index, first in enumerate(sorted(contacted)):
+            for second in sorted(contacted)[index + 1:]:
+                adj[first].append((second, 0.0, 0))
+                adj[second].append((first, 0.0, 0))
 
     sources = {_key(start[0], layer) for layer in start[1]}
     targets = {_key(finish[0], layer) for layer in finish[1]}
@@ -263,6 +369,9 @@ def _route(inspection, route_id, spec):
                 best[nxt] = candidate
                 heapq.heappush(heap, (*candidate, str(nxt), nxt))
     if found is None:
+        if inspection.get("pad_connectivity_inventory_complete") is not True:
+            result["reason"] = "native inspection has incomplete plated-pad connectivity evidence"
+            return result
         result["status"], result["reason"] = "failed", "endpoint pads are disconnected in explicit copper graph"
         return result
     result.update(length_mm=best[found][0], via_count=best[found][1], reason=None)
@@ -280,7 +389,9 @@ def evaluate_route_quality(inspection, constraints):
     ``inspection`` contains ``footprints`` in native inspect format, plus
     ``tracks`` with ``net``, ``start_mm``, ``end_mm``, ``layer_id`` and optional
     ``kind`` (only ``segment`` is supported), and ``vias`` with ``net``,
-    ``x_mm`` and the explicit ``layer_ids`` span. ``constraints.routes`` maps
+    ``x_mm``, ``layer_ids`` in native physical copper order, and
+    ``layer_span_complete=True`` backed by a complete native copper stack.
+    ``constraints.routes`` maps
     route IDs to ``net``, ``from``/``to`` ``{ref, pad}``, ``source:
     "AUTHORED"``, and optional ``max_length_mm``/``max_vias``. ``pairs`` is a
     list of ``{id, positive_route, negative_route, source: "AUTHORED",

@@ -349,6 +349,98 @@ def test_packing_uses_space_beside_large_module_without_losing_courtyard_clearan
         _pack_components(items, 60, 52, Library())
 
 
+def test_seed_packing_retries_bounded_gap_with_verified_envelope_clearance():
+    from types import SimpleNamespace
+
+    from circuit_weaver.schematic_pcb import _pack_components
+
+    class Library:
+        def geometry(self, _name):
+            return SimpleNamespace(
+                width_mm=5.0,
+                height_mm=5.0,
+                center_x_mm=2.0,
+                center_y_mm=-1.0,
+                source="courtyard",
+                confidence="verified",
+            )
+
+    components = [{"reference": f"U{i}", "footprint": "verified-square"} for i in range(1, 5)]
+    diagnostic = _pack_components(components, 21.5, 21.5, Library())
+    assert diagnostic["attempted_gaps"] == [
+        {"gap_mm": 3.0, "status": "no_fit", "methods": ["shelf", "max_rectangles"]},
+        {"gap_mm": 1.5, "status": "placed", "method": "shelf"},
+    ]
+    assert diagnostic["used_gap_mm"] == 1.5
+
+    geometry = Library().geometry("verified-square")
+    boxes = []
+    for component in components:
+        center_x = component["x_mm"] + geometry.center_x_mm
+        center_y = component["y_mm"] + geometry.center_y_mm
+        box = (
+            center_x - geometry.width_mm / 2,
+            center_y - geometry.height_mm / 2,
+            center_x + geometry.width_mm / 2,
+            center_y + geometry.height_mm / 2,
+        )
+        assert 5.0 <= box[0] and box[2] <= 16.5
+        assert 5.0 <= box[1] and box[3] <= 16.5
+        boxes.append(box)
+    for index, a in enumerate(boxes):
+        for b in boxes[index + 1:]:
+            assert (
+                a[2] + 1.5 <= b[0] + 1e-9
+                or b[2] + 1.5 <= a[0] + 1e-9
+                or a[3] + 1.5 <= b[1] + 1e-9
+                or b[3] + 1.5 <= a[1] + 1e-9
+            )
+
+    reordered = [{"reference": f"U{i}", "footprint": "verified-square"} for i in range(4, 0, -1)]
+    reordered_diagnostic = _pack_components(reordered, 21.5, 21.5, Library())
+    assert reordered_diagnostic["attempted_gaps"] == diagnostic["attempted_gaps"]
+    assert {
+        item["reference"]: (item["x_mm"], item["y_mm"]) for item in reordered
+    } == {item["reference"]: (item["x_mm"], item["y_mm"]) for item in components}
+
+
+def test_failed_seed_packing_preserves_positions_and_reports_lower_bounds():
+    from types import SimpleNamespace
+
+    from circuit_weaver.schematic_pcb import _pack_components, _SeedPackingFailure
+
+    class Library:
+        def geometry(self, _name):
+            return SimpleNamespace(
+                width_mm=8.0,
+                height_mm=8.0,
+                center_x_mm=0.0,
+                center_y_mm=0.0,
+                source="courtyard",
+                confidence="verified",
+            )
+
+    components = [
+        {"reference": f"U{i}", "footprint": "verified-large", "x_mm": float(i), "y_mm": -float(i)}
+        for i in range(1, 5)
+    ]
+    original_positions = {item["reference"]: (item["x_mm"], item["y_mm"]) for item in components}
+    with pytest.raises(_SeedPackingFailure, match="bounded courtyard-gap retries") as error:
+        _pack_components(components, 21.5, 21.5, Library())
+
+    assert {item["reference"]: (item["x_mm"], item["y_mm"]) for item in components} == original_positions
+    diagnostic = error.value.diagnostic
+    assert [attempt["gap_mm"] for attempt in diagnostic["attempted_gaps"]] == [3.0, 1.5, 1.0, 0.5]
+    assert all(attempt["status"] == "no_fit" for attempt in diagnostic["attempted_gaps"])
+    assert diagnostic["measured_courtyard_area_mm2"] == 256.0
+    assert diagnostic["board_interior_area_mm2"] == 132.25
+    assert diagnostic["minimum_dimensions_lower_bound_mm"]["width_at_least_mm"] == 18.0
+    assert diagnostic["minimum_dimensions_lower_bound_mm"]["height_at_least_mm"] == 18.0
+    assert diagnostic["minimum_dimensions_lower_bound_mm"]["width_from_area_at_requested_height_mm"] > 21.5
+    assert diagnostic["minimum_dimensions_lower_bound_mm"]["height_from_area_at_requested_width_mm"] > 21.5
+    assert "does not prove physical infeasibility" in diagnostic["diagnostic_scope"]
+
+
 def test_explicit_clearance_rejects_existing_source_board_rules_before_kicad_probe(tmp_path, monkeypatch):
     import circuit_weaver.schematic_pcb as module
 

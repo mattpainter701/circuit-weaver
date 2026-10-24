@@ -299,12 +299,98 @@ def _parse_netlist(netlist: Path, library: KiCadFootprintLibrary) -> dict[str, A
     }
 
 
+class _SeedPackingFailure(ValueError):
+    """Bounded heuristic packing failed, with measured, non-proof diagnostics."""
+
+    def __init__(self, message: str, diagnostic: dict[str, Any]):
+        super().__init__(message)
+        self.diagnostic = diagnostic
+
+
+def _seed_packing_diagnostic(
+    components: list[dict[str, Any]],
+    items: list[tuple[float, float, float, float, dict[str, Any]]],
+    width_mm: float,
+    height_mm: float,
+    margin_mm: float,
+    attempts: list[dict[str, Any]],
+    *,
+    used_gap_mm: float | None,
+    method: str | None,
+    status: str,
+) -> dict[str, Any]:
+    courtyard_area = sum(item[0] * item[1] for item in items)
+    interior_width = max(0.0, width_mm - 2 * margin_mm)
+    interior_height = max(0.0, height_mm - 2 * margin_mm)
+    interior_area = interior_width * interior_height
+    largest = max(
+        items,
+        key=lambda item: (item[0] * item[1], max(item[0], item[1]), item[4]["reference"]),
+        default=None,
+    )
+    lower_bounds: dict[str, float | None] = {
+        "width_at_least_mm": None if largest is None else round(largest[0] + 2 * margin_mm, 4),
+        "height_at_least_mm": None if largest is None else round(largest[1] + 2 * margin_mm, 4),
+        "width_from_area_at_requested_height_mm": (
+            None if interior_height <= 0 else round(2 * margin_mm + courtyard_area / interior_height, 4)
+        ),
+        "height_from_area_at_requested_width_mm": (
+            None if interior_width <= 0 else round(2 * margin_mm + courtyard_area / interior_width, 4)
+        ),
+    }
+    return {
+        "status": status,
+        "method": method,
+        "board_dimensions_mm": {"width": width_mm, "height": height_mm},
+        "edge_margin_mm": margin_mm,
+        "requested_gap_mm": 3.0,
+        "used_gap_mm": used_gap_mm,
+        "attempted_gaps": attempts,
+        "footprint_count": len(components),
+        "measured_courtyard_area_mm2": round(courtyard_area, 4),
+        "board_interior_area_mm2": round(interior_area, 4),
+        "courtyard_area_utilization_lower_bound": (
+            None if interior_area <= 0 else round(courtyard_area / interior_area, 4)
+        ),
+        "largest_footprint_envelope": (
+            None
+            if largest is None
+            else {
+                "reference": largest[4]["reference"],
+                "width_mm": largest[0],
+                "height_mm": largest[1],
+            }
+        ),
+        "minimum_dimensions_lower_bound_mm": lower_bounds,
+        "diagnostic_scope": (
+            "Courtyard area and dimension values are necessary lower bounds only. "
+            "A heuristic no-fit result does not prove physical infeasibility."
+        ),
+    }
+
+
+def _pack_shelf(items, width_mm: float, height_mm: float, margin_mm: float, gap_mm: float):
+    x, y, row_height = margin_mm, margin_mm, 0.0
+    positions = []
+    for item_width, item_height, center_x, center_y, component in items:
+        if x + item_width + margin_mm > width_mm:
+            x = margin_mm
+            y += row_height + gap_mm
+            row_height = 0.0
+        if y + item_height + margin_mm > height_mm:
+            return None
+        positions.append((component, x + item_width / 2 - center_x, y + item_height / 2 - center_y))
+        row_height = max(row_height, item_height)
+        x += item_width + gap_mm
+    return positions
+
+
 def _pack_components(
     components: list[dict[str, Any]],
     width_mm: float,
     height_mm: float,
     library: KiCadFootprintLibrary | None = None,
-) -> None:
+) -> dict[str, Any]:
     library = library or KiCadFootprintLibrary()
     items: list[tuple[float, float, float, float, dict[str, Any]]] = []
     for component in components:
@@ -312,27 +398,62 @@ def _pack_components(
         if geometry.source == "heuristic" or geometry.confidence == "heuristic":
             raise ValueError(f"{component['reference']}: footprint geometry is not locally verified")
         items.append((geometry.width_mm, geometry.height_mm, geometry.center_x_mm, geometry.center_y_mm, component))
-    margin, gap = 5.0, 3.0
-    x, y, row_height = margin, margin, 0.0
+    margin = 5.0
+    gaps = (3.0, 1.5, 1.0, 0.5)
     ordered = sorted(items, key=lambda item: (-item[1], -item[0], item[4]["reference"]))
-    positions = []
-    for item_width, item_height, center_x, center_y, component in ordered:
-        if item_width + margin * 2 > width_mm or item_height + margin * 2 > height_mm:
-            raise ValueError(f"{component['reference']}: footprint does not fit inside the requested board")
-        if x + item_width + margin > width_mm:
-            x = margin
-            y += row_height + gap
-            row_height = 0.0
-        if y + item_height + margin > height_mm:
-            # A tall RF module can leave enough space beside it for every
-            # support part while a shelf pack wastes that entire column.
-            positions = _pack_free_rectangles(ordered, width_mm, height_mm, margin, gap)
-            break
-        positions.append((component, x + item_width / 2 - center_x, y + item_height / 2 - center_y))
-        row_height = max(row_height, item_height)
-        x += item_width + gap
-    for component, px, py in positions:
-        component["x_mm"], component["y_mm"] = px, py
+    oversized = [
+        item for item in ordered
+        if item[0] + 2 * margin > width_mm or item[1] + 2 * margin > height_mm
+    ]
+    attempts: list[dict[str, Any]] = []
+    if oversized:
+        diagnostic = _seed_packing_diagnostic(
+            components, items, width_mm, height_mm, margin, attempts,
+            used_gap_mm=None, method=None, status="error",
+        )
+        diagnostic["oversized_footprints"] = [
+            {
+                "reference": item[4]["reference"],
+                "width_mm": item[0],
+                "height_mm": item[1],
+                "minimum_width_with_margin_mm": round(item[0] + 2 * margin, 4),
+                "minimum_height_with_margin_mm": round(item[1] + 2 * margin, 4),
+            }
+            for item in oversized
+        ]
+        raise _SeedPackingFailure(
+            "A verified footprint envelope is larger than the requested board interior",
+            diagnostic,
+        )
+
+    for gap in gaps:
+        shelf_positions = _pack_shelf(ordered, width_mm, height_mm, margin, gap)
+        if shelf_positions is not None:
+            positions, method = shelf_positions, "shelf"
+        else:
+            try:
+                positions = _pack_free_rectangles(ordered, width_mm, height_mm, margin, gap)
+                method = "max_rectangles"
+            except ValueError:
+                attempts.append({"gap_mm": gap, "status": "no_fit", "methods": ["shelf", "max_rectangles"]})
+                continue
+        # Coordinates are committed only after a complete packing succeeds.
+        for component, px, py in positions:
+            component["x_mm"], component["y_mm"] = px, py
+        attempts.append({"gap_mm": gap, "status": "placed", "method": method})
+        return _seed_packing_diagnostic(
+            components, items, width_mm, height_mm, margin, attempts,
+            used_gap_mm=gap, method=method, status="placed",
+        )
+
+    diagnostic = _seed_packing_diagnostic(
+        components, items, width_mm, height_mm, margin, attempts,
+        used_gap_mm=None, method=None, status="no_fit",
+    )
+    raise _SeedPackingFailure(
+        "Components do not fit inside the requested board dimensions with bounded courtyard-gap retries",
+        diagnostic,
+    )
 
 
 def _pack_free_rectangles(items, width, height, margin, gap):
@@ -636,7 +757,9 @@ def schematic_to_pcb(
                 )
             footprint_library = KiCadFootprintLibrary(project_root=project)
             model = _parse_netlist(netlist, footprint_library)
-            _pack_components(model["components"], float(width_mm), float(height_mm), footprint_library)
+            seed_packing = _pack_components(
+                model["components"], float(width_mm), float(height_mm), footprint_library
+            )
             worker_timeout = _native_build_timeout_seconds(len(model["components"]), sheet_count)
             staged_board = staging / target.name
             staged_project_file = staged_board.with_suffix(".kicad_pro")
@@ -774,6 +897,7 @@ def schematic_to_pcb(
                 "output_path": str(target),
                 "output_kind": "prototype_pad_bearing_board",
                 "fabrication_ready": False,
+                "seed_packing": seed_packing,
                 "counts": {
                     "components": len(model["components"]),
                     "footprints": int(worker["footprints"]),
@@ -788,7 +912,10 @@ def schematic_to_pcb(
                 ),
             }
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
-        return {"status": "error", "message": str(exc), "fabrication_ready": False}
+        result = {"status": "error", "message": str(exc), "fabrication_ready": False}
+        if isinstance(exc, _SeedPackingFailure):
+            result["seed_packing"] = exc.diagnostic
+        return result
 
 
 def _worker_result(process: subprocess.CompletedProcess[str]) -> dict[str, Any]:

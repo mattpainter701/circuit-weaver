@@ -132,7 +132,10 @@ def build_serial_relay_output_card(channels: int = 160) -> dict[str, Any]:
             if idx >= channels:
                 output_nets.append("")
             else:
-                output_nets.append(f"COIL_DRV_U{200 + idx // 7}_{idx % 7 + 1}")
+                driver_index, channel_index = divmod(idx, 7)
+                channels_used = min(7, channels - 7 * driver_index)
+                drive_net = f"COIL_DRV_U{200 + driver_index}"
+                output_nets.append(drive_net if channels_used == 1 else f"{drive_net}_{channel_index + 1}")
         spec["digital"].append(
             _shift_register(
                 f"U{100 + sr}",
@@ -172,12 +175,16 @@ def build_serial_relay_output_card(channels: int = 160) -> dict[str, Any]:
     )
     for idx in range(channels):
         drv, channel = divmod(idx, 7)
+        channels_used = min(7, channels - 7 * drv)
+        load_net = f"LOAD_U{200 + drv}"
+        if channels_used != 1:
+            load_net = f"{load_net}_{channel + 1}"
         spec["connectors"].append(
             {
                 "type": "connector",
                 "ic": "PIN_HEADER_2P",
                 "ref": f"J{idx + 2}",
-                "signal_nets": f"VIN_12V,LOAD_U{200 + drv}_{channel + 1}",
+                "signal_nets": f"VIN_12V,{load_net}",
             }
         )
     return spec
@@ -336,7 +343,10 @@ def _relay_paths(channels: int = 160) -> list[dict[str, Any]]:
         driver_idx, channel = divmod(idx, 7)
         sr, driver, connector = f"U{100 + sr_idx}", f"U{200 + driver_idx}", f"J{2 + idx}"
         input_pad, output_pad = str(channel + 1), str(16 - channel)
-        drive_net, load_net = f"COIL_DRV_{driver}_{channel + 1}", f"LOAD_{driver}_{channel + 1}"
+        channels_used = min(7, channels - 7 * driver_idx)
+        drive_net, load_net = f"COIL_DRV_{driver}", f"LOAD_{driver}"
+        if channels_used != 1:
+            drive_net, load_net = f"{drive_net}_{channel + 1}", f"{load_net}_{channel + 1}"
         sr_pad = output_pads[bit]
         connector_pad = "2"
         paths.append(
