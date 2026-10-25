@@ -141,7 +141,9 @@ def test_golden_native_four_layer_proof_can_pass_cad_but_not_product_qualificati
         "ground_pad_connections",
         "modeled_assembly",
     )
-    assert runner._cad_acceptance_status({"phases": [{"status": "passed"}], "gates": gates}, cad_keys) == "passed"
+    row = _completed_row()
+    row["gates"] = gates
+    assert runner._cad_acceptance_status(row, cad_keys) == "passed"
     assert runner._gate_group_status(gates, ("electrical_function", "timing", "impedance", "thermal")) == "unverified"
     assert runner._cad_acceptance_status({"phases": [{"status": "failed"}], "gates": gates}, cad_keys) == "failed"
 
@@ -208,3 +210,93 @@ def test_reports_keep_case_evidence_separate_and_scope_preflight_as_unverified(t
     assert by_id["beta"]["acceptance_status"] == "unverified"
     assert by_id["alpha"]["gates"]["native_drc"] == "unverified"
     assert report["summary"]["unverified"] == 2
+
+
+def _completed_row():
+    return {
+        "requested_through": "preview",
+        "phases": [{"phase": phase, "status": "passed"} for phase in runner.PHASES],
+        "gates": {key: "passed" for key in runner.CAD_GATES + runner.PRODUCT_GATES},
+        "controls": [],
+    }
+
+
+@pytest.mark.parametrize("gate", runner.CAD_GATES + runner.PRODUCT_GATES)
+def test_explicit_gate_failure_is_never_downgraded_to_unverified(gate):
+    row = _completed_row()
+    row["gates"][gate] = "failed"
+    assert runner._acceptance_status(row) == "failed"
+    if gate in runner.CAD_GATES:
+        assert runner._cad_acceptance_status(row, runner.CAD_GATES) == "failed"
+
+
+@pytest.mark.parametrize("missing", ["gates", "phases", "requested_through"])
+def test_missing_acceptance_evidence_cannot_pass(missing):
+    row = _completed_row()
+    del row[missing]
+    assert runner._acceptance_status(row) == "unverified"
+    assert runner._cad_acceptance_status(row, runner.CAD_GATES) == "unverified"
+
+
+@pytest.mark.parametrize("phase", runner.PHASES)
+def test_each_named_phase_is_required_for_acceptance(phase):
+    row = _completed_row()
+    row["phases"] = [item for item in row["phases"] if item["phase"] != phase]
+    assert runner._acceptance_status(row) == "unverified"
+    assert runner._cad_acceptance_status(row, runner.CAD_GATES) == "unverified"
+
+
+def test_cad_completion_does_not_require_product_qualification():
+    row = _completed_row()
+    row["gates"].update({key: "unverified" for key in runner.PRODUCT_GATES})
+    row["controls"] = [{"kind": "limits", "expected_result": "report_as_unverified", "status": "unverified"}]
+    assert runner._cad_acceptance_status(row, runner.CAD_GATES) == "passed"
+    assert runner._acceptance_status(row) == "unverified"
+
+
+def test_unverified_rejection_control_prevents_cad_pass():
+    row = _completed_row()
+    row["controls"] = [{"kind": "library", "expected_result": "reject", "status": "unverified"}]
+    assert runner._cad_acceptance_status(row, runner.CAD_GATES) == "unverified"
+    assert runner._acceptance_status(row) == "unverified"
+
+
+def test_control_failure_is_not_masked_by_later_resource_interruption():
+    row = _completed_row()
+    row["controls"] = [{"expected_result": "reject", "status": "undetected"}]
+    row["phases"][-1]["status"] = "resource_blocked"
+    assert runner._acceptance_status(row) == "failed"
+    assert runner._cad_acceptance_status(row, runner.CAD_GATES) == "failed"
+
+
+def test_full_acceptance_requires_every_gate_and_complete_named_phases():
+    row = _completed_row()
+    assert runner._acceptance_status(row) == "passed"
+    row["phases"][-1] = row["phases"][-2].copy()
+    assert runner._acceptance_status(row) == "unverified"
+    assert runner._cad_acceptance_status(row, runner.CAD_GATES) == "unverified"
+
+
+@pytest.mark.parametrize("gate_status,require_cad,expected_exit", [
+    ("failed", False, 1), ("unverified", False, 0), ("unverified", True, 1), ("passed", True, 0),
+])
+def test_runner_exit_reflects_failed_gates_and_strict_cad_mode(
+    tmp_path, monkeypatch, gate_status, require_cad, expected_exit,
+):
+    monkeypatch.setattr(runner, "load_cases", lambda: [{"case_id": "alpha", "spec": {}, "controls": []}])
+    monkeypatch.setattr(runner, "_git", lambda *args: "test-revision")
+    monkeypatch.setattr(runner, "_preflight", lambda case: {
+        "status": "passed", "metrics": {}, "connectivity": {}, "assembly": {},
+    })
+    monkeypatch.setattr(runner, "_run_negative_controls", lambda case: [])
+    monkeypatch.setattr(runner, "_workflow_case", lambda *args: {
+        "phases": _completed_row()["phases"][1:], "project_dir": "test-project",
+        "gates": {key: gate_status for key in runner.CAD_GATES},
+    })
+    output = tmp_path / "results"
+    args = argparse.Namespace(case=None, through="preview", output=output, require_cad=require_cad)
+    assert runner.run(args) == expected_exit
+    report = json.loads((output / "acceptance-report.json").read_text())
+    row = report["cases"][0]
+    assert row["cad_acceptance_status"] == gate_status
+    assert row["acceptance_status"] == ("failed" if gate_status == "failed" else "unverified")

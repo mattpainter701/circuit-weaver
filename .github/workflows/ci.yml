@@ -66,6 +66,7 @@ jobs:
 
   distribution:
     name: Build exact distribution artifact
+    needs: [test, bundled-skills]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -190,6 +191,7 @@ jobs:
 
   kicad-validation:
     name: KiCad ${{ matrix.kicad-major }} final-artifact validation
+    needs: test-wheel
     runs-on: ubuntu-24.04
     container:
       image: ${{ matrix.container-image }}
@@ -197,6 +199,7 @@ jobs:
     timeout-minutes: 90
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include:
           - kicad-major: "8"
@@ -286,6 +289,16 @@ jobs:
           --output .ci-kicad/native-pcb/general-scale --require-clean
           --workers 2 --iterations 6000 --attempts 3 --route-timeout 600
 
+      - name: Require complete shared four-layer CAD acceptance on the installed package
+        if: matrix.kicad-major == '10'
+        env:
+          CIRCUIT_WEAVER_KICAD_PYTHON: /usr/bin/python3
+          CIRCUIT_WEAVER_FREEROUTING: /tmp/freerouting-2.4.1.jar
+        run: >-
+          python benchmarks/four_layer_acceptance/run_acceptance.py
+          --case iot_environment_node --through preview --engine-mode installed
+          --require-cad --output .ci-kicad/native-pcb/four-layer-acceptance
+
       - name: Preserve real PCB validation artifacts
         if: always()
         uses: actions/upload-artifact@v7
@@ -296,7 +309,7 @@ jobs:
 
   unseen-scale-validation:
     name: Unseen native scale / ${{ matrix.case }}
-    needs: distribution
+    needs: [distribution, kicad-validation]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     container:
@@ -304,6 +317,7 @@ jobs:
       options: --user 0
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         case: [distributed_facility_gateway, serial_relay_output_card, multichannel_analog_setpoint_card]
     steps:

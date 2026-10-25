@@ -37,6 +37,14 @@ performance have separate evidence states. They remain unverified without an
 authored requirement and an appropriate independent analysis or measurement.
 A completed CAD workflow does not silently pass those gates.
 
+For an automated CAD gate, run the acceptance runner with
+`--through preview --require-cad`. It exits nonzero unless every selected case
+completes all seven named stages and all required CAD gates and rejection
+controls pass. Without `--require-cad`, exploratory unverified results may exit
+zero; explicit gate or control failures still exit nonzero. Product
+qualification remains a separate result. The [pre-merge review](suite-premerge-review.md)
+tracks remaining phase closure and the native CI regression floor.
+
 ## Circuit series
 
 The executable corpus is in

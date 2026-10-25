@@ -28,6 +28,11 @@ CORPUS = Path(__file__).resolve().parent / "corpus.py"
 CONTROLS = Path(__file__).resolve().parent / "controls.py"
 ASSET_CHECKS = Path(__file__).resolve().parent / "asset_checks.py"
 PHASES = ("preflight", "validate", "generate", "build", "place", "route", "preview")
+CAD_GATES = (
+    "native_drc", "route_connectivity_contracts", "four_layer_stackup",
+    "ground_plane_continuity", "ground_pad_connections", "modeled_assembly",
+)
+PRODUCT_GATES = ("electrical_function", "timing", "impedance", "thermal")
 STATUSES = {"passed", "failed", "unverified", "resource_blocked", "not_run"}
 
 
@@ -961,18 +966,13 @@ def run(args: argparse.Namespace) -> int:
                     _phase(phase, "not_run", inputs={}, outputs={}, detail={"reason": "preflight did not pass"})
                 )
         row["elapsed_seconds"] = round(time.monotonic() - start, 3)
-        cad_keys = (
-            "native_drc",
-            "route_connectivity_contracts",
-            "four_layer_stackup",
-            "ground_plane_continuity",
-            "ground_pad_connections",
-            "modeled_assembly",
-        )
-        product_keys = ("electrical_function", "timing", "impedance", "thermal")
-        row["cad_acceptance_status"] = _cad_acceptance_status(row, cad_keys)
-        row["product_qualification_status"] = _gate_group_status(row["gates"], product_keys)
+        row["cad_acceptance_status"] = _cad_acceptance_status(row, CAD_GATES)
+        row["product_qualification_status"] = _gate_group_status(row["gates"], PRODUCT_GATES)
         row["acceptance_status"] = _acceptance_status(row)
+        if row["acceptance_status"] == "failed" or (
+            getattr(args, "require_cad", False) and row["cad_acceptance_status"] != "passed"
+        ):
+            exit_code = 1
         report["cases"] = [existing for existing in report["cases"] if existing["case_id"] != row["case_id"]] + [row]
         report["updated_at"] = datetime.now(timezone.utc).isoformat()
         report["summary"] = _summarize(report["cases"])
@@ -986,15 +986,19 @@ def run(args: argparse.Namespace) -> int:
 
 def _acceptance_status(row: dict[str, Any]) -> str:
     statuses = [p.get("status") for p in row.get("phases", [])]
-    if "failed" in statuses:
+    gate_status = _gate_group_status(row.get("gates", {}), CAD_GATES + PRODUCT_GATES)
+    if "failed" in statuses or gate_status == "failed":
+        return "failed"
+    if any(item.get("status") == "undetected" for item in row.get("controls", []) if isinstance(item, dict)):
         return "failed"
     if "resource_blocked" in statuses:
         return "resource_blocked"
-    if any(item.get("status") == "undetected" for item in row.get("controls", []) if isinstance(item, dict)):
-        return "failed"
     if row.get("requested_through") == "preflight":
         return "unverified"
-    if statuses and all(s == "passed" for s in statuses) and all(v == "passed" for v in row.get("gates", {}).values()):
+    if (
+        _completed_phases(row) and gate_status == "passed"
+        and all(control.get("status") == "detected" for control in row.get("controls", []))
+    ):
         return "passed"
     return "unverified"
 
@@ -1008,13 +1012,29 @@ def _gate_group_status(gates: dict[str, Any], keys: tuple[str, ...]) -> str:
 
 def _cad_acceptance_status(row: dict[str, Any], keys: tuple[str, ...]) -> str:
     phase_statuses = [phase.get("status") for phase in row.get("phases", []) if isinstance(phase, dict)]
-    if "resource_blocked" in phase_statuses:
-        return "resource_blocked"
-    if "failed" in phase_statuses or any(
+    gate_status = _gate_group_status(row.get("gates", {}), keys)
+    if "failed" in phase_statuses or gate_status == "failed" or any(
         item.get("status") == "undetected" for item in row.get("controls", []) if isinstance(item, dict)
     ):
         return "failed"
-    return _gate_group_status(row.get("gates", {}), keys)
+    if "resource_blocked" in phase_statuses:
+        return "resource_blocked"
+    if not _completed_phases(row) or any(
+        control.get("expected_result") == "reject" and control.get("status") != "detected"
+        for control in row.get("controls", [])
+    ):
+        return "unverified"
+    return gate_status
+
+
+def _completed_phases(row: dict[str, Any]) -> bool:
+    """Require the complete executed workflow, including each named stage once."""
+    phases = row.get("phases", [])
+    return (
+        row.get("requested_through") == "preview"
+        and [phase.get("phase") for phase in phases] == list(PHASES)
+        and all(phase.get("status") == "passed" for phase in phases)
+    )
 
 
 def _summarize(rows: list[dict[str, Any]]) -> dict[str, int]:
@@ -1083,6 +1103,10 @@ def _configure_engine_path(mode: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", action="append", help="case_id to run; may be repeated")
+    parser.add_argument(
+        "--require-cad", action="store_true",
+        help="exit nonzero unless every selected case completes all native CAD acceptance gates",
+    )
     parser.add_argument(
         "--through",
         choices=PHASES,

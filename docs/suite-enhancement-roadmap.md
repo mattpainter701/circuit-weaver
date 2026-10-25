@@ -2,6 +2,10 @@
 
 Started October 23, 2026 from `295e321`, continuing the existing PR #39 task. Each milestone requires executable evidence. A partial or blocked stage remains visible; a preview does not establish electrical or manufacturing approval.
 
+The [October 25 pre-merge review](suite-premerge-review.md) reconciles the PR
+inventory with all eight phase goals, records the remaining closure evidence,
+and explains the staged CI policy and strict native CAD acceptance gate.
+
 The current execution wave is broken into [owned work packages](suite-execution-workpackages.md), with measured outcomes and remaining gates in [the next-wave results](suite-roadmap-execution-results.md).
 
 The [October 24 follow-up](suite-roadmap-followup.md) advances explicit current
