@@ -75,5 +75,72 @@ the repository's normal source Python path; a freshly installed wheel can run
 the same audit using the benchmark helper from the checkout. The report records
 the actual checker import path and source hash. It leaves all missing authored
 cases unverified and displays relay all-active arithmetic separately. This is
-a separate Python/audit API; adding `operating_cases` to a design spec does not
-automatically invoke it through the CLI, MCP or shared CAD workflow.
+a separate corpus audit. The spec integration below now invokes the checker
+through shared validation, CLI, MCP and the CAD workflow's validation stage.
+
+## Shared spec validation
+
+`validate_design(spec)`, `circuit-weaver validate <spec>` and MCP
+`validate_design` recognize this optional top-level document:
+
+```yaml
+operating_cases:
+  cases:
+    - name: Relay
+      max_simultaneous: null
+      loads:
+        - name: coil
+          current_ma: 80
+          max_concurrent: null
+          evidence_id: null
+      source_limit: null
+      connector_limits: []
+      distribution_limits: []
+```
+
+This deliberately incomplete example remains **unverified**. The 80 mA value
+is an authored assumption, not a component rating. Omit `operating_cases` when
+no check is requested; an absent case is reported as `not_requested`.
+
+The document accepts only `cases` and optional `evidence_manifest`. A limit
+object has `name`, `current_ma`, optional `unit` (mA only) and `evidence_id`.
+Loads additionally have `max_concurrent`; cases have `max_simultaneous`,
+`loads`, `source_limit`, `connector_limits` and `distribution_limits`.
+Unknown keys, duplicate case names, malformed manifests and invalid numerical
+values are validation errors. Names are identifiers of 1–64 characters,
+beginning with a letter and then letters, digits or underscores.
+
+`evidence_manifest` uses the existing `EvidenceLedger.to_manifest()` schema.
+Create/import real records with the existing ledger APIs; do not invent IDs or
+inline confidence labels. Each referenced record must resolve in that manifest
+with one of these exact subjects:
+
+| Value | Subject for case `Relay` |
+| --- | --- |
+| Per-active-item current for load `coil` | `param:Relay.current.coil` |
+| Common source limit | `param:Relay.source.source` |
+| Series connector `J1` | `param:Relay.connector.J1` |
+| Series distribution boundary `feed` | `param:Relay.distribution.feed` |
+
+Its claim is a JSON string with exactly `value` and `unit`, for example
+`{"value":80,"unit":"mA"}`. A nonempty underlying source content hash is
+required. Existing confidence, freshness, kind and conflict checks still apply;
+superseded records and mismatched claims cannot establish a comparison.
+Missing IDs leave the comparison unverified. The supplied manifest is validated
+and merged into the returned validation evidence ledger; this does not
+authenticate sources or prove applicability to a physical component or rail.
+
+`metadata.operating_cases` contains the aggregate state, each boundary result,
+resolved evidence IDs, case result hashes and a hash of the complete authored
+document, including source metadata. Findings also link to the resolved ledger
+records. MCP summaries preserve these results. A supported overload produces an
+electrical error and blocks generation/workflow validation. Unknown ratings
+produce warnings; `validate --strict` rejects those warnings. A successful
+workflow validation checkpoint retains the current-case result rather than
+discarding it.
+
+The parser bounds cases, loads, series boundaries and ledger records. It checks
+an explicitly authored common series feed; it does not infer power-tree paths,
+convert current across rails, measure conductor ampacity, or qualify electrical
+function and thermal behavior. Those qualifications remain unverified even
+when the current-budget comparison passes.

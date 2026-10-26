@@ -9,8 +9,11 @@ Measured outcomes and open gates are recorded in [the next-wave results](suite-r
 The active [October 24 follow-up](suite-roadmap-followup.md) assigns phase 3/7
 current-budget contracts to the electrical lane, phase 4 bounded stock lookup
 to the library lane, and phase 6 native scale evidence to the root serial queue.
-The new checker is exposed in Python; shared CLI/MCP invocation is a remaining
-integration item rather than an implied capability.
+The October 25 continuation now invokes the checker from shared validation,
+CLI/MCP and workflow validation, resolving authored value claims through the
+evidence ledger. Missing or inapplicable ratings remain unverified; this closes
+the source integration item, not actual device/product qualification. Native
+96-part continuation still requires the unchanged host memory reserve.
 
 | Phase | Current work package | Dependency and acceptance | Owner lane |
 | --- | --- | --- | --- |

@@ -763,7 +763,11 @@ def _execute_stage(
         payload = report.to_dict() if hasattr(report, "to_dict") else vars(report)
         if not bool(getattr(report, "valid", payload.get("valid", False))):
             raise WorkflowError("validation_failed", "Design validation reported errors")
-        return {"status": "ok", "valid": True}, []
+        result = {"status": "ok", "valid": True}
+        operating_cases = payload.get("metadata", {}).get("operating_cases", {})
+        if operating_cases.get("status") != "not_requested" and operating_cases:
+            result["operating_cases"] = operating_cases
+        return result, []
     if stage == "generate":
         out_dir = root / "output"
         out_dir.mkdir(parents=True, exist_ok=True)

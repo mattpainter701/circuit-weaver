@@ -1806,6 +1806,28 @@ def validate_design(
     categories["electrical"].extend(_validate_pin_coverage(compiled))
     categories["electrical"].extend(_validate_power_domain_consistency(compiled))
 
+    from .evidence import EvidenceLedger
+    from .operating_case_spec import evaluate_spec_operating_cases
+
+    operating_ledger = EvidenceLedger()
+    try:
+        operating_cases, operating_ledger = evaluate_spec_operating_cases(spec)
+        for case in operating_cases["cases"]:
+            categories["electrical"].append(ValidationMessage(
+                category="electrical", code="operating-current-budget",
+                level={"passed": "info", "failed": "error", "unverified": "warning"}[case["status"]],
+                subject=case["case_name"],
+                message=f"Authored current budget is {case['status']}; required current: {case['required_ma']} mA",
+                suggestion="Review the authored concurrency, source and series boundary ratings and their evidence.",
+                calculation=case,
+            ))
+    except (ValueError, TypeError) as exc:
+        operating_cases = {"status": "failed", "cases": [], "reason": str(exc)}
+        categories["electrical"].append(ValidationMessage(
+            category="electrical", code="invalid-operating-cases", level="error", subject="design",
+            message=f"Invalid authored current cases: {exc}",
+        ))
+
     validator_results = list(run_validation_checks(compiled.components))
     for result in validator_results:
         for issue in result.issues:
@@ -1960,6 +1982,7 @@ def validate_design(
             "component_count": len(compiled.components),
             "block_count": len(compiled.ir.blocks),
             "native_export": native_export_report,
+            "operating_cases": operating_cases,
         },
     )
     from .evidence import build_validation_evidence
@@ -1969,6 +1992,19 @@ def validate_design(
         report,
         getattr(compiled.ir, "power_domains", ()),
     )
+    # Merge through the manifest loader so cross-record conflicts/supersession
+    # remain subject to the same ledger checks as ordinary validation evidence.
+    if operating_ledger.to_manifest()["records"]:
+        evidence_ledger = EvidenceLedger.from_manifest({
+            "schema_version": evidence_ledger.to_manifest()["schema_version"],
+            "records": evidence_ledger.to_manifest()["records"] + operating_ledger.to_manifest()["records"],
+        })
+    for message in categories["electrical"]:
+        if message.code == "operating-current-budget":
+            message.evidence_ids[:] = sorted(set(message.evidence_ids) | set(message.calculation["evidence_ids"]))
+    report.evidence_ids = sorted(set(report.evidence_ids) | {
+        record["id"] for record in operating_ledger.to_manifest()["records"]
+    })
     report.metadata["evidence_manifest"] = evidence_ledger.to_manifest()
     report.metadata["evidence_ids_by_reference"] = evidence_by_ref
     from .finding_contract import require_finding_contract

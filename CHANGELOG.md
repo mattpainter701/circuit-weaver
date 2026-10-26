@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Run authored current operating cases through shared validation, CLI and MCP, resolving exact value/unit/subject claims from the evidence ledger. Supported overloads block validation; missing, stale, mismatched or superseded evidence remains unverified. Retain budget results in workflow validation checkpoints.
 - Require complete named workflow stages and explicit CAD/qualification gates in four-layer acceptance reports; preserve gate failures and add a strict CAD exit status for CI. Run native CI in stages and cancel superseded design validation to avoid redundant resource use.
 - Add an explicit Python current-budget checker for authored simultaneous-load cases, preserving unknown limits and evidence mismatches; include a corpus audit and nominal/overload/missing-input controls without implying device or thermal qualification.
 - Reject nonfinite, boolean and nonnumeric rail envelopes and invalid sequencing values before they become PCB constraints; reject peak current below the declared steady load while retaining signed rails and unknown limits.

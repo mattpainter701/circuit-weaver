@@ -6,6 +6,12 @@ The [October 25 pre-merge review](suite-premerge-review.md) reconciles the PR
 inventory with all eight phase goals, records the remaining closure evidence,
 and explains the staged CI policy and strict native CAD acceptance gate.
 
+The subsequent October 25 phase continuation integrates authored current
+operating cases into shared validation, CLI/MCP and workflow checkpoints with
+ledger-resolved inputs. It leaves actual corpus operating cases and device
+qualification unverified. The 96-part native continuation remains subject to
+the existing 2 GiB host reserve and 2.5 GiB owned-job cap.
+
 The current execution wave is broken into [owned work packages](suite-execution-workpackages.md), with measured outcomes and remaining gates in [the next-wave results](suite-roadmap-execution-results.md).
 
 The [October 24 follow-up](suite-roadmap-followup.md) advances explicit current
