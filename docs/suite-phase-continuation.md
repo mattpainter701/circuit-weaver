@@ -21,8 +21,9 @@ Successful workflow checkpoints retain the structured current result.
 Input/result hashes and ledger links survive CLI and MCP reports. No new MCP
 tool or client registration is required. See [the schema and limits](operating-cases.md).
 
-The source integration is committed at
-`07c6a1fe3ab5c4e62dfd52682a9c0eed249834f6`. A serial focused regression passed
+The integration began at `07c6a1fe3ab5c4e62dfd52682a9c0eed249834f6`;
+the final implementation, including canonical preservation and native failure
+retention, is `f4b08d90ba9ff17107afd3400ceb38186232c3e7`. A serial focused regression passed
 166 tests across current cases, evidence policy/calculations, MCP pagination,
 workflow state/generated reports, canonical conversions and execution policy.
 A disjoint repair regression passed 65 tests. Ruff passes. Canonical/engine
@@ -31,17 +32,19 @@ semantic diffs expose changes instead of silently dropping this intent.
 
 A fresh archive, wheel, sdist and isolated install match all 228 package files.
 The wheel SHA-256 is
-`60daa6eb78d8c9c789bf8e091359afe9e7dfc267fa41b7c52ab58fce6772e7ba`.
-Eight installed Python/CLI/real stdio MCP operations passed, with 18 declared
+`b6ff5e64a73e6216e20f8f0597e0a46e40804036d755e6efa4e712267b5485cf`.
+Ten installed Python/CLI/real stdio MCP operations passed, with 18 declared
 tools: synthetic nominal/overload/unknown controls, matching CLI/MCP overload
-reports, project creation, blocked workflow validation and persisted failed
-status. These synthetic controls do not establish ratings for the actual
+reports, canonical round-trip validation, a nested-engine overload, project
+creation, blocked workflow validation and persisted failed status.
+These synthetic controls do not establish ratings for the actual
 relay circuit. Actual corpus current envelopes, device qualification and the
 full phase 3/7 engineering goals remain open.
 
 Evidence is retained under
-`automation_validation_results/phase-continuation-20261025/`: `candidate01/proof.json`,
-`shared-regression02`, `installed-operating01/proof.json` and bounded job records.
+`automation_validation_results/phase-continuation-20261025/`: `candidate02/proof.json`,
+`canonical-regression03`, `repair-regression01`, `installed-operating02/proof.json`
+and bounded job records.
 The initial frozen-message mutation test failure was corrected before the
 passing batch; the failed attempt remains retained.
 
@@ -64,3 +67,18 @@ four-layer stack, authored route paths, DRC, plane connectivity and actual model
 coverage in the assembled preview. Initial headroom observations and every
 launched attempt remain separate evidence. No electrical or manufacturing
 qualification follows merely from native workflow completion.
+
+One native resume actually ran with the first installed candidate. It completed
+with an error at placement: no candidate passed the physical DRC/reference-label
+acceptance gate. It did not hit the resource floor; peak owned job memory was
+277,721,088 bytes and all owned processes were reaped. The frozen design and
+prototype hashes were preserved. No placed/routed board or new assembled preview
+was accepted. The old runner discarded the detailed child result, which motivated
+the checkpoint diagnostic-retention fix above.
+
+Two subsequent bounded diagnostic headroom windows expired without launching
+another native job as host memory fell below the reserve. That leaves the exact
+placement conflict unclassified; this is not proof of a specific clearance or
+label defect, nor a routing failure. The next native attempt should use the
+final installed candidate and retain its full rejection payload, resolve the
+actual placement issue, then continue through routing and all final CAD gates.
