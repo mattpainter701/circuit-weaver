@@ -541,6 +541,22 @@ def test_native_cli_child_does_not_inherit_transport_stdin(tmp_path: Path, monke
     assert calls[0][1]["stdin"] is subprocess.DEVNULL
 
 
+def test_failed_workflow_checkpoint_preserves_structured_native_diagnostics(tmp_path: Path, monkeypatch):
+    root = _project(tmp_path)
+    native_result = {"status": "error", "best_candidate": {"message": "physical clearance failed", "drc": ["gap"]}}
+
+    def failed_stage(*args, **kwargs):
+        raise workflow.WorkflowError("stage_failed", "placement rejected", stage_result=native_result)
+
+    monkeypatch.setattr(workflow, "_execute_stage", failed_stage)
+    result = workflow.run_workflow(root, stages=["validate"])
+    assert result["ok"] is False
+    checkpoint = load_project_state(root).workflow["runner"]["stages"]["validate"]
+    assert checkpoint["status"] == "failed"
+    assert checkpoint["result"] == native_result
+    assert result["error"] == {"code": "stage_failed", "message": "placement rejected"}
+
+
 def test_nonzero_native_cli_keeps_structured_error_ahead_of_large_inventory(tmp_path: Path, monkeypatch):
     inventory = ["model-entry"] * 5000
     payload = json.dumps(
@@ -562,6 +578,7 @@ def test_nonzero_native_cli_keeps_structured_error_ahead_of_large_inventory(tmp_
         assert exc.code == "preview_failed"
         assert "model preview failed before inventory export" in str(exc)
         assert len(str(exc)) < 200
+        assert exc.stage_result["models"] == inventory
     else:
         raise AssertionError("nonzero native exit was treated as success")
 

@@ -23,6 +23,7 @@ in the design.
 
 from __future__ import annotations
 
+import copy
 import logging
 import re
 from dataclasses import dataclass, field
@@ -664,6 +665,7 @@ def auto_repair_design(
         power_domains=list(ir.power_domains),
         approved_overrides=list(ir.approved_overrides),
         pcb_constraints=list(ir.pcb_constraints),
+        operating_cases=copy.deepcopy(ir.operating_cases),
     )
     return patched, component_repairs, actions
 

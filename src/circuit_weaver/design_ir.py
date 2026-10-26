@@ -242,6 +242,7 @@ class DesignIR:
     power_domains: list[PowerDomain] = field(default_factory=list)
     approved_overrides: list[dict[str, Any]] = field(default_factory=list)
     pcb_constraints: list[dict[str, Any]] = field(default_factory=list)
+    operating_cases: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return design_ir_to_spec(self)
@@ -406,7 +407,10 @@ def normalize_design_spec(spec: dict[str, Any]) -> DesignIR:
     # Convert wizard-generated specs to engine format if needed
     from .preparser import extract_engine_spec
 
+    operating_cases = copy.deepcopy(spec.get("operating_cases"))
     spec = extract_engine_spec(spec)
+    if operating_cases is None:
+        operating_cases = copy.deepcopy(spec.get("operating_cases"))
 
     metadata = _normalize_metadata(spec)
     if isinstance(spec.get("blocks"), list):
@@ -471,6 +475,7 @@ def normalize_design_spec(spec: dict[str, Any]) -> DesignIR:
         pcb_constraints=[
             _normalize_pcb_constraint(item) for item in (spec.get("pcb_constraints") or []) if isinstance(item, dict)
         ],
+        operating_cases=operating_cases,
     )
 
 
@@ -513,6 +518,8 @@ def design_ir_to_spec(ir: DesignIR) -> dict[str, Any]:
     spec["power_domains"] = [_power_domain_to_spec(domain) for domain in ir.power_domains]
     spec["approved_overrides"] = [copy.deepcopy(item) for item in ir.approved_overrides]
     spec["pcb_constraints"] = [copy.deepcopy(item) for item in ir.pcb_constraints]
+    if ir.operating_cases is not None:
+        spec["operating_cases"] = copy.deepcopy(ir.operating_cases)
     return spec
 
 
@@ -557,6 +564,8 @@ def design_ir_to_engine_spec(ir: DesignIR) -> dict[str, Any]:
     # validators; project-spec resolution explicitly treats this as metadata.
     if ir.power_domains:
         spec["power_domains"] = [_power_domain_to_spec(domain) for domain in ir.power_domains]
+    if ir.operating_cases is not None:
+        spec["operating_cases"] = copy.deepcopy(ir.operating_cases)
     return spec
 
 
@@ -600,7 +609,7 @@ def semantic_diff(old_spec: dict[str, Any], new_spec: dict[str, Any]) -> dict[st
     old_interfaces = {(iface.block_id, iface.name, iface.direction) for iface in old_ir.interfaces}
     new_interfaces = {(iface.block_id, iface.name, iface.direction) for iface in new_ir.interfaces}
 
-    return {
+    diff = {
         "metadata_changed": metadata_changes,
         "added_blocks": added,
         "removed_blocks": removed,
@@ -618,3 +627,7 @@ def semantic_diff(old_spec: dict[str, Any], new_spec: dict[str, Any]) -> dict[st
             "removed_interfaces": len(old_interfaces - new_interfaces),
         },
     }
+    if old_ir.operating_cases is not None or new_ir.operating_cases is not None:
+        diff["operating_cases_changed"] = old_ir.operating_cases != new_ir.operating_cases
+        diff["summary"]["operating_case_changes"] = int(diff["operating_cases_changed"])
+    return diff

@@ -44,6 +44,12 @@ def evaluate_spec_operating_cases(spec: dict) -> tuple[dict[str, Any], EvidenceL
     Ledger records are validated and exactly matched; this does not authenticate
     the supplied sources or infer any physical circuit/rail attachment.
     """
+    engine = spec.get("engine")
+    if isinstance(engine, dict) and "operating_cases" in engine:
+        if "operating_cases" in spec and spec["operating_cases"] != engine["operating_cases"]:
+            raise ValueError("outer and nested engine operating_cases disagree")
+        if "operating_cases" not in spec:
+            spec = engine
     if "operating_cases" not in spec:
         return {"status": "not_requested", "cases": []}, EvidenceLedger()
     document = _object(spec["operating_cases"], {"cases", "evidence_manifest"}, "operating_cases")

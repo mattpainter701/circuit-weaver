@@ -552,6 +552,7 @@ def _hydrate_ir_from_components(ir: DesignIR, components: list[ComponentDef]) ->
         power_domains=copy.deepcopy(ir.power_domains),
         approved_overrides=copy.deepcopy(ir.approved_overrides),
         pcb_constraints=copy.deepcopy(ir.pcb_constraints),
+        operating_cases=copy.deepcopy(ir.operating_cases),
     )
 
 
@@ -1811,7 +1812,10 @@ def validate_design(
 
     operating_ledger = EvidenceLedger()
     try:
-        operating_cases, operating_ledger = evaluate_spec_operating_cases(spec)
+        operating_spec = spec
+        if "operating_cases" not in spec and getattr(compiled.ir, "operating_cases", None) is not None:
+            operating_spec = {"operating_cases": compiled.ir.operating_cases}
+        operating_cases, operating_ledger = evaluate_spec_operating_cases(operating_spec)
         for case in operating_cases["cases"]:
             categories["electrical"].append(ValidationMessage(
                 category="electrical", code="operating-current-budget",

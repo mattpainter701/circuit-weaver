@@ -139,6 +139,12 @@ produce warnings; `validate --strict` rejects those warnings. A successful
 workflow validation checkpoint retains the current-case result rather than
 discarding it.
 
+Canonical/engine conversions and automatic repair preserve this document and
+its ledger. Semantic diffs expose authored budget changes. Nested `engine`
+specs are supported; conflicting outer/nested declarations are validation
+errors. This prevents a saved canonical spec from silently losing its current
+checks when it is reopened.
+
 The parser bounds cases, loads, series boundaries and ledger records. It checks
 an explicitly authored common series feed; it does not infer power-tree paths,
 convert current across rails, measure conductor ampacity, or qualify electrical

@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from circuit_weaver import dispatcher, mcp_server, project_workflow
+from circuit_weaver.design_ir import design_ir_to_engine_spec, normalize_design_spec, semantic_diff
+from circuit_weaver.design_loader import compile_design_ir
 from circuit_weaver.evidence import EvidenceLedger, EvidenceSource
 from circuit_weaver.operating_case_spec import evaluate_spec_operating_cases
 from circuit_weaver.project_spec import _parse_yaml
@@ -121,6 +123,41 @@ def test_no_authored_case_is_not_implicitly_qualified():
     spec = authored_spec()
     del spec["operating_cases"]
     assert evaluate_spec_operating_cases(spec)[0] == {"status": "not_requested", "cases": []}
+
+
+def test_canonical_and_engine_round_trips_preserve_case_and_provenance():
+    spec = authored_spec()
+    ir = normalize_design_spec(spec)
+    assert compile_design_ir(spec, use_kicad=False).ir.to_dict()["operating_cases"] == spec["operating_cases"]
+    for converted in (ir.to_dict(), design_ir_to_engine_spec(ir)):
+        assert converted["operating_cases"] == spec["operating_cases"]
+        assert evaluate_spec_operating_cases(converted)[0] == evaluate_spec_operating_cases(spec)[0]
+    converted["operating_cases"]["cases"].clear()
+    assert ir.operating_cases["cases"]
+
+
+def test_nested_engine_budget_is_not_silently_ignored():
+    report = validate({"engine": authored_spec(399)})
+    assert not report.valid
+    assert report.metadata["operating_cases"]["status"] == "failed"
+
+
+def test_invalid_nested_and_conflicting_outer_budgets_are_errors():
+    inner = authored_spec()
+    outer = authored_spec(399)["operating_cases"]
+    for spec in ({"engine": {**inner, "operating_cases": None}}, {"engine": inner, "operating_cases": outer}):
+        report = validate(spec)
+        assert not report.valid
+        assert report.metadata["operating_cases"]["status"] == "failed"
+
+
+def test_current_case_changes_are_visible_in_semantic_diff():
+    before = authored_spec()
+    after = copy.deepcopy(before)
+    after["operating_cases"]["cases"][0]["max_simultaneous"] = None
+    result = semantic_diff(before, after)
+    assert result["operating_cases_changed"]
+    assert result["summary"]["operating_case_changes"] == 1
 
 
 def test_unknown_rating_is_visible_and_strict_validation_rejects_it():

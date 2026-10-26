@@ -57,10 +57,13 @@ _PROJECT_MODEL_SUFFIXES = {".step", ".stp", ".wrl", ".wrz", ".iges", ".igs", ".o
 
 
 class WorkflowError(RuntimeError):
-    def __init__(self, code: str, message: str, choices: list[str] | None = None):
+    def __init__(
+        self, code: str, message: str, choices: list[str] | None = None, *, stage_result: dict[str, Any] | None = None,
+    ):
         super().__init__(message)
         self.code = code
         self.choices = choices
+        self.stage_result = stage_result
 
 
 def _result(ok: bool, status: str, **values: Any) -> dict[str, Any]:
@@ -747,7 +750,7 @@ def _cli(stage: str, args: list[str], cwd: Path, timeout: int) -> dict[str, Any]
             code = result.get("code") or "stage_failed"
             message = error or result.get("message") or result.get("reason") or result.get("detail")
         message = message or proc.stderr[-4000:] or f"{stage} exited {proc.returncode}"
-        raise WorkflowError(str(code), f"{stage} failed: {message}")
+        raise WorkflowError(str(code), f"{stage} failed: {message}", stage_result=result)
     return result
 
 
@@ -1458,7 +1461,7 @@ def run_workflow(
                         status="failed",
                         error=_error(exc),
                         run_id=run_id,
-                        result=locals().get("result"),
+                        result=(getattr(exc, "stage_result", None) or result),
                     )
                     state = _load(root)
                     run = _runner(state)
