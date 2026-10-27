@@ -23,7 +23,12 @@ _spec.loader.exec_module(_demo)
 
 
 def test_workflow_cases_keep_private_state_below_an_existing_parent_project(tmp_path):
-    from circuit_weaver.project_state import ensure_project_state, resolve_project_root, save_project_state
+    from circuit_weaver.project_state import (
+        ensure_project_state,
+        load_project_state,
+        resolve_project_root,
+        save_project_state,
+    )
 
     parent_state = save_project_state(tmp_path, ensure_project_state(tmp_path))
     original = parent_state.read_bytes()
@@ -34,7 +39,13 @@ def test_workflow_cases_keep_private_state_below_an_existing_parent_project(tmp_
         _demo.initialize_workflow_project(case, cwd=tmp_path, env=os.environ.copy())
         local = case / ".circuit-weaver" / "project.json"
         ids.append(json.loads(local.read_text(encoding="utf-8"))["project_id"])
-        assert resolve_project_root(case / "generated") == case
+        assert resolve_project_root(case / "output") == case
+        generated = case / "generated"
+        assert resolve_project_root(generated) == generated
+        state = load_project_state(case)
+        state.workflow["generate"] = {"output_dir": str(generated)}
+        save_project_state(case, state)
+        assert resolve_project_root(generated) == case
     assert len(set(ids)) == 2
     assert parent_state.read_bytes() == original
 

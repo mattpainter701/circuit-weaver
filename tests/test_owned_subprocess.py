@@ -26,6 +26,7 @@ def test_capture_uses_closed_stdin_and_preserves_output_and_exit(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows virtualenv launcher and Job Object regression")
+@pytest.mark.skip_category("platform")
 def test_timeout_kills_real_grandchild_and_leaves_unrelated_process_alive(tmp_path):
     pid_file = tmp_path / "grandchild.pid"
     grandchild = tmp_path / "grandchild.py"
@@ -78,6 +79,7 @@ def test_launch_error_is_reported_without_running_a_child(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows child must stay suspended until assigned")
+@pytest.mark.skip_category("platform")
 def test_assignment_failure_reaps_suspended_child_without_starting_it(tmp_path, monkeypatch):
     marker = tmp_path / "must-not-run"
 

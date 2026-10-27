@@ -16,6 +16,7 @@ def _clean_kicad_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr("circuit_weaver.kicad_lib.platform.system", lambda: "UnlistedOS")
     monkeypatch.setattr("circuit_weaver.footprint_lib.platform.system", lambda: "UnlistedOS")
     monkeypatch.setenv("APPDATA", str(tmp_path / "roaming"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "roaming"))
     for name in (
         "KICAD_SYMBOL_DIR",
         "KICAD10_SYMBOL_DIR",

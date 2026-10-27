@@ -21,6 +21,7 @@ def test_ad9528_uses_exact_cp72_6_stock_package_binding() -> None:
     assert "73" in data["pin_gnd"]
 
 
+@pytest.mark.skip_category("optional-tool")
 def test_ad9528_binding_resolves_to_72_leads_and_5p3mm_ep() -> None:
     library = KiCadFootprintLibrary()
     path = library.resolve(AD9528_FOOTPRINT)

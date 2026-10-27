@@ -318,6 +318,7 @@ class TestExtractMetrics:
         assert 150_000 < measured < 160_000
         assert measured == pytest.approx(159_154.943, abs=250)
 
+    @pytest.mark.skip_category("optional-tool")
     def test_ngspice_1m_1pf_cutoff_negative_control(self, tmp_path):
         if _find_ngspice() is None:
             pytest.skip("ngspice is required for the analog cutoff integration check")
