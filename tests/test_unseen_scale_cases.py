@@ -2,20 +2,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import yaml
-
-from benchmarks.unseen_scale.build_stress_fixtures import _relay_paths, build_serial_relay_output_card, build_suite
+from benchmarks.unseen_scale.build_stress_fixtures import (
+    _relay_paths,
+    build_serial_relay_output_card,
+    build_specs,
+    build_suite,
+)
 from circuit_weaver.assembly_manifest import build_assembly_manifest
 from circuit_weaver.design_loader import compile_design_ir
 
-ROOT = Path(__file__).resolve().parents[1]
-SUITE_PATH = ROOT / "benchmarks" / "unseen_scale" / "cases.yaml"
-
 
 def _load_suite():
-    suite = yaml.safe_load(SUITE_PATH.read_text(encoding="utf-8"))
+    suite = build_suite()
+    generated = build_specs()
     return suite, {
-        case["id"]: yaml.safe_load((SUITE_PATH.parent / case["spec"]).read_text(encoding="utf-8"))
+        case["id"]: generated[Path(case["spec"]).name]
         for case in suite["cases"]
     }
 

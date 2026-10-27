@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import argparse
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -510,26 +513,52 @@ def build_suite() -> dict[str, Any]:
                 "minimum_physical_parts": 350,
                 "required_sections": ["power", "digital", "analog", "connectors"],
                 "board_mm": [300, 220],
-                "required_paths": _analog_paths(
-                    yaml.safe_load(
-                        (ROOT / "cases" / "multichannel_analog_setpoint_card.yaml").read_text(encoding="utf-8")
-                    )
-                ),
+                "required_paths": _analog_paths(build_multichannel_analog_setpoint_card()),
             },
         ],
     }
 
 
-def materialize() -> None:
-    cases = {
+def build_specs() -> dict[str, dict[str, Any]]:
+    return {
+        "distributed_facility_gateway.yaml": yaml.safe_load(
+            (ROOT / "cases/distributed_facility_gateway.yaml").read_text(encoding="utf-8")
+        ),
         "serial_relay_output_card.yaml": build_serial_relay_output_card(),
         "multichannel_analog_setpoint_card.yaml": build_multichannel_analog_setpoint_card(),
     }
-    (ROOT / "cases").mkdir(parents=True, exist_ok=True)
-    for name, spec in cases.items():
-        (ROOT / "cases" / name).write_text(yaml.safe_dump(spec, sort_keys=False), encoding="utf-8")
-    (ROOT / "cases.yaml").write_text(yaml.safe_dump(build_suite(), sort_keys=False), encoding="utf-8")
+
+
+def verify_corpus(output: Path) -> None:
+    inventory = json.loads((ROOT / "fixture_inventory.json").read_text(encoding="utf-8"))["files"]
+    actual = {path.relative_to(output).as_posix() for path in output.rglob("*") if path.is_file()}
+    if actual != set(inventory):
+        raise ValueError("Generated fixture coverage differs from the frozen inventory")
+    for relative, digest in inventory.items():
+        data = yaml.safe_load((output / relative).read_text(encoding="utf-8"))
+        canonical = json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        if hashlib.sha256(canonical).hexdigest() != digest:
+            raise ValueError(f"Generated fixture differs from frozen input: {relative}")
+    index = yaml.safe_load((output / "cases.yaml").read_text(encoding="utf-8"))
+    for case in index["cases"]:
+        for key in ("required_paths", "required_channels"):
+            if key in case:
+                case[key[:-1] + "_count"] = len(case.pop(key))
+    if index != yaml.safe_load((ROOT / "cases.yaml").read_text(encoding="utf-8")):
+        raise ValueError("Generated suite metadata differs from its reviewed index")
+
+
+def materialize(output: Path) -> None:
+    if output.exists() and any(output.iterdir()):
+        raise FileExistsError(f"Generated fixture directory must be empty: {output}")
+    (output / "cases").mkdir(parents=True, exist_ok=True)
+    for name, spec in build_specs().items():
+        (output / "cases" / name).write_text(yaml.safe_dump(spec, sort_keys=False), encoding="utf-8")
+    (output / "cases.yaml").write_text(yaml.safe_dump(build_suite(), sort_keys=False), encoding="utf-8")
+    verify_corpus(output)
 
 
 if __name__ == "__main__":
-    materialize()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, required=True, help="new or empty generated-input directory")
+    materialize(parser.parse_args().output.resolve())

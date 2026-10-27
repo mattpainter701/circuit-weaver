@@ -109,16 +109,26 @@ def source_state() -> dict[str, str]:
 
 def _materialize_suite(suite_path: Path, output: Path) -> Path:
     """Expand frozen fixtures beside run evidence instead of in the checkout."""
-    if suite_path.resolve() != (REPO / "benchmarks/diverse_systems/cases.yaml").resolve():
+    builders = {
+        "unseen_scale": ("build_stress_fixtures.py", "materialize"),
+        "diverse_systems": ("build_diverse_trials.py", "build_corpus"),
+    }
+    suite_kind = next((name for name in builders
+                       if suite_path.resolve() == (REPO / "benchmarks" / name / "cases.yaml").resolve()), None)
+    if suite_kind is None:
         return suite_path
-    builder = REPO / "benchmarks/diverse_systems/build_diverse_trials.py"
-    module_spec = importlib.util.spec_from_file_location("cw_diverse_fixture_builder", builder)
+    builder_file, function = builders[suite_kind]
+    builder = REPO / "benchmarks" / suite_kind / builder_file
+    module_spec = importlib.util.spec_from_file_location(f"cw_{suite_kind}_fixture_builder", builder)
     if module_spec is None or module_spec.loader is None:
         raise RuntimeError("Cannot load the retained diverse fixture generator")
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
     target = output / "generated-fixtures"
-    module.build_corpus(REPO, target)
+    if function == "materialize":
+        module.materialize(target)
+    else:
+        module.build_corpus(REPO, target)
     return target / "cases.yaml"
 
 

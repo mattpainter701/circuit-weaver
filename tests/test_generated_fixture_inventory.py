@@ -38,3 +38,34 @@ def test_regeneration_matches_frozen_pretrim_inputs_and_runner_loads_every_case(
     contract.unlink()
     with pytest.raises(ValueError, match="coverage differs"):
         verify_corpus(generated.parent)
+
+
+def test_unseen_regeneration_retains_exact_dac_paths_and_rejects_lost_return(tmp_path):
+    import yaml
+
+    from benchmarks.unseen_scale.build_stress_fixtures import materialize
+    from benchmarks.unseen_scale.build_stress_fixtures import verify_corpus as verify_unseen
+
+    spec = importlib.util.spec_from_file_location(
+        "unseen_generated_suite_runner", ROOT / "benchmarks/general_scale/run_general_scale.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    generated = module._materialize_suite(ROOT / "benchmarks/unseen_scale/cases.yaml", tmp_path)
+    _, cases = module._load_suite(generated)
+    assert len(cases) == 3
+    dac = next(case for case in cases if case["id"] == "multichannel_analog_setpoint_card")
+    assert len(dac["required_paths"]) == 110
+    outputs = [path for path in dac["required_paths"] if path["id"].startswith("setpoint_output_")]
+    assert len(outputs) == 72
+    assert sum(len(path["segments"]) for path in outputs) == 144
+    assert sum(len(path["return_assertions"]) for path in outputs) == 72
+    with pytest.raises(FileExistsError):
+        materialize(generated.parent)
+    data = yaml.safe_load(generated.read_text())
+    case = next(case for case in data["cases"] if case["id"] == dac["id"])
+    path = next(path for path in case["required_paths"] if path["id"].startswith("setpoint_output_"))
+    path["return_assertions"] = []
+    generated.write_text(yaml.safe_dump(data))
+    with pytest.raises(ValueError, match="differs from frozen input"):
+        verify_unseen(generated.parent)

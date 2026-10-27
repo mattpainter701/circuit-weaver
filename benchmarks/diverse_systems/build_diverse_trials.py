@@ -55,7 +55,8 @@ def _load_scale_fixtures(repo_root: Path):
 
 
 def _suite_case(repo_root: Path, suite_rel: str, case_id: str) -> dict[str, Any]:
-    suite = _read_yaml(repo_root / suite_rel)
+    suite = (_load_scale_fixtures(repo_root).build_suite()
+             if suite_rel == "benchmarks/unseen_scale/cases.yaml" else _read_yaml(repo_root / suite_rel))
     for entry in suite.get("cases", []):
         if entry.get("id") == case_id:
             return entry
@@ -470,8 +471,13 @@ def build_comparison(
     title: str,
     assumptions: list[str],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    spec = _read_yaml(repo_root / source_spec)
-    entry = _suite_case(repo_root, source_suite, source_case)
+    if source_suite == "benchmarks/unseen_scale/cases.yaml":
+        builders = _load_scale_fixtures(repo_root)
+        spec = builders.build_specs()[Path(source_spec).name]
+        entry = next(case for case in builders.build_suite()["cases"] if case["id"] == source_case)
+    else:
+        spec = _read_yaml(repo_root / source_spec)
+        entry = _suite_case(repo_root, source_suite, source_case)
     spec["project"] = f"Diverse_{case_id}"
     spec["description"] = f"Comparison fixture reuse: {title}"
     contract = {key: entry[key] for key in ("required_channels", "required_paths") if key in entry}

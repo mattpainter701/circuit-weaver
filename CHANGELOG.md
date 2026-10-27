@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Regenerate the existing 187/268/438-part scale inputs and full route contracts
+  into evidence, checking frozen hashes instead of tracking expanded copies.
+
 - Reap timed-out workflow CLI descendants, including Windows virtualenv
   launchers and their native routers, instead of leaving them running.
 
