@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -556,18 +555,19 @@ def test_workflow_lock_rejects_a_second_owner(tmp_path: Path):
     assert result["error"]["code"] == "workflow_busy"
 
 
-def test_native_cli_child_does_not_inherit_transport_stdin(tmp_path: Path, monkeypatch):
+def test_native_cli_child_uses_owned_capture(tmp_path: Path, monkeypatch):
     calls = []
 
     def fake_run(command, **kwargs):
         calls.append((command, kwargs))
         return SimpleNamespace(returncode=0, stdout='{"status":"ok"}', stderr="")
 
-    monkeypatch.setattr(workflow.subprocess, "run", fake_run)
+    monkeypatch.setattr(workflow, "run_captured", fake_run)
     result = workflow._cli("build", ["build"], tmp_path, 30)
 
     assert result == {"status": "ok"}
-    assert calls[0][1]["stdin"] is subprocess.DEVNULL
+    assert calls[0][1]["env"][workflow._CHILD_ENV] == "1"
+    assert calls[0][1]["timeout"] == 30
 
 
 def test_failed_workflow_checkpoint_preserves_structured_native_diagnostics(tmp_path: Path, monkeypatch):
@@ -596,8 +596,8 @@ def test_nonzero_native_cli_keeps_structured_error_ahead_of_large_inventory(tmp_
         }
     )
     monkeypatch.setattr(
-        workflow.subprocess,
-        "run",
+        workflow,
+        "run_captured",
         lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stdout=payload, stderr=""),
     )
 

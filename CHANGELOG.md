@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Reap timed-out workflow CLI descendants, including Windows virtualenv
+  launchers and their native routers, instead of leaving them running.
+
 - Allow bounded native import and DRC time after a full 30-minute router attempt,
   so the workflow parent does not expire at the router's own deadline.
 

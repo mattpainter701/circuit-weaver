@@ -89,8 +89,8 @@ def test_fresh_run_output_conflict_preserves_prior_checkpoints(tmp_path: Path) -
 
 def test_zero_exit_non_json_native_output_is_rejected(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        workflow.subprocess,
-        "run",
+        workflow,
+        "run_captured",
         lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="done", stderr=""),
     )
 

@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import dispatcher
+from ._owned_subprocess import run_captured
 from .project_state import (
     AmbiguousProjectStateError,
     ProjectState,
@@ -716,15 +717,11 @@ def _cli(stage: str, args: list[str], cwd: Path, timeout: int) -> dict[str, Any]
     env = os.environ.copy()
     env[_CHILD_ENV] = "1"
     try:
-        proc = subprocess.run(
+        proc = run_captured(
             [sys.executable, "-m", "circuit_weaver", *args],
             cwd=cwd,
             env=env,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
             timeout=timeout,
-            check=False,
         )
     except subprocess.TimeoutExpired as exc:
         raise WorkflowError("stage_timeout", f"{stage} exceeded its {timeout}s timeout") from exc

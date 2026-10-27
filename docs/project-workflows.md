@@ -146,6 +146,12 @@ The route-stage parent reserves up to 600 additional seconds for native session
 import, zone refill and DRC, with a total cap of 2,400 seconds. This allowance
 does not extend the router's budget or relax any acceptance gate.
 
+A timed-out CLI also terminates its native descendants. Windows workflows
+assign a suspended child to a private Job Object before it can launch tools;
+POSIX workflows use a separate process session for timeout cleanup. Failure to
+establish Windows ownership stops the child before execution. Unrelated
+processes are outside this cleanup scope.
+
 `clearance_mm` and `minimum_drill_mm` are explicit prototype assumptions for
 native board construction. They do not weaken authored project rules or bypass
 physical DRC gates; use them only when those assumptions are appropriate for

@@ -82,3 +82,8 @@ placement conflict unclassified; this is not proof of a specific clearance or
 label defect, nor a routing failure. The next native attempt should use the
 final installed candidate and retain its full rejection payload, resolve the
 actual placement issue, then continue through routing and all final CAD gates.
+
+The [October 27 circuit continuation](suite-circuit-completion.md) supersedes
+that unclassified diagnosis with retained native label conflicts and optimizer
+geometry failures, trims generated fixture copies without dropping coverage,
+and continues the existing DAC route.
