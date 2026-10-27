@@ -7,7 +7,18 @@ This suite contains three new architecture cases and two explicitly reused compa
 - `relay_768` contains 768 channel-specific relay output paths through 96 cascaded 74HC595 devices and 110 ULN2003A arrays. SWD J9000 is distinct from output J162. Clock fanout, aggregate coil power, thermal behavior, field isolation, and safety are unqualified.
 - `ot_mixed_io_comparison` and `dual_dac_72_comparison` reuse existing connected fixtures as comparisons; they are not new architectures.
 
-Run `python benchmarks/diverse_systems/build_diverse_trials.py --repo-root . --output benchmarks/diverse_systems` to recreate the YAML and JSON artifacts. The generator imports the existing pure stress fixture builders only for relay fixture construction; it does not compile, build, invoke KiCad, place, route, render, or simulate designs.
+Expanded YAML/JSON copies are generated into run evidence instead of committed.
+`fixture_inventory.json` freezes the canonical parsed hashes of all 15 original
+specifications, architecture records and connectivity contracts. Regeneration
+must match every hash and retain all five cases before a run can proceed.
+The small `cases.yaml` index remains reviewable; its SDR path count is corrected
+from the stale 61 to the actual 74 paths already present in the retained contract.
+
+Run `python benchmarks/diverse_systems/build_diverse_trials.py --repo-root . --output <new-directory>`
+to recreate and verify the expanded artifacts. The general-scale runner accepts
+the existing `--suite benchmarks/diverse_systems/cases.yaml` argument and expands
+the corpus automatically under its fresh evidence directory. Existing output
+is refused. Original files remain recoverable from Git history.
 
 ## Portable SPICE regression suite
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -104,6 +105,21 @@ def source_state() -> dict[str, str]:
         "workflow_sha256": workflow_hash,
         "benchmark_tree_sha256": _benchmark_tree_sha256(),
     }
+
+
+def _materialize_suite(suite_path: Path, output: Path) -> Path:
+    """Expand frozen fixtures beside run evidence instead of in the checkout."""
+    if suite_path.resolve() != (REPO / "benchmarks/diverse_systems/cases.yaml").resolve():
+        return suite_path
+    builder = REPO / "benchmarks/diverse_systems/build_diverse_trials.py"
+    module_spec = importlib.util.spec_from_file_location("cw_diverse_fixture_builder", builder)
+    if module_spec is None or module_spec.loader is None:
+        raise RuntimeError("Cannot load the retained diverse fixture generator")
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    target = output / "generated-fixtures"
+    module.build_corpus(REPO, target)
+    return target / "cases.yaml"
 
 
 def _load_suite(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -536,6 +552,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"refusing to overwrite evidence directory: {output}")
     output.mkdir(parents=True)
     suite_path = SAMPLE_SUITE if str(args.suite).casefold() == "samples" else args.suite.resolve()
+    suite_path = _materialize_suite(suite_path, output)
     suite, cases = _load_suite(suite_path)
     suite_floor = suite["minimum_physical_parts"]
     if args.minimum_physical_parts is None:

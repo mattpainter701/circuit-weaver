@@ -35,7 +35,7 @@ cases:
   board_mm:
   - 260
   - 190
-  required_path_count: 61
+  required_path_count: 74
   required_channel_count: 8
   comparison_fixture_reuse: false
 - id: ot_mixed_io_comparison

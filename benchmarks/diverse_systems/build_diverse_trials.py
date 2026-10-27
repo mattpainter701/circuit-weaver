@@ -7,6 +7,7 @@ KiCad, starts native layout, or runs simulation.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import sys
@@ -508,6 +509,8 @@ def write_case(output_root: Path, case_id: str, spec: dict[str, Any], architectu
 
 
 def build_corpus(repo_root: Path, output_root: Path) -> None:
+    if output_root.exists() and any(output_root.iterdir()):
+        raise FileExistsError("Generated fixture output must be new or empty")
     generated = [
         ("relay_768", build_relay_768(repo_root)),
         ("ble_sensor_8", build_ble_sensor(repo_root)),
@@ -564,12 +567,33 @@ def build_corpus(repo_root: Path, output_root: Path) -> None:
         "cases": suite_cases,
     }
     _write_yaml(output_root / "cases.yaml", manifest)
+    verify_corpus(output_root)
+
+
+def verify_corpus(output_root: Path) -> None:
+    """Require the frozen pre-trim circuit/contract data, not self-updated expectations."""
+    inventory = json.loads((OUTPUT_ROOT / "fixture_inventory.json").read_text(encoding="utf-8"))
+    expected = inventory["files"]
+    actual = {path.relative_to(output_root).as_posix() for folder in ("cases", "contracts", "architecture")
+              for path in (output_root / folder).glob("*") if path.is_file()}
+    if actual != set(expected):
+        raise ValueError("Generated fixture coverage differs from the frozen inventory")
+    for relative, digest in expected.items():
+        path = output_root / relative
+        value = _read_yaml(path) if path.suffix == ".yaml" else json.loads(path.read_text(encoding="utf-8"))
+        canonical = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        if hashlib.sha256(canonical).hexdigest() != digest:
+            raise ValueError(f"Generated fixture differs from frozen input: {relative}")
+    suite = _read_yaml(output_root / "cases.yaml")
+    baseline = _read_yaml(OUTPUT_ROOT / "cases.yaml")
+    if suite != baseline:
+        raise ValueError("Generated suite metadata differs from its reviewed index")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=DEFAULT_REPO_ROOT)
-    parser.add_argument("--output", type=Path, default=OUTPUT_ROOT)
+    parser.add_argument("--output", type=Path, required=True, help="new or empty generated-input directory")
     args = parser.parse_args()
     build_corpus(args.repo_root.resolve(), args.output.resolve())
 

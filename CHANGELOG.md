@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Generate large diverse-circuit benchmark inputs in run evidence and verify them against a frozen pre-trim inventory, retaining all cases and connectivity contracts while removing expanded copies from the repository.
 - Retain structured native failure diagnostics in failed shared-workflow checkpoints while keeping the public error message concise, so rejected placement and DRC candidates can be investigated after a run.
 - Run authored current operating cases through shared validation, CLI and MCP, resolving exact value/unit/subject claims from the evidence ledger. Supported overloads block validation; missing, stale, mismatched or superseded evidence remains unverified. Retain budget results in workflow validation checkpoints.
 - Require complete named workflow stages and explicit CAD/qualification gates in four-layer acceptance reports; preserve gate failures and add a strict CAD exit status for CI. Run native CI in stages and cancel superseded design validation to avoid redundant resource use.
