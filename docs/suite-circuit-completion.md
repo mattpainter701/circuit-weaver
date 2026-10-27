@@ -213,3 +213,61 @@ expected archive hash before native execution; its failed record is retained,
 and a new helper pins the measured unchanged archive. Acceptance gates were not
 relaxed. This establishes the explicit recipe on this frozen DAC, not universal
 default-router completion or electrical/hardware qualification.
+
+### Native recovery and session handoff
+
+The 96-part relay exposes a separate transport failure. Eight stock-router
+passes leave 12 opens, and automatic native recovery closes all 12 with clean
+KiCad DRC. The earlier handoff then reroutes that completed board while trying
+to serialize it, producing a different Freerouting connectivity/clearance result.
+The rejected attempt remains under `relay-fresh02/`; no final board is published.
+
+Implementation `4d6835c3a9d0e20121e49bfbbe6a780b9fb6d227` instead exports the
+native DSN unchanged and uses stock Freerouting with autorouting, fanout and
+optimization disabled. It requires a verified 2.5+ router, strict full-net and
+design correlation, one shared deadline and publication without overwriting an
+existing file. Export statistics remain explicitly unavailable. The original
+board still receives the complete session through the same fresh native DRC gate.
+
+The fresh installed relay workflow now completes in 86.662 seconds, including
+all 12 automatic repairs, the original-board import, authored GND-plane refill
+and assembled preview. Independent acceptance passes on 96 footprints, 427 pads,
+all 48 output paths (96 signal segments), unchanged placement and labels, saved
+connected In1.Cu GND fill, zero native DRC blockers and 96/96 models. The frozen
+workflow plan contains two explicit route contracts; the separate frozen native
+verifier checks the full 48-path circuit. Neither coverage set is substituted
+for the other. The approved 90 × 90 mm scope remains unchanged.
+
+- Workflow: `relay-fresh03/proof.json`; independent proof:
+  `relay-final-validation05/proof.json` in the same routing-automation evidence root.
+- Board SHA-256: `03b242017ae3ff27c05037da0ebbb6ba33292e30338abd703cea608f2fb703a0`.
+- SVG SHA-256: `ea3373fd152438cadba57fd41b01becba89c97879bcad320565a5fe16612c43d`.
+- Exact installed wheel: `4ccebcf5a09dee18abc72778276901059a757bd6d84f850e246e857a1e32f1ad`;
+  all 232 package files verified against archive, wheel, sdist and install.
+- Final focused regression: 228 passed; Ruff and whitespace checks pass.
+- Workflow / independent-check peak owned memory: 582,668,288 / 213,573,632 bytes;
+  all owned processes are reaped at terminal state.
+
+The earlier one-pass relay trial remains partial at three opens. Native repair
+adds copper without ripping up congestion; the explicit global pass budget
+therefore matters. This provides measured full-workflow evidence for the approved
+relay revision, while the original outline and electrical/hardware qualification
+remain open as recorded above.
+
+### Repeated DAC run on the transport fix
+
+The exact installed `4d6835c` implementation also repeats the DAC recipe from
+the frozen zero-copper placement. It completes routing and preview in 287.015
+seconds without native repairs, then independently passes the unchanged
+438-footprint / 1,220-pad, 110-path / 144-leg / 72-return, two-plane, DRC and
+assembly gates. Thus both global completion and automatic recovery/handoff
+have real installed workflow evidence; neither result substitutes for the other.
+
+The repeat is retained in `dac-fresh03/proof.json` and
+`final-validation04/proof.json`, with the side-by-side preview at
+`report-final.html`. Board SHA-256:
+`fae11b54b47495648348d4a3262a2825d763e09f195e20c1986c61b04439669b`.
+SVG SHA-256: `a1c9f186f488c201f1e34b4e0a221470caf292de6151c160e1823f51e3602d3f`.
+Workflow / independent-check peaks are 632,590,336 / 293,748,736 bytes, with a
+minimum observed host reserve of 3.87 GiB and zero remaining owned processes.
+The first passing run and all rejected attempts remain separate evidence.
