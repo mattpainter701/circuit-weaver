@@ -13,7 +13,7 @@ Create a pending trusted publisher at
 
 - PyPI project: `circuit-weaver`
 - GitHub owner: `mattpainter701`
-- Repository: `kicad_automations`
+- Repository: `circuit-weaver`
 - Workflow: `release.yml`
 - Environment: `pypi`
 

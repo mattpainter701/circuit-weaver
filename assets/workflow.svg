@@ -309,5 +309,5 @@
   <text x="829" y="994" text-anchor="middle" fill="#6e7681" font-size="9" font-family="system-ui,sans-serif">OpenSCAD → STL/3MF</text>
 
   <!-- Footer label -->
-  <text x="480" y="1021" text-anchor="middle" fill="#30363d" font-size="9" font-family="system-ui,sans-serif">circuit-weaver v0.30.2 · github.com/mattpainter701/kicad_automations</text>
+  <text x="480" y="1021" text-anchor="middle" fill="#30363d" font-size="9" font-family="system-ui,sans-serif">circuit-weaver v0.30.2 · github.com/mattpainter701/circuit-weaver</text>
 </svg>

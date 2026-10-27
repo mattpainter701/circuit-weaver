@@ -3,8 +3,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mattpainter701/kicad_automations/actions/workflows/ci.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/mattpainter701/kicad_automations/ci.yml?branch=main&label=CI&style=flat-square" alt="CI">
+  <a href="https://github.com/mattpainter701/circuit-weaver/actions/workflows/ci.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/mattpainter701/circuit-weaver/ci.yml?branch=main&label=CI&style=flat-square" alt="CI">
   </a>
   <a href="https://pypi.org/project/circuit-weaver/">
     <img src="https://img.shields.io/pypi/v/circuit-weaver?style=flat-square&label=PyPI&color=0ea5e9" alt="PyPI">
@@ -676,7 +676,7 @@ Circuit Weaver `v0.31.0` collected the Sprint 53-54 schematic layout quality wor
 ## Repo Layout
 
 ```
-kicad_automations/
+circuit-weaver/
 ├── src/circuit_weaver/      # Core engine
 │   ├── dispatcher.py           # Public API: validate, patch, generate, diff, pcb-feedback
 │   ├── design_ir.py            # Canonical design intermediate representation (DesignIR)

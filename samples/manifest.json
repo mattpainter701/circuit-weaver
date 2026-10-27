@@ -7,8 +7,8 @@
       "category": "IoT",
       "ics": 5,
       "description": "WiFi environmental sensor — ESP32 + BME280 with buck + LDO dual-rail power. USB-C input, generated from a 40-line YAML spec.",
-      "svg": "https://raw.githubusercontent.com/mattpainter701/kicad_automations/main/samples/iot_sensor_node/svg/IoT_Sensor_Node.svg",
-      "url": "https://github.com/mattpainter701/kicad_automations/tree/main/samples/iot_sensor_node"
+      "svg": "https://raw.githubusercontent.com/mattpainter701/circuit-weaver/main/samples/iot_sensor_node/svg/IoT_Sensor_Node.svg",
+      "url": "https://github.com/mattpainter701/circuit-weaver/tree/main/samples/iot_sensor_node"
     },
     {
       "id": "battery_iot_sensor",
@@ -16,8 +16,8 @@
       "category": "IoT",
       "ics": 5,
       "description": "Battery-powered WiFi sensor with USB-C charging, LiPo fuel gauge, and sleep-optimised power tree.",
-      "svg": "https://raw.githubusercontent.com/mattpainter701/kicad_automations/main/samples/battery_iot_sensor/svg/Battery_IoT_Sensor.svg",
-      "url": "https://github.com/mattpainter701/kicad_automations/tree/main/samples/battery_iot_sensor"
+      "svg": "https://raw.githubusercontent.com/mattpainter701/circuit-weaver/main/samples/battery_iot_sensor/svg/Battery_IoT_Sensor.svg",
+      "url": "https://github.com/mattpainter701/circuit-weaver/tree/main/samples/battery_iot_sensor"
     },
     {
       "id": "usb_uart_bridge",
@@ -25,8 +25,8 @@
       "category": "USB",
       "ics": 5,
       "description": "USB-to-UART serial bridge with integrated ESD protection diodes and LDO regulation.",
-      "svg": "https://raw.githubusercontent.com/mattpainter701/kicad_automations/main/samples/usb_uart_bridge/svg/USB_UART_Bridge.svg",
-      "url": "https://github.com/mattpainter701/kicad_automations/tree/main/samples/usb_uart_bridge"
+      "svg": "https://raw.githubusercontent.com/mattpainter701/circuit-weaver/main/samples/usb_uart_bridge/svg/USB_UART_Bridge.svg",
+      "url": "https://github.com/mattpainter701/circuit-weaver/tree/main/samples/usb_uart_bridge"
     },
     {
       "id": "motor_controller",
@@ -34,8 +34,8 @@
       "category": "Motor",
       "ics": 2,
       "description": "STM32-based motor controller with 12V input buck converter delivering 3.3V to the MCU.",
-      "svg": "https://raw.githubusercontent.com/mattpainter701/kicad_automations/main/samples/motor_controller/svg/Motor_Controller.svg",
-      "url": "https://github.com/mattpainter701/kicad_automations/tree/main/samples/motor_controller"
+      "svg": "https://raw.githubusercontent.com/mattpainter701/circuit-weaver/main/samples/motor_controller/svg/Motor_Controller.svg",
+      "url": "https://github.com/mattpainter701/circuit-weaver/tree/main/samples/motor_controller"
     },
     {
       "id": "zigbee_humidistat",
@@ -43,8 +43,8 @@
       "category": "RF",
       "ics": 3,
       "description": "Zigbee/BT humidistat with SHT40 sensor, CC2652R radio module, and LiPo-backed power.",
-      "svg": "https://raw.githubusercontent.com/mattpainter701/kicad_automations/main/samples/zigbee_humidistat/svg/Zigbee_Humidistat.svg",
-      "url": "https://github.com/mattpainter701/kicad_automations/tree/main/samples/zigbee_humidistat"
+      "svg": "https://raw.githubusercontent.com/mattpainter701/circuit-weaver/main/samples/zigbee_humidistat/svg/Zigbee_Humidistat.svg",
+      "url": "https://github.com/mattpainter701/circuit-weaver/tree/main/samples/zigbee_humidistat"
     },
     {
       "id": "fpga_power_carrier",
@@ -52,8 +52,8 @@
       "category": "FPGA",
       "ics": 4,
       "description": "Multi-rail power carrier with three buck converters and one LDO sized for FPGA core and I/O rails.",
-      "svg": "https://raw.githubusercontent.com/mattpainter701/kicad_automations/main/samples/fpga_power_carrier/svg/FPGA_Power_Carrier.svg",
-      "url": "https://github.com/mattpainter701/kicad_automations/tree/main/samples/fpga_power_carrier"
+      "svg": "https://raw.githubusercontent.com/mattpainter701/circuit-weaver/main/samples/fpga_power_carrier/svg/FPGA_Power_Carrier.svg",
+      "url": "https://github.com/mattpainter701/circuit-weaver/tree/main/samples/fpga_power_carrier"
     },
     {
       "id": "led_power_indicator",
@@ -61,8 +61,8 @@
       "category": "Power",
       "ics": 2,
       "description": "Simple USB-C powered board with 3.3V LDO regulation and a power-good indicator LED.",
-      "svg": "https://raw.githubusercontent.com/mattpainter701/kicad_automations/main/samples/led_power_indicator/svg/LED_Power_Indicator.svg",
-      "url": "https://github.com/mattpainter701/kicad_automations/tree/main/samples/led_power_indicator"
+      "svg": "https://raw.githubusercontent.com/mattpainter701/circuit-weaver/main/samples/led_power_indicator/svg/LED_Power_Indicator.svg",
+      "url": "https://github.com/mattpainter701/circuit-weaver/tree/main/samples/led_power_indicator"
     },
     {
       "id": "oled_display_module",
@@ -70,8 +70,8 @@
       "category": "Display",
       "ics": 4,
       "description": "5V USB-C powered SSD1306 OLED module with LDO regulation and I2C level-shifting.",
-      "svg": "https://raw.githubusercontent.com/mattpainter701/kicad_automations/main/samples/oled_display_module/svg/OLED_Display_Module.svg",
-      "url": "https://github.com/mattpainter701/kicad_automations/tree/main/samples/oled_display_module"
+      "svg": "https://raw.githubusercontent.com/mattpainter701/circuit-weaver/main/samples/oled_display_module/svg/OLED_Display_Module.svg",
+      "url": "https://github.com/mattpainter701/circuit-weaver/tree/main/samples/oled_display_module"
     },
     {
       "id": "usb_regulated_supply",
@@ -79,8 +79,8 @@
       "category": "Power",
       "ics": 3,
       "description": "Dual-rail supply — 5V-to-3.3V buck cascaded into a 3.3V-to-1.8V LDO for mixed-voltage designs.",
-      "svg": "https://raw.githubusercontent.com/mattpainter701/kicad_automations/main/samples/usb_regulated_supply/svg/USB_Regulated_Supply.svg",
-      "url": "https://github.com/mattpainter701/kicad_automations/tree/main/samples/usb_regulated_supply"
+      "svg": "https://raw.githubusercontent.com/mattpainter701/circuit-weaver/main/samples/usb_regulated_supply/svg/USB_Regulated_Supply.svg",
+      "url": "https://github.com/mattpainter701/circuit-weaver/tree/main/samples/usb_regulated_supply"
     }
   ]
 }

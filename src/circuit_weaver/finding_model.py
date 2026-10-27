@@ -756,7 +756,7 @@ def findings_sarif(findings: Iterable[UnifiedFinding]) -> dict[str, object]:
                 "tool": {
                     "driver": {
                         "name": "Circuit Weaver",
-                        "informationUri": "https://github.com/mattpainter701/kicad_automations",
+                        "informationUri": "https://github.com/mattpainter701/circuit-weaver",
                         "rules": rules,
                     }
                 },
