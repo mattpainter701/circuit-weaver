@@ -352,7 +352,7 @@ def test_main_aggregates_canonical_pass_with_verbose_workflow_status(tmp_path: P
         "benchmark_tree_sha256": "benchmark-hash", "package_tree_sha256": "package-hash",
     }
     monkeypatch.setattr(HARNESS, "source_state", lambda: dict(source))
-    monkeypatch.setattr(HARNESS, "_load_suite", lambda _path: ({"minimum_physical_parts": 1}, [case]))
+    monkeypatch.setattr(HARNESS, "_load_suite", lambda _path, **kwargs: ({"minimum_physical_parts": 1}, [case]))
     monkeypatch.setattr(HARNESS, "_stage_inputs", lambda *_args: {"suite_path": "staged-suite.yaml"})
     monkeypatch.setattr(HARNESS, "_source_probe", lambda *_args: {"package_source_sha256": "package-hash"})
     monkeypatch.setattr(HARNESS, "_run_case", lambda *_args: {

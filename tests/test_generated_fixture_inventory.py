@@ -18,7 +18,7 @@ def test_regeneration_matches_frozen_pretrim_inputs_and_runner_loads_every_case(
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     generated = module._materialize_suite(ROOT / "benchmarks/diverse_systems/cases.yaml", tmp_path)
-    suite, cases = module._load_suite(generated)
+    suite, cases = module._load_suite(generated, generated_root=generated.parent)
     assert len(cases) == 5
     assert {case["id"] for case in cases} == {
         "relay_768", "ble_sensor_8", "sdr_clock_carrier", "ot_mixed_io_comparison", "dual_dac_72_comparison",
@@ -52,7 +52,7 @@ def test_unseen_regeneration_retains_exact_dac_paths_and_rejects_lost_return(tmp
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     generated = module._materialize_suite(ROOT / "benchmarks/unseen_scale/cases.yaml", tmp_path)
-    _, cases = module._load_suite(generated)
+    _, cases = module._load_suite(generated, generated_root=generated.parent)
     assert len(cases) == 3
     dac = next(case for case in cases if case["id"] == "multichannel_analog_setpoint_card")
     assert len(dac["required_paths"]) == 110
@@ -60,6 +60,15 @@ def test_unseen_regeneration_retains_exact_dac_paths_and_rejects_lost_return(tmp
     assert len(outputs) == 72
     assert sum(len(path["segments"]) for path in outputs) == 144
     assert sum(len(path["return_assertions"]) for path in outputs) == 72
+    original_suite = generated.read_text()
+    data = yaml.safe_load(original_suite)
+    outside = generated.parent.parent / "outside.yaml"
+    outside.write_text((generated.parent / data["cases"][0]["spec"]).read_text())
+    data["cases"][0]["spec"] = "../outside.yaml"
+    generated.write_text(yaml.safe_dump(data))
+    with pytest.raises(ValueError, match="out-of-input-directory"):
+        module._load_suite(generated, generated_root=generated.parent)
+    generated.write_text(original_suite)
     with pytest.raises(FileExistsError):
         materialize(generated.parent)
     data = yaml.safe_load(generated.read_text())

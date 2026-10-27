@@ -132,7 +132,10 @@ def _materialize_suite(suite_path: Path, output: Path) -> Path:
     return target / "cases.yaml"
 
 
-def _load_suite(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _load_suite(path: Path, *, generated_root: Path | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    input_root = generated_root.resolve() if generated_root is not None else REPO.resolve()
+    if generated_root is not None and not path.resolve().is_relative_to(input_root):
+        raise ValueError("suite is outside its allowed input directory")
     suite = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(suite, dict) or suite.get("schema_version") != 1:
         raise ValueError("suite must be a schema_version 1 object")
@@ -157,8 +160,8 @@ def _load_suite(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         if isinstance(case_minimum, bool) or not isinstance(case_minimum, int) or case_minimum < minimum:
             raise ValueError(f"case {case['id']} minimum_physical_parts must be an integer of at least {minimum}")
         spec_path = (path.parent / case["spec"]).resolve()
-        if not spec_path.is_file() or not spec_path.is_relative_to(REPO.resolve()):
-            raise ValueError(f"case {case['id']} has a missing or out-of-repository spec")
+        if not spec_path.is_file() or not spec_path.is_relative_to(input_root):
+            raise ValueError(f"case {case['id']} has a missing or out-of-input-directory spec")
         spec = yaml.safe_load(spec_path.read_text(encoding="utf-8"))
         if not isinstance(spec, dict):
             raise ValueError(f"case {case['id']} spec must be a YAML mapping")
@@ -561,9 +564,9 @@ def main(argv: list[str] | None = None) -> int:
     if output.exists():
         parser.error(f"refusing to overwrite evidence directory: {output}")
     output.mkdir(parents=True)
-    suite_path = SAMPLE_SUITE if str(args.suite).casefold() == "samples" else args.suite.resolve()
-    suite_path = _materialize_suite(suite_path, output)
-    suite, cases = _load_suite(suite_path)
+    requested_suite = SAMPLE_SUITE if str(args.suite).casefold() == "samples" else args.suite.resolve()
+    suite_path = _materialize_suite(requested_suite, output)
+    suite, cases = _load_suite(suite_path, generated_root=suite_path.parent if suite_path != requested_suite else None)
     suite_floor = suite["minimum_physical_parts"]
     if args.minimum_physical_parts is None:
         args.minimum_physical_parts = suite_floor
