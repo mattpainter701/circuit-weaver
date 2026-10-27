@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Preserve machine-readable MCP error responses on Python 3.10 with newer
+  supported SDKs, retaining the error flag and exact JSON envelope.
+
 - Add opt-in native routing recovery to CLI, Python and shared CLI/MCP workflows:
   retain private partial copper, resolve authored netclass dimensions, and accept
   each same-net repair only after fresh improving native DRC. Allow workflow

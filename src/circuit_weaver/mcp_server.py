@@ -121,7 +121,13 @@ def _as_mcp_tool_result(payload: str) -> Any:
     ):
         from mcp.types import CallToolResult, TextContent
 
-        return CallToolResult(isError=True, content=[TextContent(type="text", text=payload)])
+        return CallToolResult(
+            isError=True,
+            content=[TextContent(type="text", text=payload)],
+            # FastMCP wraps ordinary JSON-string returns under ``result``.
+            # Explicit error results must supply that same shape themselves.
+            structuredContent={"result": payload},
+        )
     return payload
 
 
