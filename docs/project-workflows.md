@@ -131,7 +131,7 @@ files, and differently named JSON designs remain supported.
 | --- | --- | --- |
 | `copper_layers` | `build-pcb --copper-layers` | Integer `2` or `4`; default `2` |
 | `ground_plane` | route-stage zone plan | Object with `net`, `layers`, `edge_clearance_mm`, `clearance_mm`, `min_thickness_mm`, `thermal_gap_mm`, `thermal_spoke_width_mm`, and `protected_connections` |
-| `route_timeout` | `--timeout` | Positive seconds |
+| `route_timeout` | `--timeout` | Positive seconds; workflow clamps the router budget to 1–1,800 seconds |
 | `route_max_passes` | `--max-passes` | Integer 0–9,999; 0 leaves the pass count unlimited |
 | `route_optimization_threads` | `--optimization-threads` | Integer 0–1,024; 0 disables optimization threads |
 | `route_attempts` | `--attempts` | Integer 1–32 |
@@ -141,6 +141,10 @@ For a bounded exploratory run, use `route_timeout: 300`,
 `route_max_passes: 8` and `route_optimization_threads: 0`. Completion still
 requires the native connectivity and DRC gates; limits can leave a board
 incomplete.
+
+The route-stage parent reserves up to 600 additional seconds for native session
+import, zone refill and DRC, with a total cap of 2,400 seconds. This allowance
+does not extend the router's budget or relax any acceptance gate.
 
 `clearance_mm` and `minimum_drill_mm` are explicit prototype assumptions for
 native board construction. They do not weaken authored project rules or bypass

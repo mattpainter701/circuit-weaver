@@ -8,6 +8,8 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from circuit_weaver import project_workflow as workflow
 from circuit_weaver.project_state import file_sha256, load_project_state, project_state_path
 
@@ -404,7 +406,7 @@ def test_build_rule_overrides_must_be_finite_and_positive(tmp_path: Path):
         assert result["error"]["code"] == "invalid_options"
 
 
-def test_route_controls_are_validated_and_forwarded_without_changing_timeout_bounds(tmp_path: Path, monkeypatch):
+def test_route_controls_are_validated_and_forwarded(tmp_path: Path, monkeypatch):
     root = tmp_path / "route-controls"
     root.mkdir()
     (root / "placed.kicad_pcb").write_text("(kicad_pcb)", encoding="utf-8")
@@ -453,6 +455,33 @@ def test_route_controls_are_validated_and_forwarded_without_changing_timeout_bou
     ):
         assert captured[captured.index(flag) + 1] == value
     assert result[0]["status"] == "ok"
+
+
+@pytest.mark.parametrize("requested", [17, 1800, 3600])
+def test_route_parent_reserves_native_import_time_after_clamped_router_deadline(tmp_path: Path, monkeypatch, requested):
+    root = tmp_path / "route-budget"
+    root.mkdir()
+    (root / "placed.kicad_pcb").write_text("(kicad_pcb)", encoding="utf-8")
+    observed = {}
+
+    def fake_cli(stage, args, cwd, timeout):
+        observed["router_seconds"] = float(args[args.index("--timeout") + 1])
+        observed["parent_seconds"] = timeout
+        # Model a router finishing at its deadline: import/DRC must still have
+        # bounded time before the workflow can publish its native outputs.
+        assert timeout > observed["router_seconds"]
+        Path(args[args.index("--output") + 1]).write_text("(session)", encoding="utf-8")
+        Path(args[args.index("--routed-board") + 1]).write_text("(kicad_pcb)", encoding="utf-8")
+        return {"status": "ok"}
+
+    monkeypatch.setattr(workflow, "_cli", fake_cli)
+    result, outputs = workflow._execute_stage(root, "route", {"route_timeout": requested}, [])
+
+    assert result["status"] == "ok"
+    assert observed["router_seconds"] == min(requested, 1800)
+    assert 0 < observed["parent_seconds"] - observed["router_seconds"] <= 600
+    assert observed["parent_seconds"] <= 2400
+    assert len(outputs) == 2
 
 
 def test_resume_rejects_changed_checkpoint_artifact(tmp_path: Path, monkeypatch):

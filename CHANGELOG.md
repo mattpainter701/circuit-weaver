@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Allow bounded native import and DRC time after a full 30-minute router attempt,
+  so the workflow parent does not expire at the router's own deadline.
+
 - Increase native label retry spacing from the gap actually applied, preserving intermediate feasible placements when a larger preferred gap conflicts with authored constraints. Native DRC and label publication gates remain required.
 - Generate large diverse-circuit benchmark inputs in run evidence and verify them against a frozen pre-trim inventory, retaining all cases and connectivity contracts while removing expanded copies from the repository.
 - Retain structured native failure diagnostics in failed shared-workflow checkpoints while keeping the public error message concise, so rejected placement and DRC candidates can be investigated after a run.

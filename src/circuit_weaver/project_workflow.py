@@ -48,7 +48,10 @@ _CHILD_ENV = "CIRCUIT_WEAVER_WORKFLOW_CHILD"
 # Native PCB generation scales each subprocess budget to the parsed schematic
 # size (capped at 600s). Keep a separate 900s hard stage cap for netlist export,
 # worker execution, DRC validation and publication together.
-_STAGE_TIMEOUTS = {"build": 900, "place": 300, "route": 1800, "preview": 180}
+# A full router attempt can use 1,800s. Native SES import, zone refill and DRC
+# still have to run after it; the parent must not expire at the router deadline.
+_ROUTE_NATIVE_POSTPROCESS_SECONDS = 600
+_STAGE_TIMEOUTS = {"build": 900, "place": 300, "route": 2400, "preview": 180}
 _APPEND_ONLY_OUTPUTS = {"design.log", "circuit-weaver.log"}
 _PROJECT_INPUT_SUFFIXES = {".kicad_pro", ".kicad_sch", ".kicad_pcb", ".zip", ".yaml", ".yml", ".json"}
 _SPEC_SUFFIXES = {".yaml", ".yml", ".json"}
@@ -861,6 +864,7 @@ def _execute_stage(
             attempt = _attempt_dir(root, stage)
             out = attempt / "routed.ses"
             routed_board = attempt / "routed.kicad_pcb"
+            router_timeout = min(max(float(options.get("route_timeout", 300)), 1), 1800)
             plane_preparation = None
             if "ground_plane" in options:
                 from .kicad_project_context import stage_project_footprint_context
@@ -889,7 +893,7 @@ def _execute_stage(
                 "--routed-board",
                 str(routed_board),
                 "--timeout",
-                str(min(max(float(options.get("route_timeout", 300)), 1), 1800)),
+                str(router_timeout),
             ]
             for key, flag in (
                 ("route_max_passes", "--max-passes"),
@@ -901,7 +905,8 @@ def _execute_stage(
                     args.extend([flag, str(options[key])])
             args.extend(_tool_args(options, "freerouting_path", "kicad_cli_path", "kicad_python_path"))
             result = _cli(
-                stage, args, root, min(max(int(options.get("route_timeout", 300)) + 30, 60), _STAGE_TIMEOUTS[stage])
+                stage, args, root,
+                min(math.ceil(router_timeout) + _ROUTE_NATIVE_POSTPROCESS_SECONDS, _STAGE_TIMEOUTS[stage]),
             )
             _require_ok(result, stage)
             extras = [(out, root / out.name)]
