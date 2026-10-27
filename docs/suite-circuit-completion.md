@@ -271,3 +271,45 @@ SVG SHA-256: `a1c9f186f488c201f1e34b4e0a221470caf292de6151c160e1823f51e3602d3f`.
 Workflow / independent-check peaks are 632,590,336 / 293,748,736 bytes, with a
 minimum observed host reserve of 3.87 GiB and zero remaining owned processes.
 The first passing run and all rejected attempts remain separate evidence.
+
+### Fresh Python 3.10 MCP repeat and current native bindings
+
+Implementation `63c220df07af92c510acfb8d688cf983d6d1250d` adds supported
+Python 3.10 MCP error-envelope compatibility and KiCad 8/9 plane-connectivity
+binding support. A fresh Python 3.10.21 environment installs the committed wheel
+with MCP 1.30.0; all 232 package files match the archive, wheel and sdist.
+Through real stdio MCP from the circuit directory, it adopts and plans the
+frozen zero-copper DAC, runs routing and assembly preview, then verifies status
+and an unchanged completed checkpoint after resume. The complete supervised run
+takes 277.089 seconds. Independent native reload again passes all 438 footprints,
+1,220 pads, 110 paths, 144 filtered legs, 72 GND returns, both saved connected
+inner GND planes, zero native DRC blockers and 438/438 models.
+
+The same installed package repeats the approved 90 mm relay workflow in 80.661
+seconds, including 12 accepted automatic native repairs. Independent acceptance
+again passes 96 footprints, 427 pads, both authored route contracts, all 48
+output paths / 96 segments, original placement and labels, the saved connected
+In1.Cu GND plane, zero native DRC blockers and 96/96 models. The larger frozen
+268-part relay benchmark remains a separate case and gate.
+
+- DAC workflow: `dac-mcp03/proof.json`; independent proof:
+  `final-validation07/proof.json` in the same evidence root.
+- DAC board SHA-256: `b74d3c1e7248cb96fe50eb7149e489689d109b39be06a77e9f408160abf57ebf`.
+- DAC SVG SHA-256: `2bd03928e499f76b7f3f249a96b30e87a0c3f77f0ab4fad45d2d4c93f9ab359e`.
+- Relay workflow: `relay-fresh04/proof.json`; independent proof:
+  `relay-final-validation07/proof.json`.
+- Relay board SHA-256: `cb4145820b14541c9bcaa619ae073888053e1c055c01cbfee91b58c5b7188b86`.
+- Relay SVG SHA-256: `49db3c824d1ff75d73b41a6d7e7d0df369086c64a2d5d4c4192975cca3ac7ef5`.
+- Installed wheel SHA-256: `035c2cda20aafb230a54080a22cdfb8ecf38949444443c0d9dc8aefb862daa89`.
+- Workflow / independent-check peaks are 725,798,912 / 294,207,488 bytes for the
+  DAC and 581,079,040 / 214,454,272 bytes for the relay. Minimum observed free RAM
+  during the workflows is 2.794 / 3.079 GiB; all jobs finish with zero owned
+  descendants under the unchanged 2 GiB reserve and 2.5 GiB owned-job cap.
+
+`report-current.html` compares the actual controlled DAC SVG with the fresh
+MCP output and includes the relay SVG. `validated-routing-current-20261027.zip`
+retains 110 hash-verified evidence files, including the exact package artifacts
+(SHA-256 `6c09b61ae805657201a4219b7e34ff6e815572f312bb03b5932f5da890b2220c`).
+These are local KiCad 10.0.4 CAD proofs; actual KiCad 8/9 compatibility and the
+remaining benchmark cases still require their fresh CI gates. Electrical,
+impedance, fabrication and hardware qualification remain unverified.

@@ -155,4 +155,3 @@ def test_serialization_deadline_is_shared_across_native_export_probe_and_process
     )
     assert result["status"] == "ok"
     assert observed["timeout"] == 15
-
