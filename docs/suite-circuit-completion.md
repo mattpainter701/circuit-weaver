@@ -166,3 +166,50 @@ validation jobs peaked at 285,409,280 / 606,437,376 / 305,614,848 bytes respecti
 all terminated with zero remaining owned processes.
 
 Electrical, timing, thermal, impedance and hardware qualification remain open.
+
+## Fresh public workflow
+
+The October 27 continuation promotes bounded native recovery into the public
+CLI/Python/shared workflow as an explicit option. It preserves source settings,
+pad/footprint/text identity and existing copper, derives dimensions from authored
+netclasses and board minimums, and accepts each proposed connection only after
+fresh native DRC reduces opens with no other blocker. Partial boards remain
+private evidence. Search uses bounded coarse/fine grids and sweeps fresh pairs;
+timeouts retain terminal progress instead of leaving a running history.
+
+The first fresh installed DAC run used one global pass. It reached 224 opens
+and then 63 after bounded native recovery, but exhausted its time budget and
+published no completed board. That failure remains retained. A second fresh
+run uses the same zero-copper placement, four-layer stack, netclasses, labels,
+local footprints and authored plane definitions. It allows eight global passes
+before native recovery and prepares the two planes after routing.
+
+Stock Freerouting 2.5.0 progresses through 224 / 83 / 24 / 1 / 1 / 1 / 1 / 0
+opens with zero reported violations. **No native repair or private adapter is
+used in this completed DAC run.** The installed public route/preview workflow
+finishes in 279 seconds, imports the full SES, refills both internal GND planes
+and generates the native assembled preview. The source placement remains
+unchanged. Independent native reload verifies the same retained acceptance:
+438 footprints, 1,220 pads, all 110 paths, 144 filtered legs, 72 GND returns,
+both connected internal planes, zero native DRC blockers and 438/438 models.
+
+Evidence root: `automation_validation_results/routing-automation-20261027/`.
+
+- Workflow: `dac-fresh02/proof.json`; final project: `dac-fresh02/project/`.
+- Independent proof: `final-validation03/proof.json`.
+- Board SHA-256: `836d75d892d3b00ba2198928f839948fd23835114766c7b7b5560a5df282457e`.
+- Assembly SVG SHA-256: `43f2c76e0ec515ef5aca8694573c27964b7a5051572dcfa987a056b028323ad6`.
+- Isolated implementation: `1d01221d43b0e4e5752b2455f04f5e21c744858f`;
+  all 232 package files match the committed archive, wheel, sdist and install.
+  Wheel SHA-256: `2e3faa2f56c5636ce260a4df72abbeaf91df4b814906b3cbf9e05bd76c8e7ae4`.
+- Focused regression: 223 passed; the final evidence-hash adjustment also passes
+  the recovery-only batch. Ruff and whitespace checks pass.
+- Workflow / independent-check peak owned memory: 639,225,856 / 292,323,328 bytes;
+  both jobs finish with zero owned descendants under the unchanged reserve/cap.
+
+`report.html` compares the actual previous controlled preview with this fresh
+automated result. The first independent-check invocation rejected a mistyped
+expected archive hash before native execution; its failed record is retained,
+and a new helper pins the measured unchanged archive. Acceptance gates were not
+relaxed. This establishes the explicit recipe on this frozen DAC, not universal
+default-router completion or electrical/hardware qualification.

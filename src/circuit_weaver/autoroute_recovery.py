@@ -3,11 +3,201 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
+import subprocess
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
+
+
+def _serialize_native_session(
+    board_path: str | Path,
+    session_path: str | Path,
+    *,
+    work_dir: str | Path,
+    freerouting_path: str | Path | None = None,
+    kicad_cli_path: str | Path | None = None,
+    kicad_python_path: str | Path | None = None,
+    timeout_seconds: float = 180,
+) -> dict[str, Any]:
+    """Serialize a fully connected native board to SES with autorouting disabled.
+
+    Freerouting is used only as the Specctra session writer. Completeness and
+    acceptance remain the responsibility of the strict SES validator and the
+    ordinary native import/fresh-DRC gate.
+    """
+    from .autoroute import (
+        _find_freerouting_command,
+        _freerouting_v25_or_newer,
+        _probe_freerouting_capabilities,
+        _publish_staged_file,
+        _router_log_bundle,
+        _validate_specctra_artifact,
+    )
+    from .kicad_bridge import run_kicad
+
+    source = Path(board_path).resolve()
+    destination = Path(session_path).resolve()
+    root = Path(work_dir).resolve()
+    dsn = root / "native-board.dsn"
+    staged_session = root / "serialized.ses"
+    stdout_path, stderr_path = root / "freerouting-stdout.log", root / "freerouting-stderr.log"
+    command_path = root / "command.json"
+
+    def digest(path: Path) -> str | None:
+        return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+
+    def snapshots() -> dict[str, str | None]:
+        return {str(path): digest(path) for path in (
+            source, source.with_suffix(".kicad_pro"), source.with_suffix(".kicad_dru"),
+        )}
+
+    def result(status: str, message: str, **fields: Any) -> dict[str, Any]:
+        payload = {"status": status, "message": message, "serialization_only": True, **fields}
+        if root.is_dir():
+            report = root / "serialization.json"
+            temporary_report = report.with_name(report.name + ".tmp")
+            try:
+                temporary_report.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
+                temporary_report.replace(report)
+            except OSError as exc:
+                payload["diagnostics_write_error"] = f"{type(exc).__name__}: {exc}"
+        return payload
+
+    if (
+        not source.is_file()
+        or source.suffix.lower() != ".kicad_pcb"
+        or destination.suffix.lower() != ".ses"
+        or destination.exists()
+        or isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, (int, float))
+        or not math.isfinite(timeout_seconds)
+        or not 0 < timeout_seconds <= 180
+    ):
+        return result("error", "Serialization requires a native PCB, SES destination, and timeout <= 180 seconds")
+    root.mkdir(parents=True, exist_ok=False)
+    deadline = time.monotonic() + float(timeout_seconds)
+
+    def remaining(cap: float | None = None) -> float:
+        time_left = deadline - time.monotonic()
+        if time_left <= 0:
+            return 0.0
+        return min(time_left, cap) if cap is not None else time_left
+
+    try:
+        initial_hashes = snapshots()
+    except OSError as exc:
+        return result("error", f"Could not read native board or project sidecars: {exc}")
+    if initial_hashes[str(source)] is None:
+        return result("error", "Could not hash the fully connected native board before serialization")
+
+    export_timeout = remaining(120)
+    if export_timeout <= 0:
+        return result("error", "Serialization deadline expired before native DSN export",
+                      source_hashes=initial_hashes)
+    export = run_kicad(
+        "export_dsn", board=str(source), output=str(dsn),
+        python_path=kicad_python_path, timeout=export_timeout,
+    )
+    if not isinstance(export, dict) or export.get("status") != "ok" or not dsn.is_file():
+        return result("error", "Native DSN export failed", export=export, dsn_path=str(dsn))
+    dsn_validation = _validate_specctra_artifact(dsn, "dsn")
+    if not dsn_validation.get("valid"):
+        return result("error", "Native DSN export failed strict validation", export=export,
+                      dsn_validation=dsn_validation, dsn_path=str(dsn), dsn_sha256=digest(dsn))
+
+    command = _find_freerouting_command(freerouting_path)
+    if command is None:
+        return result("error", "Freerouting was not found for native session serialization",
+                      export=export, dsn_validation=dsn_validation, dsn_path=str(dsn), dsn_sha256=digest(dsn))
+    probe_timeout = remaining(10)
+    if probe_timeout <= 0:
+        return result("error", "Serialization deadline expired before router capability probe",
+                      export=export, dsn_validation=dsn_validation,
+                      dsn_path=str(dsn), dsn_sha256=digest(dsn))
+    capabilities = _probe_freerouting_capabilities(command, timeout_seconds=probe_timeout)
+    if not capabilities.get("probe_ok") or not _freerouting_v25_or_newer(capabilities):
+        return result("error", "Serialization requires verified Freerouting 2.5 or newer",
+                      export=export, dsn_validation=dsn_validation, capabilities=capabilities,
+                      dsn_path=str(dsn), dsn_sha256=digest(dsn))
+
+    user_data = root / "user-data"
+    user_data.mkdir()
+    invocation = [
+        *command, "-de", str(dsn), "-do", str(staged_session), "-l", "en", "-da",
+        "--gui.enabled=false", "--router.autorouter.enabled=false",
+        "--router.fanout.enabled=false", "--router.optimizer.enabled=false",
+        "--user_data_path=" + str(user_data),
+    ]
+    command_path.write_text(json.dumps(invocation, indent=2) + "\n", encoding="utf-8")
+    exit_code = None
+    error = None
+    route_timeout = remaining()
+    if route_timeout <= 0:
+        return result("error", "Serialization deadline expired before Freerouting launch",
+                      export=export, dsn_validation=dsn_validation, capabilities=capabilities,
+                      dsn_path=str(dsn), dsn_sha256=digest(dsn))
+    try:
+        with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+            process = subprocess.run(
+                invocation, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
+                timeout=route_timeout, cwd=root,
+            )
+        exit_code = process.returncode
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        error = f"{type(exc).__name__}: {exc}"
+    logs = _router_log_bundle(stdout_path, stderr_path)
+    if error or exit_code != 0 or not staged_session.is_file():
+        return result("error", "Stock Freerouting serialization did not produce a successful SES",
+                      export=export, dsn_validation=dsn_validation, capabilities=capabilities,
+                      command=invocation, command_path=str(command_path), exit_code=exit_code,
+                      process_error=error, dsn_path=str(dsn), dsn_sha256=digest(dsn),
+                      session_path=str(staged_session), session_sha256=digest(staged_session), logs=logs)
+
+    ses_validation = _validate_specctra_artifact(staged_session, "ses", source_dsn=dsn)
+    if not ses_validation.get("valid"):
+        return result("error", "Serialized SES failed strict source-DSN validation",
+                      export=export, dsn_validation=dsn_validation, ses_validation=ses_validation,
+                      capabilities=capabilities, command=invocation, command_path=str(command_path),
+                      exit_code=exit_code, dsn_path=str(dsn), dsn_sha256=digest(dsn),
+                      session_path=str(staged_session), session_sha256=digest(staged_session), logs=logs)
+    try:
+        after_hashes = snapshots()
+    except OSError as exc:
+        return result("error", f"Could not recheck native board or project sidecars: {exc}",
+                      export=export, dsn_validation=dsn_validation, ses_validation=ses_validation,
+                      capabilities=capabilities, command=invocation, command_path=str(command_path),
+                      exit_code=exit_code, source_hashes_before=initial_hashes, snapshot_error=str(exc),
+                      dsn_path=str(dsn), dsn_sha256=digest(dsn), session_path=str(staged_session),
+                      session_sha256=digest(staged_session), logs=logs)
+    if after_hashes != initial_hashes:
+        return result("error", "Native board or project sidecars changed during session serialization",
+                      export=export, dsn_validation=dsn_validation, ses_validation=ses_validation,
+                      capabilities=capabilities, command=invocation, command_path=str(command_path),
+                      exit_code=exit_code, source_hashes_before=initial_hashes,
+                      source_hashes_after=after_hashes, dsn_path=str(dsn), dsn_sha256=digest(dsn),
+                      session_path=str(staged_session), session_sha256=digest(staged_session), logs=logs)
+    publish_error = _publish_staged_file(staged_session, destination, overwrite=False)
+    if publish_error:
+        return result("error", publish_error, export=export, dsn_validation=dsn_validation,
+                      ses_validation=ses_validation, capabilities=capabilities,
+                      command=invocation, command_path=str(command_path), exit_code=exit_code,
+                      dsn_path=str(dsn), dsn_sha256=digest(dsn), session_path=str(staged_session),
+                      session_sha256=digest(staged_session), logs=logs)
+    return result(
+        "ok", "Stock Freerouting serialized a strictly validated complete SES with routing disabled",
+        output_path=str(destination), session_path=str(destination), session_sha256=digest(destination),
+        dsn_path=str(dsn), dsn_sha256=digest(dsn), source_hashes=initial_hashes,
+        export=export, dsn_validation=dsn_validation, ses_validation=ses_validation,
+        capabilities=capabilities, command=invocation, command_path=str(command_path),
+        exit_code=exit_code, logs=logs,
+        routing_stats={
+            "available": False,
+            "reason": "No routing or router statistics are produced in serialization-only mode",
+        },
+    )
 
 
 def autoroute_with_recovery(
@@ -116,26 +306,27 @@ def autoroute_with_recovery(
                     "fabrication_ready": False,
                 }
             completed_session = work / "complete.ses"
-            # A single pass on the fully connected board serializes all copper;
-            # optimizer/fanout stay disabled and ordinary complete-SES validation
-            # remains mandatory. No private Java adapter is required.
-            converted = autoroute_pcb(
-                repair["output_path"],
-                str(completed_session),
-                max_passes=1,
-                attempts=1,
-                timeout_seconds=180,
-                optimization_threads=0,
+            # The stock router serializes all copper with autorouter, fanout,
+            # and optimizer explicitly disabled; complete-SES validation and
+            # the ordinary native import/DRC gate remain mandatory.
+            serialization = _serialize_native_session(
+                repair["output_path"], completed_session,
+                work_dir=work / "session-serialization",
                 freerouting_path=router_options.get("freerouting_path"),
                 kicad_cli_path=router_options.get("kicad_cli_path"),
                 kicad_python_path=python,
+                timeout_seconds=180,
             )
-            if (
-                converted.get("status") != "ok"
-                or converted.get("stats", {}).get("incomplete") != 0
-                or not completed_session.is_file()
-            ):
-                raise ValueError("Could not produce a fully validated complete SES after native recovery")
+            if serialization.get("status") != "ok" or not completed_session.is_file():
+                return {
+                    "status": "error",
+                    "message": serialization.get("message", "Stock Freerouting SES serialization failed"),
+                    "routing_complete": False,
+                    "recovery": repair,
+                    "serialization": serialization,
+                    "recovery_evidence_dir": str(work),
+                    "fabrication_ready": False,
+                }
         _check_snapshots(snapshots)
         if inspect_project_footprint_context(source.parent) != library:
             raise ValueError("Project footprint context changed during recovery")
@@ -153,11 +344,14 @@ def autoroute_with_recovery(
             expected_hashes=snapshots,
         )
         if accepted.get("status") != "ok":
-            return {**accepted, "routing_complete": False, "recovery": repair, "recovery_evidence_dir": str(work)}
+            return {**accepted, "routing_complete": False, "recovery": repair,
+                    "serialization": serialization if repair.get("used") is not False else None,
+                    "recovery_evidence_dir": str(work)}
         return {
             **accepted,
             "session_path": str(session),
             "recovery": repair,
+            **({"serialization": serialization} if repair.get("used") is not False else {}),
             "recovery_evidence_dir": str(work),
             "artifact": {
                 "valid": True,

@@ -6,6 +6,10 @@
   retain private partial copper, resolve authored netclass dimensions, and accept
   each same-net repair only after fresh improving native DRC. Allow workflow
   ground-plane preparation after routing while retaining the final plane gates.
+  Sweep fresh open pairs within shared time/attempt bounds, support finer search
+  escapes, and preserve terminal partial-progress evidence on timeouts.
+  Serialize recovered native copper without rerouting it before the final native
+  import gate, retaining strict session correlation and unavailable-statistics evidence.
 
 - Regenerate the existing 187/268/438-part scale inputs and full route contracts
   into evidence, checking frozen hashes instead of tracking expanded copies.

@@ -378,7 +378,7 @@ router's partial copper privately, repair remaining same-net connections, then
 publish through the ordinary complete-session import and native DRC gate:
 
 ```text
-circuit-weaver autoroute placed.kicad_pcb --output routed.ses --routed-board routed.kicad_pcb --max-passes 1 --optimization-threads 0 --repair-open-connections --recovery-timeout 1800 --max-repair-links 512
+circuit-weaver autoroute placed.kicad_pcb --output routed.ses --routed-board routed.kicad_pcb --max-passes 8 --timeout 1200 --optimization-threads 0 --repair-open-connections --recovery-timeout 1800 --max-repair-links 512
 ```
 
 Python uses `autoroute_pcb(..., repair_open_connections=True,
@@ -389,6 +389,10 @@ copper are preserved. Recovery derives trace/via dimensions from the native
 named netclass and project rules, combined with board minimums; missing or
 ambiguous rules stop recovery. Every proposed connection needs fresh native DRC
 with fewer opens and no other blocker. A final board requires zero blockers.
+After native recovery, Freerouting 2.5 or newer writes the full session with
+autorouting, fanout and optimization disabled. Session structure and net/design
+correlation are checked before the original-board import and fresh native DRC;
+this export step does not fabricate unavailable router completeness statistics.
 Private candidate reports and current progress remain available when the bounded
 search cannot finish; they do not constitute completion or manufacturing approval.
 
@@ -401,7 +405,8 @@ For a workflow-authored plane, use these saved options with `plan_workflow`,
   "route_repair_open_connections": true,
   "route_recovery_timeout": 1800,
   "route_max_repair_links": 512,
-  "route_max_passes": 1,
+  "route_max_passes": 8,
+  "route_timeout": 1200,
   "route_optimization_threads": 0,
   "ground_plane_after_route": true
 }
@@ -415,3 +420,9 @@ Existing source zones are not removed. The normal defaults remain unchanged.
 The parent reserves both router and recovery budgets plus bounded native
 postprocessing time. This supplies an automated recovery path, not a guarantee
 that every circuit fits the search bounds or meets electrical/impedance targets.
+
+The frozen 438-part DAC completes this eight-pass, post-route-plane recipe from
+its zero-copper placement in the isolated installed runtime. It needs no native
+repair on that run; all native DRC, 110-path, 144-leg, 72-return and assembly gates
+pass. A one-pass trial remains incomplete. See the
+[measured completion record](suite-circuit-completion.md#fresh-public-workflow).

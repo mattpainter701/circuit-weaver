@@ -12,6 +12,7 @@ from circuit_weaver.autoroute_recovery import autoroute_with_recovery
 @pytest.fixture
 def recovery(tmp_path, monkeypatch):
     import circuit_weaver.autoroute as router
+    import circuit_weaver.autoroute_recovery as recovery_module
     import circuit_weaver.kicad_bridge as bridge
     import circuit_weaver.kicad_project_context as context
     import circuit_weaver.pcb_layout as layout
@@ -39,9 +40,12 @@ def recovery(tmp_path, monkeypatch):
                 "status": "ok" if state["initial_complete"] else "partial",
                 "routing_complete": state["initial_complete"],
             }
+        raise AssertionError("Recovery serialization must not reroute the native board")
+
+    def serialize(board, output, **options):
         if state["convert_status"] == "ok":
             Path(output).write_text("complete session", encoding="utf-8")
-        return {"status": state["convert_status"], "stats": {"incomplete": 0}}
+        return {"status": state["convert_status"], "routing_statistics": "not_run"}
 
     def import_partial(command, **options):
         assert command == "import_ses"
@@ -62,6 +66,7 @@ def recovery(tmp_path, monkeypatch):
     repair_mock = Mock(side_effect=repair)
     accept_mock = Mock(side_effect=accept)
     monkeypatch.setattr(router, "autoroute_pcb", route_mock)
+    monkeypatch.setattr(recovery_module, "_serialize_native_session", Mock(side_effect=serialize))
     monkeypatch.setattr(bridge, "run_kicad", Mock(side_effect=import_partial))
     monkeypatch.setattr(native, "recover_routing", repair_mock)
     monkeypatch.setattr(layout, "import_routing_session", accept_mock)
