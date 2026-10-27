@@ -635,12 +635,11 @@ def place_pcb(
                     if not label_clear:
                         current_gap = (applied_gap if applied_gap is not None else
                                        feedback_gap if feedback_gap is not None else base_gap)
-                        raw_floor = (placement.get("native_reference_gap_floor_mm")
-                                     if isinstance(placement, dict) else None)
-                        reference_floor = (raw_floor if isinstance(raw_floor, (int, float))
-                                           and not isinstance(raw_floor, bool) and math.isfinite(raw_floor)
-                                           and raw_floor >= 0 else current_gap)
-                        feedback_gap = max(current_gap + 0.5, reference_floor)
+                        # The native estimate may already have proved infeasible
+                        # and fallen back to a smaller physical gap. Jumping to
+                        # that same estimate skips feasible intermediate spacing
+                        # and can terminate the retry before native label checks.
+                        feedback_gap = max(current_gap + 0.5, base_gap)
                     continue
                 _publish(candidate_path, destination, original_snapshots, overwrite)
                 candidate["output_path"] = str(destination)

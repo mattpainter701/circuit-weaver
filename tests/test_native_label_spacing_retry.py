@@ -33,9 +33,9 @@ def _run_rejected_search(tmp_path, monkeypatch, outcomes, *, design_spec=None):
         calls.append(kwargs)
         outcome = dict(outcomes[len(calls) - 1])
         placement = dict(outcome.get("placement", {}))
-        placement["effective_min_component_gap_mm"] = _effective_min_component_gap(
+        placement.setdefault("effective_min_component_gap_mm", _effective_min_component_gap(
             design_spec, placement.get("native_reference_gap_floor_mm", 0.5),
-            kwargs.get("feedback_min_component_gap_mm"))
+            kwargs.get("feedback_min_component_gap_mm")))
         outcome["placement"] = placement
         return outcome
 
@@ -65,6 +65,18 @@ def test_spacing_feedback_preserves_explicit_board_minimum(tmp_path, monkeypatch
     assert result["status"] == "error"
     assert [call["feedback_min_component_gap_mm"] for call in calls] == [None, 3.5, 4.0]
     assert [attempt["min_component_gap_mm"] for attempt in result["placement_attempts"]] == [3.0, 3.5, 4.0]
+
+
+def test_fallback_gap_retries_do_not_jump_back_to_infeasible_native_estimate(tmp_path, monkeypatch):
+    outcomes = []
+    for gap in (0.5, 1.0, 1.5):
+        candidate = _candidate()
+        candidate["placement"]["effective_min_component_gap_mm"] = gap
+        outcomes.append(candidate)
+    result, calls = _run_rejected_search(tmp_path, monkeypatch, outcomes)
+    assert [call["feedback_min_component_gap_mm"] for call in calls] == [None, 1.0, 1.5]
+    assert [attempt["min_component_gap_mm"] for attempt in result["placement_attempts"]] == [0.5, 1.0, 1.5]
+    assert result["status"] == "error"  # Retry spacing alone cannot establish acceptance.
 
 
 def test_missing_or_malformed_native_report_fails_closed(tmp_path, monkeypatch):
