@@ -182,3 +182,100 @@ def test_missing_report_net_is_accepted_after_native_uuid_and_net_validation(mon
 
     with pytest.raises(RuntimeError, match="pair validation passed"):
         repair.repair_one(_RouteBoard([first, second]), _Pcbnew, _drc_pair(first, second))
+
+
+def test_astar_accepts_a_clear_direct_goal_segment_from_any_goal_layer():
+    checked = []
+
+    def clear(start, goal, layer):
+        checked.append((start, goal, layer))
+        return True
+
+    path, expanded = repair._astar_search(
+        (0.0, 0.0), (8.0, 0.0), 2, {1}, {(0, 0, 1)},
+        (0.0, 0.0, 8.0, 8.0), 0.25, 20, clear, lambda _point: False,
+    )
+
+    assert path == [(0, 0, 1)]
+    assert expanded == 1
+    assert checked == [((0.0, 0.0), (8.0, 0.0), 1)]
+
+
+def test_astar_does_not_charge_stale_heap_entries_as_expansions(monkeypatch):
+    push = repair.heapq.heappush
+
+    def push_with_stale_entry(queue, entry):
+        push(queue, entry)
+        estimate, distance, sequence, node = entry
+        push(queue, (estimate + 100.0, distance + 100.0, sequence + 1_000_000, node))
+
+    monkeypatch.setattr(repair.heapq, "heappush", push_with_stale_entry)
+    path, expanded = repair._astar_search(
+        (0.0, 0.0), (10.0, 0.0), 1, set(), {(0, 0, 0)},
+        (0.0, 0.0, 1.0, 0.0), 1.0, 10, lambda *_args: True, lambda _point: False,
+    )
+
+    assert path is None
+    assert expanded == 2
+
+
+def test_finer_grid_fallback_shares_one_expansion_budget(monkeypatch):
+    calls = []
+
+    def exhausted(_start, _goal, _layer_count, _target_layers, _origins, _bounds,
+                  step, budget, _clear, _change):
+        calls.append((step, budget))
+        return None, budget
+
+    monkeypatch.setattr(repair, "_astar_search", exhausted)
+    path, step, expanded = repair._search_with_fallback(
+        (0, 0), (1, 0), 1, {0}, {(0, 0, 0)}, (0, 0, 1, 1), 0.25, 10,
+        lambda *_args: True, lambda _point: False,
+    )
+
+    assert path is None and step is None
+    assert calls == [(0.25, 5), (0.125, 5)]
+    assert expanded == 10
+
+
+def test_fallback_finds_narrow_clearance_checked_corridor_unreachable_on_coarse_grid():
+    start, goal = (0.0, 0.0), (1.0, 0.0)
+    checked_segments = []
+
+    def clear(a, b, _layer):
+        checked_segments.append((a, b))
+        crosses_blocker = min(a[0], b[0]) < 0.625 and max(a[0], b[0]) > 0.375
+        stays_below_corridor = min(a[1], b[1]) < 0.1
+        return not (crosses_blocker and stays_below_corridor)
+
+    coarse_path, _ = repair._astar_search(
+        start, goal, 1, {0}, {(0, 0, 0)}, (0.0, 0.0, 1.0, 0.125),
+        0.25, 100, clear, lambda _point: False,
+    )
+    assert coarse_path is None
+
+    path, step, expanded = repair._search_with_fallback(
+        start, goal, 1, {0}, {(0, 0, 0)}, (0.0, 0.0, 1.0, 0.125),
+        0.25, 200, clear, lambda _point: False,
+    )
+
+    assert path is not None
+    assert step == 0.125
+    assert expanded <= 200
+    coordinates = [(start[0] + node[0] * step, start[1] + node[1] * step) for node in path]
+    assert any(y == 0.125 for _, y in coordinates)
+    assert all(clear(a, b, 0) for a, b in zip(coordinates, coordinates[1:]))
+    assert clear(coordinates[-1], goal, 0)
+    assert all(segment in checked_segments for segment in zip(coordinates, coordinates[1:]))
+
+
+def test_collinear_collapse_preserves_turns_and_layer_transitions():
+    points = [
+        ((0.0, 0.0), 0), ((0.25, 0.0), 0), ((0.5, 0.0), 0),
+        ((0.5, 0.25), 0), ((0.5, 0.25), 1), ((0.5, 0.5), 1),
+    ]
+
+    assert repair._collapse_collinear_points(points) == [
+        ((0.0, 0.0), 0), ((0.5, 0.0), 0), ((0.5, 0.25), 0),
+        ((0.5, 0.25), 1), ((0.5, 0.5), 1),
+    ]

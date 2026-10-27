@@ -12,6 +12,99 @@ import math
 from pathlib import Path
 
 
+def _astar_search(start, goal, layer_count, target_layers, origins, bounds, step, max_expanded_states,
+                  clear_segment, can_change_layer):
+    """Search lattice states and return a route path plus real expansion count."""
+    def coordinate(node):
+        return start[0] + node[0] * step, start[1] + node[1] * step
+
+    queue = []
+    distance = {node: 0.0 for node in origins}
+    previous = {}
+    sequence = 0
+    for node in sorted(origins):
+        heapq.heappush(queue, (math.dist(start, goal), 0.0, sequence, node))
+        sequence += 1
+    directions = [(x, y) for x in (-1, 0, 1) for y in (-1, 0, 1) if x or y]
+    end = None
+    expanded = 0
+    while queue and expanded < max_expanded_states:
+        _, queued_distance, _, node = heapq.heappop(queue)
+        if queued_distance > distance.get(node, float("inf")) + 1e-9:
+            continue
+        point = coordinate(node)
+        expanded += 1
+        if node[2] in target_layers and clear_segment(point, goal, node[2]):
+            end = node
+            break
+        neighbors = []
+        for dx, dy in directions:
+            candidate = (node[0] + dx, node[1] + dy, node[2])
+            target = coordinate(candidate)
+            if (bounds[0] <= target[0] <= bounds[2] and bounds[1] <= target[1] <= bounds[3]
+                    and clear_segment(point, target, node[2])):
+                neighbors.append((candidate, math.hypot(dx, dy) * step))
+        if can_change_layer(point):
+            neighbors.extend(((node[0], node[1], layer), 4.0)
+                             for layer in range(layer_count) if layer != node[2])
+        for candidate, cost in neighbors:
+            score = distance[node] + cost
+            if score + 1e-9 < distance.get(candidate, float("inf")):
+                distance[candidate] = score
+                previous[candidate] = node
+                heapq.heappush(queue, (score + math.dist(coordinate(candidate), goal), score,
+                                       sequence, candidate))
+                sequence += 1
+    if end is None:
+        return None, expanded
+    path = [end]
+    while path[-1] not in origins:
+        path.append(previous[path[-1]])
+    path.reverse()
+    return path, expanded
+
+
+def _search_with_fallback(start, goal, layer_count, target_layers, origins, bounds, grid_step_mm,
+                          max_expanded_states, clear_segment, can_change_layer):
+    """Try the requested grid then 0.125 mm, sharing one hard state budget."""
+    steps = [float(grid_step_mm)]
+    if grid_step_mm > 0.125:
+        steps.append(0.125)
+    remaining = max_expanded_states
+    expanded = 0
+    for attempt, step in enumerate(steps):
+        if remaining <= 0:
+            break
+        # Reserve half of the cap for the finer fallback if the coarse grid is trapped.
+        budget = remaining if attempt == len(steps) - 1 else max(1, remaining // 2)
+        path, used = _astar_search(
+            start, goal, layer_count, target_layers, origins, bounds, step, budget,
+            clear_segment, can_change_layer,
+        )
+        expanded += used
+        remaining -= used
+        if path is not None:
+            return path, step, expanded
+    return None, None, expanded
+
+
+def _collapse_collinear_points(points):
+    """Merge only forward, exactly collinear same-layer grid segments."""
+    result = []
+    for point in points:
+        if len(result) >= 2 and result[-2][1] == result[-1][1] == point[1]:
+            a, b, c = result[-2][0], result[-1][0], point[0]
+            ab = (b[0] - a[0], b[1] - a[1])
+            bc = (c[0] - b[0], c[1] - b[1])
+            cross = ab[0] * bc[1] - ab[1] * bc[0]
+            dot = ab[0] * bc[0] + ab[1] * bc[1]
+            if abs(cross) <= 1e-12 and dot > 0:
+                result[-1] = point
+                continue
+        result.append(point)
+    return result
+
+
 def _uuid(item):
     return str(item.m_Uuid.AsString())
 
@@ -261,60 +354,23 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
         via_cache[key] = okay
         return okay
 
-    step = float(grid_step_mm)
-    def coordinate(node):
-        return start[0] + node[0] * step, start[1] + node[1] * step
-
     origins = {(0, 0, i) for i, layer_id in enumerate(stack) if first.IsOnLayer(layer_id)}
     if not origins or not any(last.IsOnLayer(layer_id) for layer_id in stack):
         raise ValueError("endpoints do not occupy supported copper layers")
-    queue = []
-    dist = {n: 0.0 for n in origins}
-    prev = {}
-    count = 0
-    for n in sorted(origins):
-        heapq.heappush(queue, (math.dist(start, goal), count, n))
-        count += 1
-    directions = [(x, y) for x in (-1, 0, 1) for y in (-1, 0, 1) if x or y]
-    end = None
-    expanded = 0
-    while queue and expanded < max_expanded_states:
-        _, _, node = heapq.heappop(queue)
-        p = coordinate(node)
-        expanded += 1
-        if (
-            last.IsOnLayer(stack[node[2]])
-            and math.dist(p, goal) <= step * 1.5
-            and clear_segment(p, goal, stack[node[2]])
-        ):
-            end = node
-            break
-        neighbors = []
-        for dx, dy in directions:
-            cand = (node[0] + dx, node[1] + dy, node[2])
-            q = coordinate(cand)
-            if (
-                bounds[0] <= q[0] <= bounds[2]
-                and bounds[1] <= q[1] <= bounds[3]
-                and clear_segment(p, q, stack[node[2]])
-            ):
-                neighbors.append((cand, math.hypot(dx, dy) * step))
-        if can_change_layer(p):
-            neighbors.extend(((node[0], node[1], i), 4.0) for i in range(len(stack)) if i != node[2])
-        for cand, cost in neighbors:
-            score = dist[node] + cost
-            if score + 1e-9 < dist.get(cand, float("inf")):
-                dist[cand] = score
-                prev[cand] = node
-                heapq.heappush(queue, (score + math.dist(coordinate(cand), goal), count, cand))
-                count += 1
-    if end is None:
+    path, step, expanded = _search_with_fallback(
+        start, goal, len(stack),
+        {i for i, layer_id in enumerate(stack) if last.IsOnLayer(layer_id)},
+        origins, bounds, grid_step_mm, max_expanded_states,
+        lambda a, b, layer: clear_segment(a, b, stack[layer]), can_change_layer,
+    )
+    if path is None:
         raise RuntimeError(f"no collision-free repair within {expanded} native search states")
-    path = [end]
-    while path[-1] not in origins:
-        path.append(prev[path[-1]])
-    path.reverse()
-    points = [(coordinate(n), stack[n[2]]) for n in path] + [(goal, stack[end[2]])]
+    def coordinate(node):
+        return start[0] + node[0] * step, start[1] + node[1] * step
+
+    points = _collapse_collinear_points(
+        [(coordinate(n), stack[n[2]]) for n in path] + [(goal, stack[path[-1][2]])]
+    )
     added_tracks = added_vias = 0
     for (a, la), (b, lb) in zip(points, points[1:]):
         if la != lb:

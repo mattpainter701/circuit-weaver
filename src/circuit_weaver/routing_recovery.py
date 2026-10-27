@@ -81,6 +81,38 @@ def _only_open_blockers(result: Any) -> bool:
     )
 
 
+def _ordered_pairs(raw_report: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the same distance order used by the native repair worker."""
+    rows = raw_report["unconnected_items"]
+
+    def distance(row: Any) -> float:
+        try:
+            items = row["items"]
+            if len(items) != 2:
+                raise ValueError
+            points = [(item["pos"]["x"], item["pos"]["y"]) for item in items]
+            if any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                for point in points
+                for value in point
+            ):
+                raise ValueError
+            return math.dist(*points)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("Fresh DRC contains a malformed unconnected pair") from exc
+
+    return sorted(rows, key=distance)
+
+
+def _pair_key(row: dict[str, Any]) -> tuple[str, str, str]:
+    items = row["items"]
+    uuids = tuple(sorted(str(item.get("uuid", "")) for item in items))
+    net = str(row.get("net", items[0].get("net", "")))
+    return net, uuids[0], uuids[1]
+
+
 def _publication_set(staged: Path, destination: Path) -> list[tuple[Path, Path]]:
     publications = [(staged, destination)]
     for suffix in (".kicad_pro", ".kicad_dru"):
@@ -147,10 +179,17 @@ def recover_routing(
 
     Each native repair is evaluated against a fresh DRC snapshot. Intermediate
     boards are private evidence artifacts and never masquerade as completion.
+    All fresh pairs are eligible; ``max_links * max_pair_attempts`` bounds the
+    total proposal count alongside the wall-clock deadline.
     """
     source, destination = Path(board_path).expanduser().resolve(), Path(output_path).expanduser().resolve()
     started, history = time.monotonic(), []
     evidence_root: Path | None = None
+    original_hash: str | None = None
+    initial_open: int | None = None
+    remaining_open: int | None = None
+    attempts = 0
+    links = 0
     try:
         if (
             isinstance(timeout_seconds, bool)
@@ -192,6 +231,7 @@ def recover_routing(
             if before.board_sha256 != _sha256(current) or not _only_open_findings(before):
                 raise ValueError("Input must have only complete, fresh CW-DRC-002 open-net blockers")
             initial_open = _open_count(before)
+            remaining_open = initial_open
             shutil.copy2(current, evidence_root / "input-partial.kicad_pcb")
             for suffix in (".kicad_pro", ".kicad_dru"):
                 sidecar = current.with_suffix(suffix)
@@ -209,17 +249,28 @@ def recover_routing(
                     "board_sha256": _sha256(current),
                 },
             )
-            attempts = 0
-            links = 0
+            failed_pairs: set[tuple[str, str, str]] = set()
+            attempt_budget = max_links * max_pair_attempts
             _write_json(
                 evidence_root / "history.json",
                 {"status": "running", "history": history, "source_sha256": original_hash},
             )
             while before.blocker_count:
-                if links >= max_links:
+                if links >= max_links or attempts >= attempt_budget:
                     break
                 accepted_this_round = False
-                for pair_index in range(min(max_pair_attempts, _open_count(before))):
+                ordered_pairs = _ordered_pairs(before.raw_report)
+                # Sweep every fresh DRC pair, prioritizing pairs not rejected
+                # against an earlier board state. A rejected pair remains
+                # retryable after same-net copper is added, but is not allowed
+                # to crowd out untouched pairs.
+                pair_order = sorted(
+                    range(len(ordered_pairs)),
+                    key=lambda index: (_pair_key(ordered_pairs[index]) in failed_pairs, index),
+                )
+                for pair_index in pair_order:
+                    if attempts >= attempt_budget:
+                        break
                     attempts += 1
                     attempt_dir = work / f"attempt-{attempts:04d}"
                     attempt_dir.mkdir()
@@ -243,6 +294,7 @@ def recover_routing(
                     entry = {
                         "attempt": attempts,
                         "pair_index": pair_index,
+                        "pair_key": list(_pair_key(ordered_pairs[pair_index])),
                         "before_sha256": _sha256(current),
                         "before_open_count": _open_count(before),
                         "worker_status": response.get("status") if isinstance(response, dict) else None,
@@ -310,6 +362,8 @@ def recover_routing(
                         entry.update({"links_repaired": 1, "accepted": True, "native_report": report})
                         history.append(entry)
                         links += 1
+                        repaired_net = str(report["net"])
+                        failed_pairs = {key for key in failed_pairs if key[0] != repaired_net}
                         _retain_attempt(
                             evidence_root,
                             attempts,
@@ -329,6 +383,7 @@ def recover_routing(
                             else:
                                 target.unlink(missing_ok=True)
                         current, before = candidate, after
+                        remaining_open = _open_count(before)
                         accepted_this_round = True
                         _write_json(
                             evidence_root / "history.json",
@@ -336,6 +391,7 @@ def recover_routing(
                         )
                         break
                     entry["accepted"] = False
+                    failed_pairs.add(_pair_key(ordered_pairs[pair_index]))
                     entry["evidence_path"] = str(evidence_root / f"attempt-{attempts:04d}")
                     if isinstance(response, dict):
                         entry["native_report"] = report
@@ -440,10 +496,45 @@ def recover_routing(
             "evidence_dir": str(evidence_root),
         }
     except (OSError, ValueError, TimeoutError, TypeError, AttributeError) as exc:
+        partial_path = evidence_root / "partial-progress.kicad_pcb" if evidence_root is not None else None
+        partial_exists = partial_path is not None and partial_path.is_file()
+        partial_hash = None
+        if partial_exists:
+            try:
+                partial_hash = _sha256(partial_path)
+            except OSError:
+                pass
+        if evidence_root is not None and evidence_root.exists():
+            try:
+                _write_json(
+                    evidence_root / "history.json",
+                    {
+                        "status": "error",
+                        "message": str(exc),
+                        "history": history,
+                        "source_sha256": original_hash,
+                        "initial_open_count": initial_open,
+                        "remaining_open_count": remaining_open,
+                        "links_repaired": links,
+                        "attempts": attempts,
+                        "partial_board": str(partial_path) if partial_exists else None,
+                        "partial_board_sha256": partial_hash,
+                    },
+                )
+            except Exception:
+                # Evidence finalization must never replace the original failure.
+                pass
         return {
             "status": "error",
             "message": str(exc),
+            "source_sha256": original_hash,
+            "initial_open_count": initial_open,
+            "remaining_open_count": remaining_open,
+            "links_repaired": links,
+            "attempts": attempts,
             "history": history,
+            "partial_board": str(partial_path) if partial_exists else None,
+            "partial_board_sha256": partial_hash,
             "evidence_dir": str(evidence_root) if evidence_root is not None and evidence_root.exists() else None,
             "fabrication_ready": False,
         }

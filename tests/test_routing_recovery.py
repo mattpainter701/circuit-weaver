@@ -1,4 +1,5 @@
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,20 @@ def _drc(path: Path, opens: int, *, status="ok", other_blocker=False, unknown=Fa
         findings[0] = ValidationIssue("drc", rule_id="CW-DRC-999", severity="blocker")
     if other_blocker:
         findings.append(ValidationIssue("drc", rule_id="CW-DRC-001", severity="blocker"))
-    raw = {"violations": [], "unconnected_items": [{} for _ in range(opens)], "schematic_parity": []}
+    raw = {
+        "violations": [],
+        "unconnected_items": [
+            {
+                "net": "N1",
+                "items": [
+                    {"uuid": f"pad-{index}-a", "net": "N1", "pos": {"x": float(index), "y": 0.0}},
+                    {"uuid": f"pad-{index}-b", "net": "N1", "pos": {"x": float(index) + 0.5, "y": 0.0}},
+                ],
+            }
+            for index in range(opens)
+        ],
+        "schematic_parity": [],
+    }
     if raw_override is not None:
         raw = raw_override
     return DrcResult(
@@ -218,3 +232,72 @@ def test_recovery_accepts_more_than_twelve_links_with_configured_link_budget(tmp
     assert (run_evidence / "partial-progress.kicad_pcb").is_file()
     assert len(list(run_evidence.glob("attempt-*/attempt.json"))) == 13
     assert not destination.exists()
+
+
+def test_recovery_sweeps_pairs_beyond_first_twelve(tmp_path, monkeypatch):
+    source, destination = _wire_files(tmp_path, monkeypatch)
+    drc_calls = 0
+
+    def drc(path, **_):
+        nonlocal drc_calls
+        drc_calls += 1
+        return _drc(Path(path), 13 if drc_calls == 1 else 0)
+
+    pair_indices = []
+
+    def worker(_operation, **kwargs):
+        pair_indices.append(kwargs["pair_index"])
+        if kwargs["pair_index"] < 12:
+            return {"status": "error", "message": "no route found"}
+        Path(kwargs["output"]).write_bytes(Path(kwargs["board"]).read_bytes() + b" routed")
+        return {"status": "ok", "route_repair": _worker_report()}
+
+    monkeypatch.setattr("circuit_weaver.routing_recovery.run_drc", drc)
+    monkeypatch.setattr("circuit_weaver.routing_recovery.run_kicad", worker)
+    result = recover_routing(source, destination, max_links=1, max_pair_attempts=13)
+
+    assert result["status"] == "ok"
+    assert pair_indices == list(range(13))
+    assert result["attempts"] == 13
+    assert result["links_repaired"] == 1
+
+
+def test_recovery_timeout_finalizes_partial_evidence_without_publishing(tmp_path, monkeypatch):
+    source, destination = _wire_files(tmp_path, monkeypatch)
+    source_bytes = source.read_bytes()
+    drc_calls = 0
+
+    def drc(path, **_):
+        nonlocal drc_calls
+        drc_calls += 1
+        if drc_calls == 3:
+            raise TimeoutError("fresh DRC timed out")
+        return _drc(Path(path), 2 if drc_calls == 1 else 1)
+
+    def worker(_operation, **kwargs):
+        Path(kwargs["output"]).write_bytes(Path(kwargs["board"]).read_bytes() + b" routed")
+        return {"status": "ok", "route_repair": _worker_report()}
+
+    monkeypatch.setattr("circuit_weaver.routing_recovery.run_drc", drc)
+    monkeypatch.setattr("circuit_weaver.routing_recovery.run_kicad", worker)
+    evidence = tmp_path / "evidence"
+    result = recover_routing(source, destination, evidence_dir=evidence)
+
+    assert result["status"] == "error"
+    assert result["message"] == "fresh DRC timed out"
+    assert result["initial_open_count"] == 2
+    assert result["remaining_open_count"] == 1
+    assert result["links_repaired"] == 1
+    assert result["attempts"] == 2
+    assert result["partial_board"] is not None
+    assert Path(result["partial_board"]).is_file()
+    assert result["partial_board_sha256"] == hashlib.sha256(Path(result["partial_board"]).read_bytes()).hexdigest()
+    assert source.read_bytes() == source_bytes
+    assert not destination.exists()
+    run_evidence = Path(result["evidence_dir"])
+    history = json.loads((run_evidence / "history.json").read_text(encoding="utf-8"))
+    assert history["status"] == "error"
+    assert history["message"] == result["message"]
+    assert history["source_sha256"] == result["source_sha256"] == hashlib.sha256(source_bytes).hexdigest()
+    assert history["links_repaired"] == 1
+    assert len(history["history"]) == 1
