@@ -370,3 +370,48 @@ including a table or asset appearing during a stage.
 
 Native `review-pcb`, the shared authored routing gate and transient acceptance
 windows are documented in [board quality review](board-quality-review.md).
+
+## Bounded routing recovery
+
+Routing recovery is explicit. For a native board, the CLI can retain the
+router's partial copper privately, repair remaining same-net connections, then
+publish through the ordinary complete-session import and native DRC gate:
+
+```text
+circuit-weaver autoroute placed.kicad_pcb --output routed.ses --routed-board routed.kicad_pcb --max-passes 1 --optimization-threads 0 --repair-open-connections --recovery-timeout 1800 --max-repair-links 512
+```
+
+Python uses `autoroute_pcb(..., repair_open_connections=True,
+recovery_timeout_seconds=1800, max_repair_links=512)`. An already-partial PCB can
+use `circuit_weaver.routing_recovery.recover_routing(source, destination, ...)`
+directly. Inputs, settings, pad identities, footprint/text geometry and existing
+copper are preserved. Recovery derives trace/via dimensions from the native
+named netclass and project rules, combined with board minimums; missing or
+ambiguous rules stop recovery. Every proposed connection needs fresh native DRC
+with fewer opens and no other blocker. A final board requires zero blockers.
+Private candidate reports and current progress remain available when the bounded
+search cannot finish; they do not constitute completion or manufacturing approval.
+
+The initial implementation supports rectangular repair inputs without zones.
+For a workflow-authored plane, use these saved options with `plan_workflow`,
+`run_workflow` or the existing MCP `options_json` argument:
+
+```json
+{
+  "route_repair_open_connections": true,
+  "route_recovery_timeout": 1800,
+  "route_max_repair_links": 512,
+  "route_max_passes": 1,
+  "route_optimization_threads": 0,
+  "ground_plane_after_route": true
+}
+```
+
+Keep the existing `ground_plane` plan and four-layer selection in those options.
+Deferral makes all copper layers available during routing; the workflow then
+prepares the authored plane definitions on its original input, imports the full
+session, refills and independently verifies the saved plane geometry/connectivity.
+Existing source zones are not removed. The normal defaults remain unchanged.
+The parent reserves both router and recovery budgets plus bounded native
+postprocessing time. This supplies an automated recovery path, not a guarantee
+that every circuit fits the search bounds or meets electrical/impedance targets.

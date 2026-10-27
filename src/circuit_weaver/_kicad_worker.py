@@ -1657,6 +1657,31 @@ def execute(request):
         plane_cleanup["locked_copper_preserved"] = True
         plane_cleanup["original_geometry_preserved"] = True
         plane_cleanup["original_board_geometry_preserved"] = True
+    elif operation == "repair_open":
+        from _native_routing_repair import repair_one
+
+        original_copper = _copper_state(board)
+        original_layout = _fixed_layout_state(board)
+        original_board_geometry = _ground_plane_source_geometry_state(board, pcbnew)
+        repair = repair_one(
+            board, pcbnew, request.get("drc_report"),
+            pair_index=request.get("pair_index", 0),
+        )
+        if (_identity(board) != identity or original_layout != _fixed_layout_state(board)
+                or original_board_geometry != _ground_plane_source_geometry_state(board, pcbnew)):
+            raise ValueError("Same-net repair changed pad/net identity, layout or original board geometry")
+        added = _copper_state(board) - original_copper
+        removed = original_copper - _copper_state(board)
+        added_rows = [json.loads(raw) for raw, count in added.items() for _ in range(count)]
+        if (removed or not added_rows or any(row["net"] != repair["net"] or row["locked"]
+                or row["type"] not in {"PCB_TRACK", "PCB_VIA"} for row in added_rows)
+                or sum(row["type"] == "PCB_TRACK" for row in added_rows) != repair["added_tracks"]
+                or sum(row["type"] == "PCB_VIA" for row in added_rows) != repair["added_vias"]):
+            raise ValueError("Same-net repair modified existing copper or reported invalid additions")
+        repair["source_identity_preserved"] = True
+        repair["original_footprints_and_text_preserved"] = True
+        repair["original_board_geometry_preserved"] = True
+        repair["existing_copper_preserved"] = True
     elif operation == "place":
         placements = request["placements"]
         if not placements or set(placements) - set(identity):
@@ -1764,6 +1789,22 @@ def execute(request):
         cleanup["original_footprints_and_text_preserved"] = True
         if not cleanup.get("all_pads_connected") or not cleanup.get("protected_paths_preserved"):
             raise ValueError("Saved cleanup failed native pad connectivity or protected-path verification")
+    if operation == "repair_open":
+        saved_copper = _copper_state(reloaded)
+        if (original_copper - saved_copper or _identity(reloaded) != identity
+                or original_layout != _fixed_layout_state(reloaded)
+                or original_board_geometry != _ground_plane_source_geometry_state(reloaded, pcbnew)):
+            raise ValueError("Saved repair changed original copper, source geometry or pad/net identity")
+        delta = saved_copper - original_copper
+        delta_rows = [json.loads(raw) for raw, count in delta.items() for _ in range(count)]
+        if (len(delta_rows) != repair["added_tracks"] + repair["added_vias"]
+                or any(row["net"] != repair["net"] or row["locked"]
+                       or row["type"] not in {"PCB_TRACK", "PCB_VIA"} for row in delta_rows)):
+            raise ValueError("Saved repair additions do not match the candidate report")
+        repair.update({"source_identity_preserved": True,
+                       "original_footprints_and_text_preserved": True,
+                       "original_board_geometry_preserved": True,
+                       "existing_copper_preserved": True})
     result = {"status": "ok", "version": pcbnew.Version(), **_inspect(reloaded, pcbnew)}
     if zone_refill is not None:
         result["zone_refill"] = zone_refill
@@ -1795,6 +1836,8 @@ def execute(request):
         # Keep SWIG wrappers alive through save, reload, and native inspection.
         # The list is local only and never enters the JSON response.
         cleanup_removed_items.clear()
+    if operation == "repair_open":
+        result["route_repair"] = repair
     if ground_plane is not None:
         from _native_ground_plane import verify as verify_ground_plane_after_reload
 

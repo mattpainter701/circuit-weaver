@@ -52,7 +52,7 @@ _CHILD_ENV = "CIRCUIT_WEAVER_WORKFLOW_CHILD"
 # A full router attempt can use 1,800s. Native SES import, zone refill and DRC
 # still have to run after it; the parent must not expire at the router deadline.
 _ROUTE_NATIVE_POSTPROCESS_SECONDS = 600
-_STAGE_TIMEOUTS = {"build": 900, "place": 300, "route": 2400, "preview": 180}
+_STAGE_TIMEOUTS = {"build": 900, "place": 300, "route": 4200, "preview": 180}
 _APPEND_ONLY_OUTPUTS = {"design.log", "circuit-weaver.log"}
 _PROJECT_INPUT_SUFFIXES = {".kicad_pro", ".kicad_sch", ".kicad_pcb", ".zip", ".yaml", ".yml", ".json"}
 _SPEC_SUFFIXES = {".yaml", ".yml", ".json"}
@@ -474,6 +474,14 @@ def _normalize_options(options: dict[str, Any] | None) -> dict[str, Any]:
             normalized["ground_plane"] = _validate_plan(normalized["ground_plane"])
         except (TypeError, ValueError) as exc:
             raise WorkflowError("invalid_options", str(exc)) from exc
+    for key in ("route_repair_open_connections", "ground_plane_after_route"):
+        if key in normalized and not isinstance(normalized[key], bool):
+            raise WorkflowError("invalid_options", f"{key} must be a boolean")
+    if "route_recovery_timeout" in normalized:
+        value = normalized["route_recovery_timeout"]
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or not 0 < value <= 1800):
+            raise WorkflowError("invalid_options", "route_recovery_timeout must be between 0 and 1800 seconds")
     for key in ("clearance_mm", "minimum_drill_mm"):
         if key not in normalized:
             continue
@@ -484,6 +492,7 @@ def _normalize_options(options: dict[str, Any] | None) -> dict[str, Any]:
         ("route_max_passes", 0, 9999),
         ("route_optimization_threads", 0, 1024),
         ("route_attempts", 1, 32),
+        ("route_max_repair_links", 1, 512),
     ):
         if key not in normalized:
             continue
@@ -863,7 +872,8 @@ def _execute_stage(
             routed_board = attempt / "routed.kicad_pcb"
             router_timeout = min(max(float(options.get("route_timeout", 300)), 1), 1800)
             plane_preparation = None
-            if "ground_plane" in options:
+            deferred_planes = "ground_plane" in options and options.get("ground_plane_after_route", False)
+            if "ground_plane" in options and not deferred_planes:
                 from .kicad_project_context import stage_project_footprint_context
                 from .pcb_ground_plane import add_ground_plane
                 plane_board = attempt / "plane-input.kicad_pcb"
@@ -897,15 +907,47 @@ def _execute_stage(
                 ("route_optimization_threads", "--optimization-threads"),
                 ("route_attempts", "--attempts"),
                 ("route_effort", "--effort"),
+                ("route_recovery_timeout", "--recovery-timeout"),
+                ("route_max_repair_links", "--max-repair-links"),
             ):
                 if key in options:
                     args.extend([flag, str(options[key])])
+            recovery_seconds = 0
+            if options.get("route_repair_open_connections", False):
+                args.append("--repair-open-connections")
+                recovery_seconds = float(options.get("route_recovery_timeout", 600))
             args.extend(_tool_args(options, "freerouting_path", "kicad_cli_path", "kicad_python_path"))
             result = _cli(
                 stage, args, root,
-                min(math.ceil(router_timeout) + _ROUTE_NATIVE_POSTPROCESS_SECONDS, _STAGE_TIMEOUTS[stage]),
+                min(math.ceil(router_timeout + recovery_seconds) + _ROUTE_NATIVE_POSTPROCESS_SECONDS,
+                    _STAGE_TIMEOUTS[stage]),
             )
             _require_ok(result, stage)
+            if deferred_planes:
+                from .kicad_project_context import stage_project_footprint_context
+                from .pcb_ground_plane import add_ground_plane
+
+                stage_project_footprint_context(board.parent, attempt)
+                # Keep all layers available to the router. Prepare the authored
+                # plane definitions on the original input, then import the full
+                # session once and verify the resulting saved fills and DRC.
+                with_planes = attempt / "plane-routed.kicad_pcb"
+                plane_preparation = add_ground_plane(
+                    board, with_planes, options["ground_plane"], pre_route=True,
+                    kicad_python_path=options.get("kicad_python_path"),
+                )
+                _require_ok(plane_preparation, "ground_plane")
+                _require_outputs("ground_plane", plane_preparation, [with_planes])
+                from .pcb_layout import import_routing_session
+
+                routed_board = attempt / "verified-plane-routed.kicad_pcb"
+                imported_planes = import_routing_session(
+                    with_planes, out, routed_board, kicad_python_path=options.get("kicad_python_path"),
+                )
+                _require_ok(imported_planes, "ground_plane")
+                result = {**result, **imported_planes,
+                          "artifact": {"valid": True, "kind": "kicad_pcb", "path": str(routed_board),
+                                       "sha256": imported_planes["drc"]["board_sha256"]}}
             extras = [(out, root / out.name)]
             publish_hashes = None
             if any(key in options for key in ("route_contracts", "ground_plane", "copper_layers")):
@@ -926,6 +968,7 @@ def _execute_stage(
                 plane_report = {
                     "plan": options["ground_plane"], "plan_sha256": _digest(options["ground_plane"]),
                     "pre_route": plane_preparation, "after_route": result["zone_refill"],
+                    "preparation_phase": "after_route" if deferred_planes else "before_route",
                     "board_sha256": publish_hashes[routed_board], "routing_complete": True,
                     "electrical_or_manufacturing_approval": False,
                 }
@@ -957,7 +1000,7 @@ def _execute_stage(
                 extras.append((report, root / report.name))
                 publish_hashes[report] = file_sha256(report)
             outputs = _publish_attempt(
-                attempt, root, routed_board, root / routed_board.name, result, extras=extras,
+                attempt, root, routed_board, root / "routed.kicad_pcb", result, extras=extras,
                 expected_hashes=publish_hashes,
             )
         else:

@@ -485,6 +485,7 @@ def _validate_specctra_artifact(
     kind: str,
     *,
     source_dsn: str | Path | None = None,
+    allow_partial_nets: bool = False,
 ) -> dict[str, Any]:
     """Validate a DSN or SES artifact before it crosses a workflow boundary."""
     artifact = Path(path)
@@ -553,7 +554,7 @@ def _validate_specctra_artifact(
         # ``network_out``; require only source nets with at least two pins.
         routable_dsn_nets = set(dsn_validation.get("routable_nets", dsn_nets))
         missing_nets = sorted(routable_dsn_nets - set(details["nets"]))
-        if missing_nets:
+        if missing_nets and not allow_partial_nets:
             return {
                 "valid": False,
                 "reason": f"SES is missing net(s) from source DSN: {', '.join(missing_nets)}",
@@ -1625,6 +1626,7 @@ def _route_specctra(
     capability_probe: dict[str, Any] | None,
     clearance_baseline: dict[str, Any] | None = None,
     logs_root: Path | None = None,
+    allow_partial_nets: bool = False,
 ) -> dict[str, Any]:
     prepare_error = _prepare_destination(ses_path, overwrite=overwrite)
     if prepare_error:
@@ -1783,7 +1785,9 @@ def _route_specctra(
             router_logs=log_bundle,
         )
     try:
-        validation = _validate_specctra_artifact(staging, "ses", source_dsn=dsn_path)
+        validation = _validate_specctra_artifact(
+            staging, "ses", source_dsn=dsn_path, allow_partial_nets=allow_partial_nets,
+        )
         if not validation["valid"]:
             return _result_error(
                 f"Freerouting produced an invalid SES: {validation['reason']}",
@@ -2184,6 +2188,10 @@ def autoroute_pcb(
     kicad_cli_path: str | Path | None = None,
     kicad_python_path: str | Path | None = None,
     routed_board_path: str | Path | None = None,
+    repair_open_connections: bool = False,
+    recovery_timeout_seconds: float = 600,
+    max_repair_links: int = 256,
+    _allow_partial_nets: bool = False,
 ) -> dict[str, Any]:
     """Route a real KiCad board or a user-supplied DSN with Freerouting.
 
@@ -2192,6 +2200,24 @@ def autoroute_pcb(
     the session and require native DRC before publishing the routed PCB.
     A non-zero incomplete count returns ``status="partial"``.
     """
+    if not isinstance(repair_open_connections, bool):
+        return _result_error("repair_open_connections must be a boolean")
+    if repair_open_connections:
+        from .autoroute_recovery import autoroute_with_recovery
+
+        return autoroute_with_recovery(
+            pcb_path, output_path, routed_board_path=routed_board_path,
+            recovery_timeout_seconds=recovery_timeout_seconds, max_repair_links=max_repair_links,
+            effort=effort, timeout_seconds=timeout_seconds, max_passes=max_passes,
+            overwrite=overwrite, headless=headless, optimization_threads=optimization_threads,
+            optimizer_strategy=optimizer_strategy, optimizer_hybrid_ratio=optimizer_hybrid_ratio,
+            optimizer_item_selection=optimizer_item_selection,
+            optimizer_improvement_threshold=optimizer_improvement_threshold, seed=seed,
+            attempts=attempts, freerouting_path=freerouting_path,
+            kicad_cli_path=kicad_cli_path, kicad_python_path=kicad_python_path,
+        )
+    if _allow_partial_nets and (routed_board_path is None or Path(pcb_path).suffix.lower() != ".kicad_pcb"):
+        return _result_error("Partial-net recovery requires an isolated native board destination")
     timeout_error = _validate_timeout(timeout_seconds, "Routing")
     if timeout_error:
         return _result_error(timeout_error)
@@ -2384,6 +2410,7 @@ def autoroute_pcb(
         logs_root=ses_path.parent / ".circuit-weaver-router-logs",
         capability_probe=capability_probe,
         clearance_baseline=clearance_baseline,
+        **({"allow_partial_nets": True} if _allow_partial_nets else {}),
     )
 
     elapsed = time.perf_counter() - start_time

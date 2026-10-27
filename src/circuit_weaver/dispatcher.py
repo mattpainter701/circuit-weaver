@@ -4265,6 +4265,12 @@ def main() -> None:
         help="Routing timeout in seconds (default: 300)",
     )
     autoroute_p.add_argument("--overwrite", action="store_true", help="Atomically replace existing DSN/SES outputs")
+    autoroute_p.add_argument("--repair-open-connections", action="store_true",
+                             help="Recover partial native routing with bounded, DRC-verified same-net links")
+    autoroute_p.add_argument("--recovery-timeout", type=float, default=600,
+                             help="Native recovery budget in seconds (maximum 1800)")
+    autoroute_p.add_argument("--max-repair-links", type=int, default=256,
+                             help="Maximum native recovery links (1-512)")
     autoroute_p.add_argument(
         "--attempts", type=int, default=1,
         help="Routing candidates sharing --timeout (1-32; varies seeds or supported optimizer strategies)",
@@ -5719,6 +5725,9 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
                 kicad_cli_path=args.kicad_cli_path,
                 kicad_python_path=args.kicad_python_path,
                 routed_board_path=args.routed_board,
+                repair_open_connections=args.repair_open_connections,
+                recovery_timeout_seconds=args.recovery_timeout,
+                max_repair_links=args.max_repair_links,
             )
         ))
 

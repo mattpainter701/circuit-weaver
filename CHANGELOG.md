@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Add opt-in native routing recovery to CLI, Python and shared CLI/MCP workflows:
+  retain private partial copper, resolve authored netclass dimensions, and accept
+  each same-net repair only after fresh improving native DRC. Allow workflow
+  ground-plane preparation after routing while retaining the final plane gates.
+
 - Regenerate the existing 187/268/438-part scale inputs and full route contracts
   into evidence, checking frozen hashes instead of tracking expanded copies.
 
