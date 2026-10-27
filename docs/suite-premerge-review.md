@@ -3,8 +3,9 @@
 ## Decision and scope
 
 Keep [PR #39](https://github.com/mattpainter701/kicad_automations/pull/39) draft.
-It is the only open PR in this repository. All returned earlier PRs are closed;
-all except #4 are recorded as merged. There are no pending sibling PRs to consolidate.
+At the October 25 review it was the only open PR. A later repository-rename
+PR #40 is separate work; it is not part of the circuit consolidation. All
+returned earlier PRs were closed; all except #4 were recorded as merged.
 The local worktrees for older releases and CI fixes are retained history, not
 additional pending releases. Do not reopen or cherry-pick them merely because
 their commits differ after squash merges.
@@ -33,7 +34,7 @@ complete a phase.
 | 3. Active electrical behavior | Generic active/passive/transient controls; authored-current checker integrated into shared validation, CLI/MCP and workflow validation, with ledger resolution and installed client proof | Qualify device-specific models and actual load/source/connector/distribution envelopes. All ten actual corpus operating cases remain unverified. See the [phase continuation](suite-phase-continuation.md). |
 | 4. Library onboarding | Transactional hash-bound local imports and private footprint lookup; native exact-board library/DRC comparison | Demonstrate the promised symbol/model/device onboarding scope with negative controls and installed native workflows. Asset existence or declared provenance alone does not qualify a device. |
 | 5. Reproducible continuation | Shared lifecycle, lock/liveness checks, hash-bound checkpoints and real stdio MCP lifecycle trials | Repeat installed native interruption/resume and complete workflows across the acceptance families. Lifecycle calls alone do not prove a model-driven full design conversation. |
-| 6. Routing scale | 25-part four-layer CAD case; accepted earlier SDR; 438-part DAC placement; a new 96-part resume reached and failed placement acceptance without a resource stop | Diagnose the 96-part candidate's physical/label rejection using retained native diagnostics, finish its full CAD workflow, then continue the larger ladder. The 438-part DAC has no accepted final SES/board/preview. Prove all 110 authored paths, 144 filtered output legs and 72 GND return assertions; verify final planes and DRC. The 1,202-part import does not establish routing. |
+| 6. Routing scale | 25-part four-layer CAD case; accepted earlier SDR; October 27 controlled completion of the frozen 438-part DAC with all 110 paths, both GND planes, zero native DRC blockers and 438/438 assembly coverage; 96-part / 48-path CAD completion at the approved 90 mm outline | Qualify repeatable unattended completion and the remaining scale/family cases. Keep controlled repair distinct from default one-shot workflow success. The original 76.8 × 75 mm relay trials remain failed history; the 1,202-part import does not establish routing. See the [completion record](suite-circuit-completion.md). |
 | 7. Practical families | Six-family preflight corpus and generic family transient examples | Complete native CAD cases and independently modeled faults/limits for the actual operating circuits. The relay's conditional 23.04 A arithmetic is not a verified operating case. RF, timing, thermal, impedance and return-path qualification remain separate open gates. |
 | 8. Release validation | Earlier exact-wheel/install/client proofs and focused local tests | Build and verify the final committed candidate, repeat installed interfaces and required native acceptance, then obtain fresh required green CI for its exact SHA. No merge, version tag or publication while those gates remain open. |
 
@@ -43,6 +44,13 @@ is retained under `automation_validation_results/full-dac-routing-20261024/`:
 the native checkpoint adapter compiled, but its geometry restore and final
 native routing have not been verified. Do not promote it into production merely
 because compilation succeeded.
+
+The [October 27 completion record](suite-circuit-completion.md) supersedes those
+96/438-part statuses as new evidence is accepted. It also records the generated
+bulk reduction with frozen coverage. The 96-part CAD completion uses the user-
+approved 90 mm outline revision; original-outline failures remain visible.
+Do not close the whole scale phase from these two cases or conflate CAD
+connectivity with electrical qualification.
 
 ## Findings corrected in this review
 

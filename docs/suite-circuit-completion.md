@@ -21,6 +21,22 @@ Ruff passed. Original expanded files remain in Git history and the retained
 pre-trim archive. This reduces review bulk; it is not a measured CI-minute
 saving or a new circuit acceptance result.
 
+Commit `06dbd53` also removes the two expanded unseen-scale specifications and
+the repeated inline route-contract bulk. A second frozen inventory preserves
+the full pre-trim suite and all three inputs. The handcrafted gateway source
+remains tracked. The three cases still expand to 187, 268 and 438 parts; the DAC
+retains all 110 paths, 144 filtered output legs and 72 GND return assertions.
+The diverse comparison cases use the same retained builders and still match
+their earlier hashes. No circuit or benchmark case was added.
+
+The resulting PR has about 40,900 additions, down from 106,010. The focused
+fixture/runner/connectivity batch passes 55 tests, including a deleted return
+assertion and an escaping input path. Commit `fc80597` makes verified generated
+inputs usable in evidence directories outside the checkout while retaining
+input-directory containment. Both suites also regenerate and load using the
+isolated installed runtime. Its 229 package files match the committed archive;
+see `installed-fixtures10/proof.json`. Ruff and whitespace checks pass.
+
 ## Diagnose the 96-part relay placement
 
 The original design and native prototype remain frozen at 76.8 × 75 mm.
@@ -39,17 +55,49 @@ intermediate gaps. The focused placement/label/route-gate regression passed
 An isolated 0.8 mm font diagnostic still left five unresolved references;
 the authored 1 mm font and native publication gates remain unchanged.
 
-The next floorplan revision depends on whether the generated outline is a
-mechanical requirement. A larger outline must be an explicit circuit revision,
-with the original attempt retained. Completion still requires all 96 parts,
-all 48 functional output paths, physical/reference acceptance, complete routing,
-four copper layers, saved GND fill, fresh DRC and full assembly coverage.
+An isolated **90 × 90 mm revision** now meets the native CAD gates. The user
+approved modest outline growth on October 27 after reviewing the scope of this
+generated fixture. The original 76.8 × 75 mm attempt remains failed and its
+source files remain unchanged. Do not describe the original outline as solved.
+
+The revision places all 96 parts at the preferred spacing with zero unresolved
+references or conflicts. It keeps the authored 1 mm fonts and text visibility.
+Routing required retained router copper and six explicit same-net connections,
+each accepted only after fresh native DRC decreased the open count without
+introducing another blocker. This controlled completion is not a demonstration
+that the default one-shot autorouter completes the circuit unattended.
+
+The final full SES imports through the public native route gate, preserves the
+accepted footprint poses and every pad/net, and refills the authored internal
+GND plane. Independent native reload verifies 96 footprints, 427 pads, four
+copper layers, all 48 output paths, zero DRC blockers and zero label conflicts.
+The adopted completed board then runs the normal preview stage, accounting for
+96/96 represented parts and resolved models. It does not rewrite the earlier
+failed workflow checkpoint as a pass.
+
+Final project: `relay-90mm-revision01/completed-project/` in the evidence root.
+Board SHA-256: `d44c95c0702850432254616df85177253a6c31e578dc0a09e283e340460dd123`.
+Session SHA-256: `fdebd989901ab44ec21ed9f3133ec2e3ce0cb0eb00f1101321f19a6ccc06ac2e`.
+Proof: `relay-90mm-revision01/final-validation02/proof.json`, including independent
+pad/pose, path, plane, native-reference and preview checks. Electrical load,
+thermal and hardware qualification remain open.
+
+A separate compact floorplan trial on the original outline also remains
+rejected: three physical blockers, 52 unresolved references and 136 conflicts.
+Its fonts and original source were preserved. This is evidence about that
+specific trial, not proof that every possible layout at that size is impossible.
+See `relay-compact12/proof.json`. The accepted 90 mm revision remains separate.
+The later scope approval is recorded in
+`relay-90mm-revision01/final-validation02/scope-approval.json`, bound to the
+accepted board hash. Historical trial records retain their status at execution.
 
 ## Continue the 438-part DAC
 
-The installed candidate was built from committed source `711af1f`; all 228
-package files match the archive, wheel, sdist and isolated install. Wheel
-SHA-256: `6522fb6604f0475d332a712e34db8f90651cad6a60cba6dd161382dd431e702c`.
+The first attempt used committed source `711af1f`. Subsequent controlled runs
+use the installed candidate built from `1b74580`; all 229 package files match
+its archive, wheel, sdist and isolated install. They remain identical at
+`fc80597`. Wheel SHA-256:
+`e179ac9127491d1ebd1852716ec8c63eaa038bf99dee5046e9b494a1438183e5`.
 The saved 438-part / 1,220-pad placement is frozen, including its 300 × 220 mm
 outline, pad-net identities and two internal GND planes. A stock Freerouting
 2.5 run used one router CPU, a 384 MiB Java heap, the 2 GiB host reserve and
@@ -79,9 +127,42 @@ observed resource leak without weakening circuit acceptance. The expanded
 workflow/process regression passes 91 tests; peak owned memory was 94,769,152
 bytes and no owned children remained after the batch.
 
-Final acceptance requires the exact routed board, session and assembly preview;
-unchanged placement/pads; all 110 authored paths, 144 filtered signal legs and
-72 GND returns; both preserved and connected internal planes; fresh zero-blocker
-DRC; and 438/438 represented components and resolved models. An active routing
-process, generated DSN or incomplete candidate does not satisfy these gates.
+The frozen DAC now meets those native CAD acceptance gates. Controlled routing
+without prefilled planes retained partial copper instead of discarding each
+incomplete attempt. Native checks accepted progress from 224 to 105 to 94 opens,
+with no other DRC blockers. A private bounded geometry helper completed the
+remaining 94 explicit same-net links, accepting each only after fresh native
+DRC strictly reduced the open count without another blocker. It preserved all
+footprint poses, pad geometry and reference fields. This helper and the private
+checkpoint adapter are retained diagnostics, not a promoted default router.
+
+The fully connected no-plane board exported a complete SES using stock
+Freerouting with routing, fanout and optimization disabled. The public route
+import gate then imported that full session onto the frozen placement with
+both authored GND-plane definitions, refilled them and passed fresh DRC.
+The final board was explicitly adopted and completed the normal preview stage;
+the historical failed workflow remains failed. This controlled CAD completion
+does not establish unattended completion of the default one-shot workflow.
+
+Read-only independent acceptance passes on the exact saved board:
+
+- 438 footprints, 1,220 pads, unchanged native placement and pad-net geometry;
+- all 110 authored paths, 144 filtered signal legs and 72 GND return assertions;
+- F.Cu / In1.Cu / In2.Cu / B.Cu, with both preserved GND planes filled, connected
+  and free of reported islands or pending GND pads;
+- zero fresh native DRC blockers;
+- actual assembly SVG bound to that board, with 438/438 represented components,
+  438/438 resolved models and zero missing entries.
+
+Final project: `dac-completed-project10/` in the evidence root.
+Board SHA-256: `1e2c1feebaf58ba644530f202a04150458b08ff0000e6f17b574d71050537a8e`.
+Session SHA-256: `b6cb63ca5908e42417366810b1a6aea13329d5c24271061aca1fc6c91afea7b7`.
+Independent proof: `dac-final-validation13/proof.json`. The validator compares
+exact archived runtime bytes, retaining Windows archive line endings, and
+pins its source, native files and original contract snapshot before execution.
+Its native geometry, contract, plane, DRC and preview gates are unchanged.
+Source inputs remain unchanged. The repair, final import/preview and independent
+validation jobs peaked at 285,409,280 / 606,437,376 / 305,614,848 bytes respectively;
+all terminated with zero remaining owned processes.
+
 Electrical, timing, thermal, impedance and hardware qualification remain open.
