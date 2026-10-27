@@ -1,4 +1,5 @@
 """Fail-closed tests for native plane-to-pad connectivity checks."""
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -135,6 +136,122 @@ def test_transitive_track_via_component_reaching_selected_zone_is_connected():
     board = Board([pad], [zone], {pad.uuid: [pad, track, via, zone]})
 
     assert pending(board) == {"GND": []}
+
+
+@pytest.mark.parametrize("attached", [True, False])
+def test_required_native_type_filter_preserves_zone_connectivity_check(monkeypatch, attached):
+    names = ("PCB_PAD_T", "PCB_TRACE_T", "PCB_ARC_T", "PCB_VIA_T", "PCB_ZONE_T")
+    native_types = {name: index + 1 for index, name in enumerate(names)}
+    monkeypatch.setitem(sys.modules, "pcbnew", SimpleNamespace(**native_types))
+    pad, zone = Pad("pad-a", "J1", "1"), Zone("zone-gnd")
+    board = Board([pad], [zone], {})
+    calls = []
+
+    def search(item, item_types, ignore_netcodes=False):
+        calls.append((item.uuid, item_types, ignore_netcodes))
+        return [pad, Item("trace", "PCB_TRACK"), Item("arc", "PCB_ARC"), Item("via", "PCB_VIA")] + (
+            [zone] if attached else []
+        )
+
+    board.connectivity.GetConnectedItems = search
+
+    assert pending(board) == {"GND": [] if attached else ["J1.1"]}
+    assert calls == [(pad.uuid, list(native_types.values()), False)]
+
+
+def test_required_native_filter_missing_zone_type_fails_closed(monkeypatch):
+    monkeypatch.setitem(sys.modules, "pcbnew", SimpleNamespace(
+        PCB_PAD_T=1, PCB_TRACE_T=2, PCB_ARC_T=3, PCB_VIA_T=4,
+    ))
+    pad = Pad("pad-a", "J1", "1")
+    board = Board([pad], [Zone("zone-gnd")], {})
+    board.connectivity.GetConnectedItems = lambda item, item_types, ignore_netcodes=False: [pad]
+
+    with pytest.raises(ValueError, match="conductive item-type filter"):
+        pending(board)
+
+
+def test_required_native_filter_query_failure_is_not_treated_as_connected(monkeypatch):
+    monkeypatch.setitem(sys.modules, "pcbnew", SimpleNamespace(
+        PCB_PAD_T=1, PCB_TRACE_T=2, PCB_ARC_T=3, PCB_VIA_T=4, PCB_ZONE_T=5,
+    ))
+    pad = Pad("pad-a", "J1", "1")
+    board = Board([pad], [Zone("zone-gnd")], {})
+
+    def search(item, item_types, ignore_netcodes=False):
+        raise TypeError("native filter conversion failed")
+
+    board.connectivity.GetConnectedItems = search
+    with pytest.raises(ValueError, match="copper-neighbor connectivity queries"):
+        pending(board)
+
+
+def _legacy_neighbor_board(monkeypatch):
+    monkeypatch.setitem(sys.modules, "pcbnew", SimpleNamespace(
+        PCB_PAD_T=1, PCB_TRACE_T=2, PCB_ARC_T=3, PCB_VIA_T=4, PCB_ZONE_T=5,
+    ))
+    attached, detached = Pad("attached", "J1", "1"), Pad("detached", "J2", "1")
+    track, via, arc = Item("track", "PCB_TRACK"), Item("via", "PCB_VIA"), Item("arc", "PCB_ARC")
+    loose_track = Item("loose-track", "PCB_TRACK")
+    zone = Zone("zone-gnd")
+    board = Board([attached, detached], [zone], {})
+    adjacency = {
+        attached.uuid: [track], track.uuid: [attached, via], via.uuid: [track, arc],
+        arc.uuid: [via], detached.uuid: [loose_track], loose_track.uuid: [detached],
+        zone.uuid: [arc],
+    }
+
+    def unsupported_cluster(*args):
+        raise TypeError("initializer_list cannot be converted")
+
+    board.connectivity.GetConnectedItems = unsupported_cluster
+    board.connectivity.GetConnectedPads = lambda item: [
+        neighbor for neighbor in adjacency.get(item.uuid, ()) if neighbor.GetClass() == "PAD"
+    ]
+    board.connectivity.GetConnectedTracks = lambda item: [
+        neighbor for neighbor in adjacency.get(item.uuid, ()) if neighbor.GetClass() != "PAD"
+    ]
+    return board, adjacency, attached, detached, zone
+
+
+def test_initializer_list_fallback_proves_multihop_track_via_arc_zone_contact(monkeypatch):
+    board, _, _, _, _ = _legacy_neighbor_board(monkeypatch)
+
+    assert pending(board) == {"GND": ["J2.1"]}
+
+
+def test_neighbor_fallback_does_not_bridge_components_through_zone_parent(monkeypatch):
+    board, adjacency, attached, detached, zone = _legacy_neighbor_board(monkeypatch)
+    # A zone parent can represent multiple filled islands; its presence as a
+    # neighbor must not join an unrelated copper component into the pad cache.
+    adjacency[attached.uuid].append(zone)
+    adjacency[zone.uuid].append(detached)
+    # Detach J2 from every filled-zone anchor, while retaining an API-returned
+    # zone parent in J1's neighborhood to exercise the no-zone-traversal rule.
+    original_pads = board.connectivity.GetConnectedPads
+    board.connectivity.GetConnectedPads = lambda item: [] if item is zone else original_pads(item)
+
+    assert pending(board) == {"GND": ["J2.1"]}
+
+
+def test_neighbor_fallback_rejects_foreign_net_path_to_zone(monkeypatch):
+    board, adjacency, attached, _, _ = _legacy_neighbor_board(monkeypatch)
+    bridge = Item("foreign-bridge", "PCB_TRACK", "VCC")
+    adjacency[attached.uuid] = [bridge]
+    adjacency[bridge.uuid] = [Item("arc", "PCB_ARC")]
+
+    assert pending(board) == {"GND": ["J1.1", "J2.1"]}
+
+
+def test_neighbor_query_failure_propagates_without_unverified_success(monkeypatch):
+    board, _, _, _, _ = _legacy_neighbor_board(monkeypatch)
+
+    def unavailable(_item):
+        raise RuntimeError("native neighbors unavailable")
+
+    board.connectivity.GetConnectedTracks = unavailable
+    with pytest.raises(RuntimeError, match="native neighbors unavailable"):
+        pending(board)
 
 
 @pytest.mark.parametrize("zone", [

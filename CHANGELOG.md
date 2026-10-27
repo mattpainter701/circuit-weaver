@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Adapt saved ground-plane connectivity checks to KiCad 8/9 bindings while
+  retaining native copper-path and detached-pad validation.
+
 - Preserve machine-readable MCP error responses on Python 3.10 with newer
   supported SDKs, retaining the error flag and exact JSON envelope.
 

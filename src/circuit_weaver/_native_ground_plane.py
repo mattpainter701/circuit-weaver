@@ -119,6 +119,59 @@ def _native_item_id(item):
     return value
 
 
+def _connected_copper_neighbors(connectivity, pad, filled_zones):
+    """Walk native copper neighbors and prove contact with a filled zone."""
+    pads = getattr(connectivity, "GetConnectedPads", None)
+    tracks = getattr(connectivity, "GetConnectedTracks", None)
+    if not callable(pads) or not callable(tracks):
+        raise ValueError("native copper-neighbor connectivity queries are unavailable")
+    net = str(pad.GetNetname())
+    anchors = {}
+    for zone in filled_zones:
+        if str(zone.GetNetname()) != net:
+            continue
+        for item in list(pads(zone)) + list(tracks(zone)):
+            if str(item.GetNetname()) == net and str(item.GetClass()) != "ZONE":
+                anchors.setdefault(_native_item_id(item), []).append(zone)
+    pending, visited, members, reached_zones = [pad], set(), [], {}
+    while pending:
+        item = pending.pop()
+        item_id = _native_item_id(item)
+        if item_id in visited or str(item.GetNetname()) != net:
+            continue
+        # Never bridge distinct fill islands through their common ZONE parent.
+        if str(item.GetClass()) == "ZONE":
+            continue
+        visited.add(item_id)
+        members.append(item)
+        for zone in anchors.get(item_id, ()):
+            reached_zones[_native_item_id(zone)] = zone
+        pending.extend(list(pads(item)) + list(tracks(item)))
+    return members + list(reached_zones.values())
+
+
+def _connected_copper_items(search, pad, connectivity=None, filled_zones=()):
+    """Adapt modern flags, KiCad 9 vectors, and KiCad 8 native neighbors."""
+    try:
+        return list(search(pad))
+    except TypeError:
+        # KiCad 8 requires an explicit std::initializer_list<KICAD_T>;
+        # newer bindings provide the all-conductor default themselves.
+        import pcbnew
+
+        names = ("PCB_PAD_T", "PCB_TRACE_T", "PCB_ARC_T", "PCB_VIA_T", "PCB_ZONE_T")
+        try:
+            item_types = [getattr(pcbnew, name) for name in names]
+        except AttributeError as exc:
+            raise ValueError("native conductive item-type filter is unavailable") from exc
+        try:
+            return list(search(pad, item_types, False))
+        except TypeError:
+            # KiCad 8 exposes initializer_list without a usable Python
+            # conversion. Its stable one-argument neighbor APIs remain native.
+            return _connected_copper_neighbors(connectivity, pad, filled_zones)
+
+
 def _unconnected_plane_pads_by_net(board, nets, *, rebuild=True):
     """Find pads whose native transitive cluster reaches no filled net zone.
 
@@ -135,12 +188,14 @@ def _unconnected_plane_pads_by_net(board, nets, *, rebuild=True):
         raise ValueError("native transitive connectivity query is unavailable")
     result = {net: [] for net in nets}
     zone_ids = {net: set() for net in result}
+    filled_zones = []
     for zone in board.Zones():
         net = str(zone.GetNetname())
         if (net in zone_ids and not zone.GetIsRuleArea()
                 and str(board.GetLayerName(int(zone.GetLayer()))).endswith(".Cu") and zone.IsFilled()
                 and zone.HasFilledPolysForLayer(zone.GetLayer())):
             zone_ids[net].add(_native_item_id(zone))
+            filled_zones.append(zone)
     cached = {net: {} for net in result}
     _pad_map(board)  # Validate identity and net consistency for every physical pad.
     pad_ids = set()
@@ -159,7 +214,7 @@ def _unconnected_plane_pads_by_net(board, nets, *, rebuild=True):
                 raise ValueError("native pad connectivity identities are not unique")
             pad_ids.add(pad_id)
             if pad_id not in cached[net]:
-                members = list(search(pad))
+                members = _connected_copper_items(search, pad, connectivity, filled_zones)
                 same_net = [item for item in members if str(item.GetNetname()) == net]
                 ids = {_native_item_id(item) for item in same_net}
                 attached = bool(ids & zone_ids[net])
