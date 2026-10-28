@@ -24,6 +24,12 @@ def test_native_stitch_via_resolves_filled_local_thermal_island(tmp_path):
             pytest.fail(reason)
         pytest.skip(reason)
 
+    evidence_root = os.getenv("CW_NATIVE_PCB_EVIDENCE")
+    if evidence_root:
+        retained = Path(evidence_root) / "plane-stitch"
+        retained.mkdir(parents=True, exist_ok=False)
+        tmp_path = retained
+
     source = tmp_path / "stitch_fixture.kicad_pcb"
     candidate = tmp_path / "stitch_candidate.kicad_pcb"
     project = source.with_suffix(".kicad_pro")
@@ -32,13 +38,15 @@ def test_native_stitch_via_resolves_filled_local_thermal_island(tmp_path):
     recipe.write_text(
         textwrap.dedent(
             r'''
-            import json, os, sys
+            import json, os, sys, hashlib
             from pathlib import Path
             if os.name == "nt":
                 import wx
                 _wx_app = wx.GetApp() or wx.App(False)
             import pcbnew
-            source = Path(sys.argv[1])
+            source = Path(sys.argv[1]); package = Path(sys.argv[2])
+            sys.path.insert(0, str(package))
+            import _kicad_worker as worker
 
             def point(x, y):
                 return pcbnew.VECTOR2I(pcbnew.FromMM(x), pcbnew.FromMM(y))
@@ -86,10 +94,11 @@ def test_native_stitch_via_resolves_filled_local_thermal_island(tmp_path):
             # one-spoke starved thermal that a via into the plane can repair.
             add_gnd_anchor("J2", (5, 5))
             add_gnd_anchor("J3", (20, 15))
-            manual_spoke = pcbnew.PCB_TRACK(board)
-            manual_spoke.SetStart(point(15, 15)); manual_spoke.SetEnd(point(20, 15))
-            manual_spoke.SetWidth(pcbnew.FromMM(0.25)); manual_spoke.SetLayer(pcbnew.F_Cu)
-            manual_spoke.SetNet(gnd); board.Add(manual_spoke)
+            for start, end in (((15, 15), (19, 15)), ((19, 15), (20, 15))):
+                manual_spoke = pcbnew.PCB_TRACK(board)
+                manual_spoke.SetStart(point(*start)); manual_spoke.SetEnd(point(*end))
+                manual_spoke.SetWidth(pcbnew.FromMM(0.25)); manual_spoke.SetLayer(pcbnew.F_Cu)
+                manual_spoke.SetNet(gnd); board.Add(manual_spoke)
 
             # A closed foreign-net track loop leaves a narrow GND corridor
             # beside the PTH pad. Its single legal thermal direction is the
@@ -129,6 +138,58 @@ def test_native_stitch_via_resolves_filled_local_thermal_island(tmp_path):
             board.BuildConnectivity()
             if not pcbnew.SaveBoard(str(source), board):
                 raise RuntimeError("could not save filled stitch fixture")
+            footprint_rows = []
+            for footprint in board.GetFootprints():
+                pad_rows = []
+                for item in footprint.Pads():
+                    try:
+                        layers = sorted(int(layer) for layer in item.GetLayerSet().Seq())
+                    except Exception as exc:
+                        layers = {"error": f"{type(exc).__name__}: {exc}"}
+                    flash = {}
+                    for layer_name in ("F_Cu", "In1_Cu", "In2_Cu", "B_Cu"):
+                        layer = getattr(pcbnew, layer_name, None)
+                        getter = getattr(item, "GetFlashLayer", None)
+                        if callable(getter) and layer is not None:
+                            try:
+                                flash[layer_name] = bool(getter(layer))
+                            except Exception as exc:
+                                flash[layer_name] = f"{type(exc).__name__}: {exc}"
+                    pad_rows.append({"number": item.GetNumber(), "net": item.GetNetname(),
+                        "attribute": int(item.GetAttribute()), "shape": int(item.GetShape()),
+                        "layer_ids": layers, "flash_layers": flash,
+                        "position_iu": [int(item.GetPosition().x), int(item.GetPosition().y)],
+                        "size_iu": [int(item.GetSize().x), int(item.GetSize().y)],
+                        "drill_iu": [int(item.GetDrillSize().x), int(item.GetDrillSize().y)]})
+                footprint_rows.append({"reference": footprint.GetReference(), "pads": pad_rows})
+            diagnostics = {
+                "status": "captured", "kicad_version": pcbnew.Version(),
+                "board_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                "footprints": footprint_rows,
+                "zone_fill": worker._zone_fill_state(board, pcbnew),
+                "connected_copper": worker._zone_connected_counts(board),
+                "zone_definitions": worker._zone_definition_state(board, pcbnew),
+            }
+            filled_in1_zone = next((zone for zone in board.Zones()
+                                    if zone.GetNetname() == "GND"
+                                    and int(zone.GetLayer()) == int(pcbnew.In1_Cu)), None)
+            if filled_in1_zone is None:
+                raise RuntimeError("reloaded filled fixture has no In1.Cu GND zone")
+            in1_polygons = filled_in1_zone.GetFilledPolysList(pcbnew.In1_Cu)
+            diagnostics["in1_filled_point_probes"] = {}
+            for label, xy in {"anchor_center": (20, 15), "anchor_inside_copper": (19, 15),
+                              "target_center": (15, 15)}.items():
+                results = []
+                for index in range(int(in1_polygons.OutlineCount())):
+                    try:
+                        results.append({"outline": index,
+                                        "contains": bool(in1_polygons.Contains(point(*xy), index))})
+                    except Exception as exc:
+                        results.append({"outline": index,
+                                        "contains_error": f"{type(exc).__name__}: {exc}"})
+                diagnostics["in1_filled_point_probes"][label] = {"point_mm": xy, "outlines": results}
+            source.with_name("native-fixture-inventory.json").write_text(
+                json.dumps(diagnostics, indent=2, default=str) + "\n", encoding="utf-8")
             '''
         ),
         encoding="utf-8",
@@ -142,13 +203,18 @@ def test_native_stitch_via_resolves_filled_local_thermal_island(tmp_path):
     import circuit_weaver
     package = Path(circuit_weaver.__file__).resolve().parent
     created = subprocess.run(
-        [native_python, str(recipe), str(source)],
+        [native_python, str(recipe), str(source), str(package)],
         capture_output=True, text=True, timeout=120,
     )
     assert created.returncode == 0, created.stdout + created.stderr
     source_snapshot = source.read_bytes()
 
     baseline = run_drc(source, evidence_ledger=EvidenceLedger(), timeout=180, project_context=tmp_path)
+    if evidence_root:
+        baseline_payload = baseline.to_dict()
+        baseline_payload["raw_report"] = baseline.raw_report
+        (tmp_path / "baseline-native-drc.json").write_text(
+            json.dumps(baseline_payload, indent=2, default=str) + "\n", encoding="utf-8")
     assert baseline.status == "ok", baseline.failure_reason
     raw = baseline.raw_report
     assert isinstance(raw, dict), "native baseline DRC did not return its raw report"
