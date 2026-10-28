@@ -62,6 +62,66 @@ def test_demo_rejects_stale_final_board_evidence(tmp_path):
         _demo.verify_routing(payload, board)
 
 
+def test_route_recipe_defaults_keep_existing_cli_and_timeout(tmp_path):
+    args = SimpleNamespace(
+        attempts=3, route_timeout=180, route_max_passes=20,
+        repair_open_connections=False, recovery_timeout=600,
+    )
+    source, destination = tmp_path / "placed.kicad_pcb", tmp_path / "routed.kicad_pcb"
+
+    assert _demo.route_cli_arguments(args, source, destination) == [
+        "autoroute", str(source), "--routed-board", str(destination),
+        "--attempts", "3", "--timeout", "180", "--max-passes", "20",
+        "--optimization-threads", "0",
+    ]
+    assert _demo.workflow_command_timeout(args) == 300
+    budget = _demo.route_budget(args)
+    assert _demo.route_command_timeout(args) == budget["minimum_route_parent_timeout_seconds"] == 780
+    assert budget["active_recovery_timeout_seconds"] == 0
+
+
+def test_route_recovery_recipe_gets_combined_timeout_and_exact_options(tmp_path):
+    args = SimpleNamespace(
+        attempts=1, route_timeout=1200, route_max_passes=8,
+        repair_open_connections=True, recovery_timeout=1200.0,
+    )
+    source, destination = tmp_path / "placed.kicad_pcb", tmp_path / "routed.kicad_pcb"
+
+    assert _demo.workflow_command_timeout(args) == 1320
+    assert _demo.route_command_timeout(args) == 3000
+    assert _demo.route_cli_arguments(args, source, destination) == [
+        "autoroute", str(source), "--routed-board", str(destination),
+        "--attempts", "1", "--timeout", "1200", "--max-passes", "8",
+        "--optimization-threads", "0", "--repair-open-connections",
+        "--recovery-timeout", "1200.0",
+    ]
+    budget = _demo.route_budget(args)
+    assert budget["route_attempts"] == 1
+    assert budget["active_recovery_timeout_seconds"] == 1200
+    assert budget["native_postprocess_budget_seconds"] == 600
+    assert budget["minimum_route_parent_timeout_seconds"] == 3000
+
+
+@pytest.mark.parametrize(("option", "value"), [
+    ("--route-max-passes", "-1"),
+    ("--route-max-passes", "10000"),
+    ("--route-timeout", "0"),
+    ("--recovery-timeout", "nan"),
+    ("--recovery-timeout", "1800.1"),
+])
+def test_runner_rejects_out_of_range_route_recipe_before_output_creation(tmp_path, monkeypatch, option, value):
+    output = tmp_path / "not-created"
+    monkeypatch.setattr("sys.argv", [
+        "validate_app_workflow.py", "--output", str(output), option, value,
+    ])
+
+    with pytest.raises(SystemExit) as error:
+        _demo.main()
+
+    assert error.value.code == 2
+    assert not output.exists()
+
+
 def test_native_contract_failure_is_a_hard_barrier_before_placement(tmp_path, monkeypatch):
     calls = []
     demo = SimpleNamespace(command=lambda name, arguments: calls.append((name, arguments)) or {})

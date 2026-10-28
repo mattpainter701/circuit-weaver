@@ -11,6 +11,42 @@ import pytest
 from circuit_weaver import _native_routing_repair as repair
 
 
+class _TruncatingNativeUnits:
+    @staticmethod
+    def FromMM(value):
+        return int(value * 1_000_000)
+
+    @staticmethod
+    def ToMM(value):
+        return value * 1e-6
+
+    @staticmethod
+    def VECTOR2I(x, y):
+        return x, y
+
+
+@pytest.mark.parametrize("native_point", [
+    (31_550_000, 73_123_456),
+    (-31_550_000, -13_456_789),
+    (1_234_567, -2_345_678),
+    (1, -1),
+])
+def test_native_query_and_output_points_preserve_exact_source_iu(native_point):
+    millimeters = tuple(_TruncatingNativeUnits.ToMM(value) for value in native_point)
+
+    assert repair._native_point_vector(_TruncatingNativeUnits, millimeters) == native_point
+
+
+def test_native_point_rounding_avoids_reproduced_one_iu_truncation():
+    coordinate = _TruncatingNativeUnits.ToMM(31_550_000)
+    assert _TruncatingNativeUnits.FromMM(coordinate) == 31_549_999
+    assert _TruncatingNativeUnits.FromMM(-coordinate) == -31_549_999
+
+    assert repair._native_point_vector(_TruncatingNativeUnits, (coordinate, -coordinate)) == (
+        31_550_000, -31_550_000,
+    )
+
+
 class _Pad:
     def __init__(self, name="SIG", code=1, class_name="Default", uuid="pad-1"):
         self.name = name

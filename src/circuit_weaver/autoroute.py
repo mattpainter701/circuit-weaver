@@ -1608,6 +1608,50 @@ def _run_router_to_logs(
         )
 
 
+def _partial_route_timeout_budget(
+    host_timeout_seconds: float,
+    *,
+    capability_probe: dict[str, Any] | None,
+    enabled: bool,
+) -> dict[str, Any]:
+    """Describe the cooperative stop budget used only by private partial routing.
+
+    Keep the process-level timeout authoritative. A shorter Freerouting job
+    deadline gives its normal CLI path time to serialize an SES before the
+    host kills the process.
+    """
+    result: dict[str, Any] = {
+        "host_timeout_seconds": host_timeout_seconds,
+        "reserved_export_seconds": 60 if enabled else 0,
+        "internal_job_timeout_seconds": None,
+        "configured": False,
+    }
+    if not enabled:
+        result["reason"] = "private partial-route mode is disabled"
+        return result
+    if not _freerouting_v25_or_newer(capability_probe):
+        result["reason"] = "requires Freerouting 2.5.0 or newer"
+        return result
+    internal_seconds = math.floor(host_timeout_seconds - 60)
+    if internal_seconds <= 0:
+        result["reason"] = "host timeout does not leave a positive whole-second router budget"
+        return result
+    result.update(
+        {
+            "internal_job_timeout_seconds": internal_seconds,
+            "configured": True,
+            "reason": "configured; this records a requested deadline, not a confirmed timeout",
+        }
+    )
+    return result
+
+
+def _format_job_timeout(timeout_seconds: int) -> str:
+    hours, remainder = divmod(timeout_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
 def _route_specctra(
     dsn_path: Path,
     ses_path: Path,
@@ -1627,6 +1671,7 @@ def _route_specctra(
     clearance_baseline: dict[str, Any] | None = None,
     logs_root: Path | None = None,
     allow_partial_nets: bool = False,
+    cooperative_partial_timeout: bool = False,
 ) -> dict[str, Any]:
     prepare_error = _prepare_destination(ses_path, overwrite=overwrite)
     if prepare_error:
@@ -1657,6 +1702,16 @@ def _route_specctra(
             ]
         )
     v25_or_newer = _freerouting_v25_or_newer(capability_probe)
+    timeout_budget = _partial_route_timeout_budget(
+        timeout_seconds,
+        capability_probe=capability_probe,
+        enabled=cooperative_partial_timeout,
+    )
+    if timeout_budget["internal_job_timeout_seconds"] is not None:
+        routing_command.append(
+            "--router.job_timeout="
+            + _format_job_timeout(timeout_budget["internal_job_timeout_seconds"])
+        )
     if optimization_threads is not None:
         if _modern_router(capability_probe) and optimization_threads == 0:
             routing_command.append("--router.optimizer.enabled=false")
@@ -1817,6 +1872,7 @@ def _route_specctra(
             "optimizer_item_selection": optimizer_item_selection,
             "optimizer_improvement_threshold": optimizer_improvement_threshold,
             "seed": seed,
+            **({"timeout_budget": timeout_budget} if cooperative_partial_timeout else {}),
         }
         if stats["incomplete"] is None:
             return _result_error(
@@ -2006,7 +2062,7 @@ def _route_candidates(
     """Run an isolated portfolio and atomically publish its best valid session."""
     stable_logs_root = Path(logs_root) if logs_root is not None else ses_path.parent / ".circuit-weaver-router-logs"
     if attempts == 1 and not native_placement_portfolio:
-        return _route_specctra(
+        result = _route_specctra(
             dsn_path,
             ses_path,
             command,
@@ -2016,6 +2072,13 @@ def _route_candidates(
             logs_root=stable_logs_root,
             **options,
         )
+        if options.get("cooperative_partial_timeout"):
+            result["timeout_budget"] = _partial_route_timeout_budget(
+                timeout_seconds,
+                capability_probe=options.get("capability_probe"),
+                enabled=True,
+            )
+        return result
     deadline = time.perf_counter() + timeout_seconds
     attempt_rows: list[dict[str, Any]] = []
     winner: dict[str, Any] | None = None
@@ -2108,6 +2171,12 @@ def _route_candidates(
                     "status": result["status"],
                     "timeout_seconds": allowance,
                 }
+                if options.get("cooperative_partial_timeout"):
+                    row["timeout_budget"] = _partial_route_timeout_budget(
+                        allowance,
+                        capability_probe=options.get("capability_probe"),
+                        enabled=True,
+                    )
                 if placement_order is not None:
                     row["placement_order_strategy"] = placement_order_kind
                     row["placement_order"] = placement_order
@@ -2155,6 +2224,20 @@ def _route_candidates(
                 "ranking": ["incomplete", "clearance_unreported", "trace_length_mm", "vias", "traces"],
                 "attempts": attempt_rows,
             }
+            if options.get("cooperative_partial_timeout"):
+                search["timeout_budget"] = {
+                    "overall_host_timeout_seconds": timeout_seconds,
+                    "reserved_export_seconds_per_attempt": 60,
+                    "internal_job_timeout_policy": (
+                        "floor(each attempt's subprocess timeout allowance minus 60 seconds), "
+                        "only for Freerouting 2.5.0+ and a positive whole-second result"
+                    ),
+                    "per_attempt_internal_job_timeout_seconds": [
+                        row["timeout_budget"]["internal_job_timeout_seconds"]
+                        for row in attempt_rows
+                        if "timeout_budget" in row
+                    ],
+                }
             if winner is None or winner_path is None:
                 return _result_error("No routing attempt produced a verified usable session", search=search)
             error = _publish_staged_file(winner_path, ses_path, overwrite=overwrite)
@@ -2411,6 +2494,7 @@ def autoroute_pcb(
         capability_probe=capability_probe,
         clearance_baseline=clearance_baseline,
         **({"allow_partial_nets": True} if _allow_partial_nets else {}),
+        **({"cooperative_partial_timeout": True} if _allow_partial_nets else {}),
     )
 
     elapsed = time.perf_counter() - start_time

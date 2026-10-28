@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from circuit_weaver.project_workflow import _ROUTE_NATIVE_POSTPROCESS_SECONDS
+
 ROOT = Path(__file__).resolve().parents[1]
 HARNESS_PATH = ROOT / "benchmarks" / "general_scale" / "run_general_scale.py"
 SPEC = importlib.util.spec_from_file_location("general_scale_harness", HARNESS_PATH)
@@ -24,6 +26,11 @@ CONNECTIVITY_SPEC = importlib.util.spec_from_file_location("general_scale_connec
 CONNECTIVITY = importlib.util.module_from_spec(CONNECTIVITY_SPEC)
 assert CONNECTIVITY_SPEC and CONNECTIVITY_SPEC.loader
 CONNECTIVITY_SPEC.loader.exec_module(CONNECTIVITY)
+WORKFLOW_PATH = ROOT / "scripts" / "validate_app_workflow.py"
+WORKFLOW_SPEC = importlib.util.spec_from_file_location("general_scale_workflow", WORKFLOW_PATH)
+WORKFLOW = importlib.util.module_from_spec(WORKFLOW_SPEC)
+assert WORKFLOW_SPEC and WORKFLOW_SPEC.loader
+WORKFLOW_SPEC.loader.exec_module(WORKFLOW)
 
 
 def _valid_evidence(tmp_path: Path, count: int = 100, *, spec_hash: str = "spec-hash",
@@ -90,6 +97,11 @@ def test_samples_suite_is_separate_and_keeps_esp32_drill_override_explicit():
     assert general["minimum_physical_parts"] >= 100
 
 
+def test_shared_route_postprocess_budget_matches_workflow_validator():
+    assert HARNESS.ROUTE_NATIVE_POSTPROCESS_SECONDS == WORKFLOW._ROUTE_NATIVE_POSTPROCESS_SECONDS
+    assert HARNESS.ROUTE_NATIVE_POSTPROCESS_SECONDS == _ROUTE_NATIVE_POSTPROCESS_SECONDS == 600
+
+
 def test_input_snapshot_preserves_fixture_and_hashes(tmp_path: Path):
     suite, cases = HARNESS._load_suite(HARNESS.DEFAULT_SUITE)
     original = cases[0]["_spec_path"]
@@ -127,7 +139,8 @@ def test_runner_leaves_output_directory_creation_to_workflow_validator(tmp_path:
     case = cases[0]
     args = argparse.Namespace(
         python=Path("python"), installed=False, expected_wheel=None,
-        iterations=10, attempts=1, route_timeout=10, timeout=300,
+        iterations=10, attempts=1, route_timeout=10, route_max_passes=20,
+        repair_open_connections=False, recovery_timeout=600, timeout=300,
         minimum_physical_parts=100,
     )
 
@@ -187,12 +200,86 @@ def test_runner_leaves_output_directory_creation_to_workflow_validator(tmp_path:
     assert "--native-contracts" in workflow_command
     assert Path(workflow_command[workflow_command.index("--native-contracts") + 1]) == case["_contracts_path"].resolve()
     assert workflow_command[workflow_command.index("--native-contracts-sha256") + 1] == case["_contracts_sha256"]
-    workflow_command = workflow_commands[0]
-    assert "--native-contracts" in workflow_command
-    contract_index = workflow_command.index("--native-contracts") + 1
-    contract_path = Path(workflow_command[contract_index])
-    assert contract_path == case["_contracts_path"].resolve()
-    assert workflow_command[workflow_command.index("--native-contracts-sha256") + 1] == case["_contracts_sha256"]
+    assert "--repair-open-connections" not in workflow_command
+    assert workflow_command[workflow_command.index("--route-max-passes") + 1] == "20"
+    invocation = json.loads((output / "logs" / f"{case['id']}.invocation.json").read_text(encoding="utf-8"))
+    assert invocation["routing_budget"] == {
+        "route_timeout_seconds": 10,
+        "route_attempts": 1,
+        "route_max_passes": 20,
+        "repair_open_connections": False,
+        "recovery_timeout_seconds": 600.0,
+        "active_recovery_timeout_seconds": 0,
+        "native_postprocess_budget_seconds": 600,
+        "minimum_route_parent_timeout_seconds": 610,
+        "route_command_timeout_seconds": 610,
+    }
+
+
+def test_run_case_forwards_opt_in_route_recipe_and_records_budget(tmp_path: Path, monkeypatch):
+    spec_path = tmp_path / "relay.yaml"
+    spec_path.write_text("name: relay\n", encoding="utf-8")
+    output = tmp_path / "run"
+    case = {
+        "id": "relay_probe", "family": "relay", "_spec_path": spec_path,
+        "_spec_sha256": HARNESS.sha256(spec_path), "_source_spec_path": spec_path,
+        "board_mm": [10, 10],
+    }
+    args = argparse.Namespace(
+        python=Path("python"), installed=False, expected_wheel=None,
+        iterations=1, attempts=1, route_timeout=1200, route_max_passes=8,
+        repair_open_connections=True, recovery_timeout=1200.0, timeout=7200,
+        minimum_physical_parts=1,
+    )
+    commands = []
+
+    def stop_after_invocation(command, **_kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 1, "", "intentional test stop")
+
+    monkeypatch.setattr(HARNESS.subprocess, "run", stop_after_invocation)
+    result = HARNESS._run_case(case, args, output)
+    invocation = json.loads((output / "logs" / "relay_probe.invocation.json").read_text(encoding="utf-8"))
+
+    assert result["status"] == "FAILED"
+    command = commands[0]
+    assert command[command.index("--route-timeout") + 1] == "1200"
+    assert command[command.index("--route-max-passes") + 1] == "8"
+    assert "--repair-open-connections" in command
+    assert command[command.index("--recovery-timeout") + 1] == "1200.0"
+    assert invocation["timeout_seconds"] == 7200
+    assert invocation["routing_budget"]["minimum_route_parent_timeout_seconds"] == 3000
+    assert invocation["routing_budget"]["route_command_timeout_seconds"] == 3000
+
+
+def test_opt_in_recovery_requires_outer_case_timeout_for_route_and_native_postprocess(tmp_path):
+    output = tmp_path / "too-short"
+    with pytest.raises(SystemExit) as error:
+        HARNESS.main([
+            "--suite", str(HARNESS.SAMPLE_SUITE), "--output", str(output),
+            "--timeout", "2999", "--route-timeout", "1200",
+            "--route-max-passes", "8", "--repair-open-connections",
+            "--recovery-timeout", "1200",
+        ])
+    assert error.value.code == 2
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(("option", "value"), [
+    ("--route-max-passes", "-1"),
+    ("--route-max-passes", "10000"),
+    ("--route-timeout", "0"),
+    ("--recovery-timeout", "nan"),
+    ("--recovery-timeout", "1800.1"),
+])
+def test_general_runner_rejects_invalid_route_recipe_before_output_creation(tmp_path, option, value):
+    output = tmp_path / "invalid-route-recipe"
+    with pytest.raises(SystemExit) as error:
+        HARNESS.main([
+            "--suite", str(HARNESS.SAMPLE_SUITE), "--output", str(output), option, value,
+        ])
+    assert error.value.code == 2
+    assert not output.exists()
 
 
 def test_run_case_preserves_venv_interpreter_and_its_site_packages(tmp_path: Path, monkeypatch):

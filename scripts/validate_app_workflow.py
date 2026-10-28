@@ -33,6 +33,9 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 _BOARD_TARGETS = {"board", "board_outline", "pcb", "outline"}
+# Keep the CLI runner's parent timeout aligned with the workflow route stage:
+# export/serialization, native import, and fresh DRC need this bounded reserve.
+_ROUTE_NATIVE_POSTPROCESS_SECONDS = 600
 
 
 def digest(path: Path) -> str:
@@ -414,6 +417,45 @@ def verify_routing(payload: dict, board: Path) -> None:
     require(drc.get("board_sha256") == digest(board), "DRC does not match final board bytes")
 
 
+def route_budget(args: argparse.Namespace) -> dict[str, int | float | bool]:
+    recovery_seconds = math.ceil(args.recovery_timeout) if args.repair_open_connections else 0
+    return {
+        "route_timeout_seconds": args.route_timeout,
+        "route_attempts": args.attempts,
+        "route_max_passes": args.route_max_passes,
+        "repair_open_connections": args.repair_open_connections,
+        "recovery_timeout_seconds": args.recovery_timeout,
+        "active_recovery_timeout_seconds": recovery_seconds,
+        "native_postprocess_budget_seconds": _ROUTE_NATIVE_POSTPROCESS_SECONDS,
+        "minimum_route_parent_timeout_seconds": (
+            args.route_timeout + recovery_seconds + _ROUTE_NATIVE_POSTPROCESS_SECONDS
+        ),
+    }
+
+
+def workflow_command_timeout(args: argparse.Namespace) -> int:
+    return max(300, args.route_timeout + 120)
+
+
+def route_command_timeout(args: argparse.Namespace) -> int:
+    budget = route_budget(args)
+    return math.ceil(max(
+        workflow_command_timeout(args),
+        budget["minimum_route_parent_timeout_seconds"],
+    ))
+
+
+def route_cli_arguments(args: argparse.Namespace, source: Path, destination: Path) -> list[str]:
+    command = [
+        "autoroute", str(source), "--routed-board", str(destination),
+        "--attempts", str(args.attempts), "--timeout", str(args.route_timeout),
+        "--max-passes", str(args.route_max_passes), "--optimization-threads", "0",
+    ]
+    if args.repair_open_connections:
+        command.extend(["--repair-open-connections", "--recovery-timeout", str(args.recovery_timeout)])
+    return command
+
+
 def verify_refinement(payload: dict, board: Path, source: Path, expected_connections: int) -> None:
     """Bind optional return refinement evidence to both exact board images."""
     drc = payload.get("drc", {})
@@ -793,18 +835,22 @@ class Demo:
         if installed:
             self.env.pop("PYTHONPATH", None)
 
-    def command(self, name: str, arguments: list[str], *, json_output=True, exit_code=0) -> dict:
+    def command(self, name: str, arguments: list[str], *, json_output=True, exit_code=0,
+                timeout: int | None = None) -> dict:
         command = [sys.executable, "-m", "circuit_weaver", *map(str, arguments)]
-        return self.external(name, command, json_output=json_output, exit_code=exit_code)
+        return self.external(name, command, json_output=json_output, exit_code=exit_code, timeout=timeout)
 
-    def external(self, name: str, command: list[str], *, json_output=False, exit_code=0) -> dict:
+    def external(self, name: str, command: list[str], *, json_output=False, exit_code=0,
+                 timeout: int | None = None) -> dict:
         print(f"[{name}] starting", flush=True)
-        step = {"name": name, "command": command, "passed": False}
+        effective_timeout = self.timeout if timeout is None else timeout
+        step = {"name": name, "command": command, "passed": False,
+                "timeout_seconds": effective_timeout}
         self.steps.append(step)
         started = time.monotonic()
         try:
             process = subprocess.run(command, cwd=self.cwd, env=self.env, capture_output=True,
-                                     text=True, encoding="utf-8", errors="replace", timeout=self.timeout)
+                                     text=True, encoding="utf-8", errors="replace", timeout=effective_timeout)
             step.update(exit_code=process.returncode, seconds=round(time.monotonic() - started, 2))
             (self.output / f"{name}.stdout.log").write_text(process.stdout, encoding="utf-8")
             (self.output / f"{name}.stderr.log").write_text(process.stderr, encoding="utf-8")
@@ -1151,7 +1197,14 @@ def main() -> int:
                         help="Opt in to native filled ground zones using a strict JSON plane plan")
     parser.add_argument("--plane-cleanup", type=Path,
                         help="Remove redundant plane-covered traces after --ground-plane using a strict JSON plan")
-    parser.add_argument("--route-timeout", type=int, default=180)
+    parser.add_argument("--route-timeout", type=int, default=180,
+                        help="Freerouting budget in seconds (1–3600; default: 180)")
+    parser.add_argument("--route-max-passes", type=int, default=20,
+                        help="Exact Freerouting pass limit (0 means unlimited; default: 20)")
+    parser.add_argument("--repair-open-connections", action="store_true",
+                        help="Opt in to bounded native recovery for open routed connections")
+    parser.add_argument("--recovery-timeout", type=float, default=600,
+                        help="Native recovery budget in seconds when repair is enabled (0 < value <= 1800)")
     parser.add_argument("--clearance", type=float, default=0.127,
                         help="Prototype default clearance in mm (0.127 accommodates the sample USB connector)")
     parser.add_argument("--minimum-drill", type=float,
@@ -1181,6 +1234,12 @@ def main() -> int:
         parser.error("--expected-wheel requires --installed")
     if args.expected_wheel is not None and not args.expected_wheel.is_file():
         parser.error(f"--expected-wheel does not exist: {args.expected_wheel}")
+    if not 1 <= args.route_timeout <= 3600:
+        parser.error("--route-timeout must be an integer from 1 through 3600 seconds")
+    if not 0 <= args.route_max_passes <= 9999:
+        parser.error("--route-max-passes must be an integer from 0 through 9999")
+    if not math.isfinite(args.recovery_timeout) or not 0 < args.recovery_timeout <= 1800:
+        parser.error("--recovery-timeout must be finite and greater than 0 through 1800 seconds")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     contract_snapshot = None
@@ -1193,8 +1252,17 @@ def main() -> int:
         )
     source_spec = args.spec.resolve()
     spec = output / "design.yaml"
-    demo = Demo(output, max(300, args.route_timeout + 120), installed=args.installed)
-    summary = {"status": "FAILED", "spec": str(source_spec), "fabrication_ready": False}
+    budget = route_budget(args)
+    demo_timeout = workflow_command_timeout(args)
+    demo = Demo(output, demo_timeout, installed=args.installed)
+    summary = {
+        "status": "FAILED", "spec": str(source_spec), "fabrication_ready": False,
+        "routing_budget": {
+            **budget,
+            "workflow_command_timeout_seconds": demo_timeout,
+            "route_command_timeout_seconds": route_command_timeout(args),
+        },
+    }
     try:
         revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True, check=True)
         summary["revision"] = revision.stdout.strip()
@@ -1312,11 +1380,9 @@ def main() -> int:
         routed_base = output / ("routed-base.kicad_pcb" if any(
             plan is not None for plan in (return_plan, cleanup_plan, ground_plan))
                                 else "routed.kicad_pcb")
-        routing = demo.command("route", [
-            "autoroute", str(output / "placed.kicad_pcb"), "--routed-board", str(routed_base),
-            "--attempts", str(args.attempts), "--timeout", str(args.route_timeout),
-            "--max-passes", "20", "--optimization-threads", "0",
-        ])
+        routing = demo.command("route", route_cli_arguments(
+            args, output / "placed.kicad_pcb", routed_base,
+        ), timeout=route_command_timeout(args))
         verify_routing(routing, routed_base)
         routed = routed_base
         if return_plan is not None:

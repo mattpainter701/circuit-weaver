@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+- Preserve native repair coordinates to the nearest internal unit, avoiding
+  one-nanometre truncation drift when repaired copper passes through Specctra.
+- Request a bounded cooperative stop before the host deadline for private
+  Freerouting 2.5+ recovery attempts, leaving time to export a partial session.
+  Retain strict statistics, source correlation and native publication checks.
+- Expose pass and recovery budgets in the workflow validation runners, retain
+  the route's full native post-processing allowance, and record actual
+  per-command and per-attempt timeout budgets.
+
 - Adapt saved ground-plane connectivity checks to KiCad 8/9 bindings while
   retaining native copper-path and detached-pad validation.
 

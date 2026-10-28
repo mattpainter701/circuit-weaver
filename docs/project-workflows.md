@@ -393,6 +393,13 @@ After native recovery, Freerouting 2.5 or newer writes the full session with
 autorouting, fanout and optimization disabled. Session structure and net/design
 correlation are checked before the original-board import and fresh native DRC;
 this export step does not fabricate unavailable router completeness statistics.
+For private recovery attempts using Freerouting 2.5+, a host budget of at least
+61 seconds requests a cooperative router deadline 60 seconds before that attempt's
+host deadline. This gives the router time to export a partial session. The host
+deadline remains authoritative; missing sessions, unknown statistics and invalid
+native geometry still fail closed. Portfolio evidence records each attempt's
+actual allowance and requested internal deadline, without claiming that a
+requested timeout occurred.
 Private candidate reports and current progress remain available when the bounded
 search cannot finish; they do not constitute completion or manufacturing approval.
 
@@ -420,6 +427,17 @@ Existing source zones are not removed. The normal defaults remain unchanged.
 The parent reserves both router and recovery budgets plus bounded native
 postprocessing time. This supplies an automated recovery path, not a guarantee
 that every circuit fits the search bounds or meets electrical/impedance targets.
+
+The repository validation runners `scripts/validate_app_workflow.py` and
+`benchmarks/general_scale/run_general_scale.py` also accept
+`--route-max-passes`, `--repair-open-connections` and `--recovery-timeout`.
+Their defaults remain 20 passes with recovery disabled. Route subprocesses
+reserve the router budget, active recovery budget and 600 seconds for session
+transport, native import and DRC. Other command deadlines remain unchanged.
+When recovery is enabled, the general-scale runner rejects a per-case
+`--timeout` shorter than that combined route allowance. Evidence records the
+effective route deadline and each constituent budget. Case contracts, source
+hash checks, native DRC and assembly coverage remain required.
 
 The frozen 438-part DAC completes this eight-pass, post-route-plane recipe from
 its zero-copper placement in the isolated installed runtime. It needs no native

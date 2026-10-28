@@ -12,6 +12,12 @@ import math
 from pathlib import Path
 
 
+def _native_point_vector(pcbnew, point):
+    """Round query and emitted coordinates back to their nearest native IU."""
+    scale = pcbnew.FromMM(1.0)
+    return pcbnew.VECTOR2I(int(round(point[0] * scale)), int(round(point[1] * scale)))
+
+
 def _astar_search(start, goal, layer_count, target_layers, origins, bounds, step, max_expanded_states,
                   clear_segment, can_change_layer):
     """Search lattice states and return a route path plus real expansion count."""
@@ -217,7 +223,7 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
         return pcbnew.ToMM(p.x), pcbnew.ToMM(p.y)
 
     def vec(p):
-        return pcbnew.VECTOR2I(pcbnew.FromMM(p[0]), pcbnew.FromMM(p[1]))
+        return _native_point_vector(pcbnew, p)
 
     def ends(item):
         if type(item).__name__ in {"PCB_TRACK", "PCB_ARC"}:

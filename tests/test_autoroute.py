@@ -1538,6 +1538,120 @@ def test_current_router_final_scores_and_geometry_counts(tmp_path):
 
 
 class TestFreerouting25CompatibilityProposal:
+    def test_private_partial_mode_uses_bounded_v25_job_timeout_and_reports_budget(self, tmp_path):
+        dsn = _write_dsn(tmp_path)
+        with mock.patch(
+            "subprocess.run", side_effect=_fake_freerouting_success(_routing_output(incomplete=2))
+        ) as run:
+            result = _route_specctra(
+                dsn, tmp_path / "partial-modern.ses", ["freerouting"], passes=10,
+                timeout_seconds=90.8, overwrite=False, headless=True, optimization_threads=0,
+                optimizer_strategy=None, optimizer_hybrid_ratio=None,
+                optimizer_item_selection=None, optimizer_improvement_threshold=None, seed=None,
+                capability_probe={"version": "2.5.0", "probe_ok": True, "seed": False},
+                allow_partial_nets=True, cooperative_partial_timeout=True,
+            )
+        assert result["status"] == "ok"
+        command = run.call_args.args[0]
+        assert "--router.job_timeout=00:00:30" in command
+        assert result["router"]["timeout_budget"] == {
+            "host_timeout_seconds": 90.8,
+            "reserved_export_seconds": 60,
+            "internal_job_timeout_seconds": 30,
+            "configured": True,
+            "reason": "configured; this records a requested deadline, not a confirmed timeout",
+        }
+
+    @pytest.mark.parametrize(
+        ("version", "private_mode"),
+        [("2.5.0", False), ("2.4.1", True)],
+    )
+    def test_job_timeout_flag_stays_off_for_normal_routes_and_legacy_routers(
+        self, tmp_path, version, private_mode
+    ):
+        dsn = _write_dsn(tmp_path)
+        with mock.patch(
+            "subprocess.run", side_effect=_fake_freerouting_success(_routing_output(incomplete=2))
+        ) as run:
+            result = _route_specctra(
+                dsn, tmp_path / f"timeout-{version}-{private_mode}.ses", ["freerouting"], passes=10,
+                timeout_seconds=90, overwrite=False, headless=True, optimization_threads=0,
+                optimizer_strategy=None, optimizer_hybrid_ratio=None,
+                optimizer_item_selection=None, optimizer_improvement_threshold=None, seed=None,
+                capability_probe={"version": version, "probe_ok": True, "seed": False},
+                allow_partial_nets=True, cooperative_partial_timeout=private_mode,
+            )
+        assert result["status"] == "ok"
+        command = run.call_args.args[0]
+        assert not any(arg.startswith("--router.job_timeout=") for arg in command)
+        if not private_mode:
+            assert "timeout_budget" not in result["router"]
+        else:
+            assert result["router"]["timeout_budget"]["configured"] is False
+            assert result["router"]["timeout_budget"]["host_timeout_seconds"] == 90
+
+    def test_portfolio_reports_each_internal_timeout_from_its_actual_allowance(self, tmp_path):
+        dsn = _write_dsn(tmp_path)
+        seen = []
+
+        def fake_run(command, **kwargs):
+            seen.append((command, kwargs["timeout"]))
+            Path(command[command.index("-do") + 1]).write_text(VALID_SES, encoding="utf-8")
+            return mock.Mock(returncode=0, stdout=_routing_output(incomplete=2), stderr="")
+
+        with mock.patch.object(autoroute_module.time, "perf_counter", return_value=0):
+            with mock.patch("subprocess.run", side_effect=fake_run):
+                result = autoroute_module._route_candidates(
+                    dsn, tmp_path / "partial-portfolio.ses", ["freerouting"], attempts=3,
+                    timeout_seconds=300, overwrite=False, seed=None, passes=10, headless=True,
+                    optimization_threads=0, optimizer_strategy=None, optimizer_hybrid_ratio=None,
+                    optimizer_item_selection=None, optimizer_improvement_threshold=None,
+                    capability_probe={"version": "2.5.0", "probe_ok": True, "seed": False},
+                    clearance_baseline=None, allow_partial_nets=True, cooperative_partial_timeout=True,
+                )
+
+        rows = result["search"]["attempts"]
+        assert [row["timeout_seconds"] for row in rows] == [100, 150, 300]
+        expected_internal = [40, 90, 240]
+        assert [row["timeout_budget"]["internal_job_timeout_seconds"] for row in rows] == expected_internal
+        assert [kwargs_timeout for _, kwargs_timeout in seen] == [100, 150, 300]
+        assert [
+            next(arg.split("=", 1)[1] for arg in command if arg.startswith("--router.job_timeout="))
+            for command, _ in seen
+        ] == ["00:00:40", "00:01:30", "00:04:00"]
+        summary = result["search"]["timeout_budget"]
+        assert summary["overall_host_timeout_seconds"] == 300
+        assert summary["per_attempt_internal_job_timeout_seconds"] == expected_internal
+        assert "internal_job_timeout_seconds" not in summary
+        assert 1140 not in summary.values()
+
+    @pytest.mark.parametrize(
+        ("version", "timeout", "enabled", "expected_timeout"),
+        [
+            ("2.4.1", 90, True, None),
+            ("2.5.0", 60, True, None),
+            ("2.5.0", 60.5, True, None),
+            ("2.5.0", 90, False, None),
+        ],
+    )
+    def test_partial_job_timeout_is_omitted_for_unsupported_or_short_budgets(
+        self, version, timeout, enabled, expected_timeout
+    ):
+        budget = autoroute_module._partial_route_timeout_budget(
+            timeout,
+            capability_probe={"version": version, "probe_ok": True},
+            enabled=enabled,
+        )
+        assert budget["internal_job_timeout_seconds"] is expected_timeout
+        assert budget["configured"] is False
+
+    @pytest.mark.parametrize(
+        ("seconds", "expected"),
+        [(1, "00:00:01"), (60, "00:01:00"), (3600, "01:00:00"), (36000, "10:00:00")],
+    )
+    def test_job_timeout_format_is_hh_mm_ss(self, seconds, expected):
+        assert autoroute_module._format_job_timeout(seconds) == expected
+
     @pytest.mark.parametrize("version", ["2.4.1", "2.5.0"])
     def test_modern_zero_threads_explicitly_disables_optimizer_stage(self, tmp_path, version):
         dsn = _write_dsn(tmp_path)

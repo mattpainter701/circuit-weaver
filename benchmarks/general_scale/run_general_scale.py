@@ -37,6 +37,9 @@ REQUIRED_STEPS = {
     "assembly-gate", "manufacturing-gate", "status", "resume", "prototype-positions",
     "board-preview-front", "board-preview-back", "board-preview-front-layers", "mcp",
 }
+# Match project_workflow._ROUTE_NATIVE_POSTPROCESS_SECONDS. This reserve covers
+# SES transport, native import, and the final fresh DRC after route/recovery.
+ROUTE_NATIVE_POSTPROCESS_SECONDS = 600
 
 
 def sha256(path: Path) -> str:
@@ -79,6 +82,28 @@ def git_value(*args: str) -> str:
 def _python_executable(path: Path) -> Path:
     """Make the executable path absolute without dereferencing venv symlinks."""
     return path.expanduser().absolute()
+
+
+def _routing_budget(args: argparse.Namespace) -> dict[str, int | float | bool]:
+    repair_enabled = bool(getattr(args, "repair_open_connections", False))
+    recovery_timeout = float(getattr(args, "recovery_timeout", 600))
+    active_recovery = math.ceil(recovery_timeout) if repair_enabled else 0
+    return {
+        "route_timeout_seconds": args.route_timeout,
+        "route_attempts": args.attempts,
+        "route_max_passes": getattr(args, "route_max_passes", 20),
+        "repair_open_connections": repair_enabled,
+        "recovery_timeout_seconds": recovery_timeout,
+        "active_recovery_timeout_seconds": active_recovery,
+        "native_postprocess_budget_seconds": ROUTE_NATIVE_POSTPROCESS_SECONDS,
+        "minimum_route_parent_timeout_seconds": (
+            args.route_timeout + active_recovery + ROUTE_NATIVE_POSTPROCESS_SECONDS
+        ),
+        "route_command_timeout_seconds": max(
+            300, args.route_timeout + 120,
+            args.route_timeout + active_recovery + ROUTE_NATIVE_POSTPROCESS_SECONDS,
+        ),
+    }
 
 
 def source_state() -> dict[str, str]:
@@ -444,6 +469,13 @@ def _run_case(case: dict[str, Any], args: argparse.Namespace, output: Path) -> d
         "--route-timeout", str(args.route_timeout),
         "--mcp-smoke", "--render-3d",
     ]
+    route_budget = _routing_budget(args)
+    command.extend(["--route-max-passes", str(route_budget["route_max_passes"])])
+    if route_budget["repair_open_connections"]:
+        command.extend([
+            "--repair-open-connections", "--recovery-timeout",
+            str(route_budget["recovery_timeout_seconds"]),
+        ])
     contracts_path = case.get("_contracts_path")
     contracts_hash = case.get("_contracts_sha256")
     if contracts_path is not None:
@@ -474,7 +506,7 @@ def _run_case(case: dict[str, Any], args: argparse.Namespace, output: Path) -> d
         "minimum_drill_mm": case.get("minimum_drill_mm"),
         "native_contracts_sha256": contracts_hash,
         "minimum_physical_parts": max(args.minimum_physical_parts, case.get("minimum_physical_parts", 0)),
-        "timeout_seconds": args.timeout, "python": str(python),
+        "timeout_seconds": args.timeout, "routing_budget": route_budget, "python": str(python),
     }, indent=2) + "\n", encoding="utf-8")
     started = time.monotonic()
     status = "FAILED"
@@ -547,14 +579,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--attempts", type=int, default=2, help="autoroute attempts")
     parser.add_argument("--route-timeout", type=int, default=300,
                         help="total routing budget shared across attempts")
+    parser.add_argument("--route-max-passes", type=int, default=20,
+                        help="exact Freerouting pass limit (0 means unlimited; default: 20)")
+    parser.add_argument("--repair-open-connections", action="store_true",
+                        help="opt in to bounded native recovery for open routed connections")
+    parser.add_argument("--recovery-timeout", type=float, default=600,
+                        help="native recovery budget in seconds when repair is enabled (0 < value <= 1800)")
     parser.add_argument("--require-clean", action="store_true",
                         help="refuse dirty source and fail if revision/tree changes during the workflow")
     args = parser.parse_args(argv)
     if not 1 <= args.workers <= 2:
         parser.error("--workers must be between 1 and 2")
     if not 60 <= args.timeout <= 43_200 or not 1 <= args.route_timeout <= 3_600 \
+            or not 0 <= args.route_max_passes <= 9_999 \
+            or not math.isfinite(args.recovery_timeout) or not 0 < args.recovery_timeout <= 1_800 \
             or not 1 <= args.iterations <= 10_000 or not 1 <= args.attempts <= 5:
-        parser.error("timeout, route-timeout, iterations, and attempts exceed supported bounds")
+        parser.error(
+            "timeout, route-timeout, route-max-passes, recovery-timeout, iterations, and attempts "
+            "must remain within supported bounds"
+        )
+    if args.repair_open_connections:
+        minimum_timeout = _routing_budget(args)["minimum_route_parent_timeout_seconds"]
+        if args.timeout < minimum_timeout:
+            parser.error(
+                f"--timeout must be at least {minimum_timeout} seconds when route recovery is enabled "
+                "(route + recovery + native postprocess budget)"
+            )
     if args.expected_wheel and not args.installed:
         parser.error("--expected-wheel requires --installed")
     initial_source = source_state()
@@ -599,6 +649,7 @@ def main(argv: list[str] | None = None) -> int:
         "python_import": source,
         "minimum_physical_parts": args.minimum_physical_parts,
         "workers": args.workers,
+        "routing_budget": _routing_budget(args),
         "runs": [],
     }
     (output / "run-manifest.json").write_text(json.dumps(run_manifest, indent=2) + "\n", encoding="utf-8")
