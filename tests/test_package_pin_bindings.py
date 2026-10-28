@@ -228,3 +228,22 @@ def test_ap2112k_sot23_5_has_input_on_pin_1_and_output_on_pin_5():
     regulator = next(component for component in components if component.mpn == "AP2112K-3.3")
     assert regulator.power_pins["1"] == "VBUS_5V"
     assert regulator.power_pins["5"] == "VDD_3P3"
+
+
+def test_builtin_mcp1700_sot23_has_output_on_pin_2_and_input_on_pin_3():
+    """Microchip MCP1700 SOT-23A (/TT) pin table: 1 GND, 2 VOUT, 3 VIN.
+
+    The builtin entry once used the SOT-89/TO-92 order (2 VIN, 3 VOUT) with a
+    SOT-23 footprint, and disagreed with the template entry for the same part.
+    """
+    from circuit_weaver.component_db import BUILTIN_REGISTRY
+
+    builtin = BUILTIN_REGISTRY.get("MCP1700-3302E")
+    assert builtin.footprint == "Package_TO_SOT_SMD:SOT-23"
+    pins = {pin.number: (pin.name, pin.electrical_type) for pin in builtin.pins}
+    assert pins == {"1": ("GND", "power_in"), "2": ("VOUT", "power_out"), "3": ("VIN", "power_in")}
+    assert builtin.power_pins["3"] == "VIN"
+    assert builtin.power_pins["2"] == "VDD_3P3"
+
+    template = {pin["number"]: pin["name"] for pin in get_ic_data("MCP1700-3302E")["pins"]}
+    assert template == {"1": "GND", "2": "OUT", "3": "IN"}

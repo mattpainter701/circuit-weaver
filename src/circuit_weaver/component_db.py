@@ -2533,14 +2533,16 @@ def _builtin_components():
             footprint="Package_TO_SOT_SMD:SOT-23",
             description="250mA LDO regulator",
             category="power",
+            # SOT-23A (/TT) order per the Microchip MCP1700 pin table: 1 GND, 2 VOUT, 3 VIN.
+            # (1 GND, 2 VIN, 3 VOUT is the SOT-89 / TO-92 order.)
             pins=[
                 PinDef("1", "GND", "power_in", "B"),
-                PinDef("2", "VIN", "power_in", "L"),
-                PinDef("3", "VOUT", "power_out", "R"),
+                PinDef("2", "VOUT", "power_out", "R"),
+                PinDef("3", "VIN", "power_in", "L"),
             ],
-            power_pins={"1": "GND", "2": "VIN", "3": "VDD_3P3"},
+            power_pins={"1": "GND", "2": "VDD_3P3", "3": "VIN"},
             power_reqs=[PowerReq("VIN", 5.0, 250)],
-            bypass_caps=[BypassCap("3", "VDD_3P3", "GND", "1uF", "Capacitor_SMD:C_0603_1608Metric")],
+            bypass_caps=[BypassCap("2", "VDD_3P3", "GND", "1uF", "Capacitor_SMD:C_0603_1608Metric")],
         )
     )
 

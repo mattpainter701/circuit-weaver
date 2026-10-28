@@ -5,6 +5,7 @@
 ### Corrected part data
 
 - Correct the AP2112K-3.3 SOT-23-5 pin map: pin 1 is VIN and pin 5 is VOUT (Diodes DS39724). The swapped entry wired the input rail to the regulator output in the OLED, RF front-end, USB-UART and Zigbee samples. Their checked-in generated artifacts predate this fix and need regenerating.
+- Correct the built-in MCP1700-3302E SOT-23 pin map to 1 GND, 2 VOUT, 3 VIN. The entry used the SOT-89/TO-92 order, so a raw (non-template) MCP1700 instance fed its input rail into VOUT.
 
 ## [0.37.0] - 2026-10-20
 
