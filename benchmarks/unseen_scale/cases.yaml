@@ -1,0 +1,46 @@
+schema_version: 1
+description: Three independently connected, high-count functional circuits spanning
+  fieldbus acquisition, serial relay outputs, and precision analog setpoints.
+minimum_physical_parts: 156
+cases:
+- id: distributed_facility_gateway
+  spec: cases/distributed_facility_gateway.yaml
+  family: distributed_facility_control
+  minimum_physical_parts: 180
+  required_sections:
+  - power
+  - digital
+  - communication
+  - connectors
+  - protection
+  board_mm:
+  - 180
+  - 135
+  required_path_count: 43
+  required_channel_count: 8
+- id: serial_relay_output_card
+  spec: cases/serial_relay_output_card.yaml
+  family: serial_expanded_relay_control
+  minimum_physical_parts: 250
+  required_sections:
+  - power
+  - digital
+  - connectors
+  - passives
+  board_mm:
+  - 340
+  - 260
+  required_path_count: 160
+- id: multichannel_analog_setpoint_card
+  spec: cases/multichannel_analog_setpoint_card.yaml
+  family: precision_analog_setpoint_output
+  minimum_physical_parts: 350
+  required_sections:
+  - power
+  - digital
+  - analog
+  - connectors
+  board_mm:
+  - 300
+  - 220
+  required_path_count: 110

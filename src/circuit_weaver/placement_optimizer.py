@@ -212,6 +212,21 @@ class ComponentPlacement:
     pin_offsets: dict[str, tuple[float, float]] | None = None
     pin_nets: dict[str, str] | None = None
     reference_size_mm: tuple[float, float] | None = None
+    native_footprint_id: str = ""
+    native_pad_geometry: list[dict[str, Any]] | None = None
+    native_reference_locked: bool | None = None
+    native_surface_copper_layer_id: int | None = None
+    native_surface_copper_side: str | None = None
+    native_board_copper_layer_ids: list[int] | None = None
+    native_board_copper_layer_inventory_complete: bool | None = None
+    native_known_copper_layer_ids: list[int] | None = None
+    native_known_copper_layer_inventory_complete: bool | None = None
+    native_footprint_is_smd: bool | None = None
+    native_opposite_courtyard_known: bool | None = None
+    native_opposite_courtyard_present: bool | None = None
+    native_surface_cache: tuple[tuple[Any, ...], str | None] | None = field(
+        default=None, repr=False, compare=False
+    )
 
 
 @dataclass
@@ -321,6 +336,16 @@ def _constraint_target(raw: dict[str, Any]) -> str:
     return str(raw.get("target") or raw.get("ref") or "").strip()
 
 
+def _is_board_dimension_constraint(raw: dict[str, Any]) -> bool:
+    """Recognize legacy/placement outline declarations, excluding keepouts."""
+    if _constraint_kind(raw) not in {"", "placement"}:
+        return False
+    target = _constraint_target(raw).lower()
+    nested = raw.get("board") if isinstance(raw.get("board"), dict) else {}
+    explicit_board_keys = "board_width_mm" in raw or "board_height_mm" in raw or bool(nested)
+    return target in _BOARD_TARGETS or explicit_board_keys
+
+
 def _position_values(raw: dict[str, Any]) -> tuple[float | None, float | None]:
     nested = raw.get("position") if isinstance(raw.get("position"), dict) else {}
     x = _finite_number(raw.get("x_mm", raw.get("x", nested.get("x_mm", nested.get("x")))))
@@ -363,11 +388,10 @@ def _board_dimensions(
     width = float(config.board_width_mm)
     height = float(config.board_height_mm)
     for raw in constraints:
+        if not isinstance(raw, dict) or not _is_board_dimension_constraint(raw):
+            continue
         target = _constraint_target(raw).lower()
         nested = raw.get("board") if isinstance(raw.get("board"), dict) else {}
-        explicit_board_keys = "board_width_mm" in raw or "board_height_mm" in raw or bool(nested)
-        if target not in _BOARD_TARGETS and not explicit_board_keys:
-            continue
         candidate_width = _finite_number(
             raw.get(
                 "board_width_mm",
@@ -453,15 +477,18 @@ def _build_constraint_plan(
         target = _constraint_target(raw)
         target_lower = target.lower()
         if kind not in _PLACEMENT_CONSTRAINT_KINDS:
-            plan.deferred.append(
-                {
-                    "index": index,
-                    "kind": kind or "unspecified",
-                    "target": target,
-                    "reason": "Constraint belongs to a non-placement stage.",
-                }
-            )
-            continue
+            if kind == "" and _is_board_dimension_constraint(raw):
+                kind = "placement"
+            else:
+                plan.deferred.append(
+                    {
+                        "index": index,
+                        "kind": kind or "unspecified",
+                        "target": target,
+                        "reason": "Constraint belongs to a non-placement stage.",
+                    }
+                )
+                continue
 
         has_board_keys = (
             target_lower in _BOARD_TARGETS
@@ -469,7 +496,7 @@ def _build_constraint_plan(
             or "board_height_mm" in raw
             or isinstance(raw.get("board"), dict)
         )
-        if kind == "placement" and has_board_keys:
+        if kind in {"", "placement"} and has_board_keys:
             # Already recorded by _board_dimensions. A board entry may also
             # carry clearance policy, which is applied below.
             edge_clearance = _finite_number(raw.get("edge_clearance_mm"))
@@ -615,6 +642,325 @@ def _build_constraint_plan(
     return effective_config, plan
 
 
+def _family_seed_net_edges(
+    owners: list[str], weight: float, *, clique_limit: int = 32,
+) -> list[tuple[str, str, float]]:
+    """Build a bounded deterministic approximation of one net's owner graph.
+
+    Normal fanout keeps the existing weighted clique. For high fanout, a cycle
+    retains every owner and gives each the same total incident attraction as
+    the normalized clique, while avoiding quadratic edge creation.
+    """
+    if len(owners) < 2:
+        return []
+    if len(owners) <= clique_limit:
+        edge_weight = weight / (len(owners) - 1)
+        return [(left, right, edge_weight) for left, right in combinations(owners, 2)]
+
+    edge_weight = weight / 2
+    return [
+        (owners[index], owners[(index + 1) % len(owners)], edge_weight)
+        for index in range(len(owners))
+    ]
+
+
+def _family_grid_seed_positions(
+    components: list[ComponentDef], config: PlacementConfig,
+) -> dict[str, tuple[float, float]]:
+    """Return a compact, connection-aware seed for large owner-family sets."""
+    roots = [
+        component for component in components
+        if component.source_ref and not str(getattr(component, "placement_parent_ref", "") or "").strip()
+    ]
+    if len(roots) < 40 or config.strategy == "simple":
+        return {}
+
+    family_children: dict[str, list[ComponentDef]] = {}
+    root_refs = {str(component.source_ref) for component in roots}
+    for component in components:
+        parent_ref = str(getattr(component, "placement_parent_ref", "") or "").strip()
+        if parent_ref in root_refs:
+            family_children.setdefault(parent_ref, []).append(component)
+
+    def _category(component: ComponentDef) -> str:
+        category = str(component.category or "other").lower()
+        if category not in _ZONE_ANCHORS:
+            category = "passive" if str(component.source_ref)[0] in "RCL" else "other"
+        return category
+
+    def _group_key(component: ComponentDef) -> tuple[str, str]:
+        block = str(getattr(component, "block_id", "") or "").strip().casefold()
+        section = str(getattr(component, "functional_section", "") or "").strip().casefold()
+        if block:
+            return ("block", block)
+        if section:
+            return ("section", section)
+        return ("family", str(component.source_ref))
+
+    # Precompute owner-plus-support extents. Grid pitch uses these family
+    # extents, avoiding board-wide spacing when the fitted layout is compact.
+    family_records: dict[str, dict[str, Any]] = {}
+    for root in roots:
+        ref = str(root.source_ref)
+        width, height = estimate_component_size(root)
+        children = family_children.get(ref, [])
+        max_child_width = max((estimate_component_size(child)[0] for child in children), default=0.0)
+        max_child_height = max((estimate_component_size(child)[1] for child in children), default=0.0)
+        support_rings = max(0, math.ceil(len(children) / 8) - 1)
+        gap = config.min_component_gap_mm + 0.6
+        half_width = width / 2 + (max_child_width / 2 + gap + support_rings * (max_child_width + 0.6)
+                                  if children else 0.0)
+        half_height = height / 2 + (max_child_height / 2 + gap + support_rings * (max_child_height + 0.6)
+                                    if children else 0.0)
+        family_records[ref] = {
+            "component": root,
+            "group": _group_key(root),
+            "category": _category(root),
+            "half_width": half_width,
+            "half_height": half_height,
+        }
+
+    # Derive root-family connectivity directly from named nets. Shared grounds
+    # and voltage rails provide no local placement identity and are excluded.
+    root_by_ref = {str(component.source_ref): str(component.source_ref) for component in roots}
+    for component in components:
+        ref = str(component.source_ref or "")
+        parent_ref = str(getattr(component, "placement_parent_ref", "") or "").strip()
+        if ref and parent_ref in family_records:
+            root_by_ref[ref] = parent_ref
+    root_edges: dict[tuple[str, str], float] = {}
+    for net, refs in _build_net_component_map(components).items():
+        weight = _net_weight(net)
+        if weight <= 0.5 or _is_voltage_rail(net):
+            continue
+        owners = sorted({root_by_ref[ref] for ref in refs if ref in root_by_ref and root_by_ref[ref] in family_records})
+        if len(owners) < 2:
+            continue
+        for left, right, edge_weight in _family_seed_net_edges(owners, weight):
+            edge = tuple(sorted((left, right)))
+            root_edges[edge] = root_edges.get(edge, 0.0) + edge_weight
+
+    # Authored block/section members form one ordering unit. Unlabeled roots
+    # remain individual units; category is a stable tie-breaker for isolates.
+    units: dict[tuple[str, str], list[str]] = {}
+    unit_of: dict[str, tuple[str, str]] = {}
+    for ref, record in family_records.items():
+        unit = record["group"]
+        units.setdefault(unit, []).append(ref)
+        unit_of[ref] = unit
+    for refs in units.values():
+        refs.sort()
+
+    unit_edges: dict[tuple[str, str], float] = {}
+    root_adjacency: dict[str, dict[str, float]] = {}
+    for (left, right), weight in root_edges.items():
+        root_adjacency.setdefault(left, {})[right] = weight
+        root_adjacency.setdefault(right, {})[left] = weight
+        first, second = unit_of[left], unit_of[right]
+        if first == second:
+            continue
+        edge = tuple(sorted((first, second)))
+        unit_edges[edge] = unit_edges.get(edge, 0.0) + weight
+
+    unit_adjacency: dict[tuple[str, str], dict[tuple[str, str], float]] = {}
+    for (left, right), weight in unit_edges.items():
+        unit_adjacency.setdefault(left, {})[right] = weight
+        unit_adjacency.setdefault(right, {})[left] = weight
+
+    def _unit_category(unit: tuple[str, str]) -> str:
+        return min(family_records[ref]["category"] for ref in units[unit])
+
+    def _unit_key(unit: tuple[str, str]) -> tuple[Any, ...]:
+        return (unit[0], unit[1], _unit_category(unit), min(units[unit]))
+
+    # Greedy deterministic graph walk: each next unit has the strongest total
+    # connection to the already placed prefix. This maps electrical neighbors
+    # to nearby cells while explicit units stay contiguous.
+    ordered_units: list[tuple[str, str]] = []
+    remaining = set(units)
+    while remaining:
+        if not ordered_units:
+            current = min(
+                remaining,
+                key=lambda unit: (-sum(unit_adjacency.get(unit, {}).values()), _unit_key(unit)),
+            )
+        else:
+            prefix = set(ordered_units)
+            previous_category = _unit_category(ordered_units[-1])
+            current = min(
+                remaining,
+                key=lambda unit: (
+                    -sum(weight for neighbor, weight in unit_adjacency.get(unit, {}).items() if neighbor in prefix),
+                    _unit_category(unit) != previous_category,
+                    _unit_key(unit),
+                ),
+            )
+        ordered_units.append(current)
+        remaining.remove(current)
+
+    unit_layouts: dict[tuple[str, str], dict[str, Any]] = {}
+    for unit in ordered_units:
+        pending = set(units[unit])
+        placed_in_unit: set[str] = set()
+        ordered_members: list[str] = []
+        while pending:
+            if not placed_in_unit:
+                current_ref = min(
+                    pending,
+                    key=lambda ref: (-sum(root_adjacency.get(ref, {}).values()), ref),
+                )
+            else:
+                current_ref = min(
+                    pending,
+                    key=lambda ref: (
+                        -sum(
+                            weight
+                            for neighbor, weight in root_adjacency.get(ref, {}).items()
+                            if neighbor in placed_in_unit
+                        ),
+                        ref,
+                    ),
+                )
+            ordered_members.append(current_ref)
+            pending.remove(current_ref)
+            placed_in_unit.add(current_ref)
+
+        # Authored block/section members stay in one compact tile. The outer
+        # grid spaces connected tiles while preserving internal cohesion.
+        local_columns = min(
+            len(ordered_members),
+            max(1, math.ceil(math.sqrt(len(ordered_members) * config.board_width_mm / config.board_height_mm))),
+        )
+        local_rows = math.ceil(len(ordered_members) / local_columns)
+        local_slots = []
+        for index in range(len(ordered_members)):
+            row, offset = divmod(index, local_columns)
+            column = offset if row % 2 == 0 else local_columns - 1 - offset
+            local_slots.append((row, column))
+        local_gap = max(config.min_component_gap_mm, min(2.0, min(config.board_width_mm, config.board_height_mm) / 100))
+        local_column_widths = [0.0] * local_columns
+        local_row_heights = [0.0] * local_rows
+        for ref, (row, column) in zip(ordered_members, local_slots, strict=True):
+            record = family_records[ref]
+            local_column_widths[column] = max(local_column_widths[column], record["half_width"] * 2)
+            local_row_heights[row] = max(local_row_heights[row], record["half_height"] * 2)
+        local_width = sum(local_column_widths) + local_gap * max(0, local_columns - 1)
+        local_height = sum(local_row_heights) + local_gap * max(0, local_rows - 1)
+        offsets: dict[str, tuple[float, float]] = {}
+        cursor = -local_width / 2
+        column_centers = []
+        for width in local_column_widths:
+            column_centers.append(cursor + width / 2)
+            cursor += width + local_gap
+        cursor = -local_height / 2
+        row_centers = []
+        for height in local_row_heights:
+            row_centers.append(cursor + height / 2)
+            cursor += height + local_gap
+        for ref, (row, column) in zip(ordered_members, local_slots, strict=True):
+            offsets[ref] = (column_centers[column], row_centers[row])
+        unit_layouts[unit] = {
+            "refs": ordered_members,
+            "width": local_width,
+            "height": local_height,
+            "offsets": offsets,
+        }
+
+    family_count = len(ordered_units)
+    if family_count == 0:
+        return {}
+    # Keep a small routing lane between family tiles, bounded on large boards.
+    gap = max(config.min_component_gap_mm, min(2.0, min(config.board_width_mm, config.board_height_mm) / 100))
+    usable_width = max(0.0, config.board_width_mm - 2 * config.edge_clearance_mm)
+    usable_height = max(0.0, config.board_height_mm - 2 * config.edge_clearance_mm)
+    def _grid(columns: int) -> tuple[float, float, list[float], list[float], list[tuple[int, int]]]:
+        rows = math.ceil(family_count / columns)
+        slots = []
+        for index in range(family_count):
+            row, offset = divmod(index, columns)
+            column = offset if row % 2 == 0 else columns - 1 - offset
+            slots.append((row, column))
+        column_widths = [0.0] * columns
+        row_heights = [0.0] * rows
+        for unit, (row, column) in zip(ordered_units, slots, strict=True):
+            layout = unit_layouts[unit]
+            column_widths[column] = max(column_widths[column], layout["width"])
+            row_heights[row] = max(row_heights[row], layout["height"])
+        packed_width = sum(column_widths) + gap * max(0, columns - 1)
+        packed_height = sum(row_heights) + gap * max(0, rows - 1)
+        return packed_width, packed_height, column_widths, row_heights, slots
+
+    board_aspect = usable_width / usable_height if usable_height > 0 else config.board_width_mm / config.board_height_mm
+    ideal_columns = max(1, math.ceil(math.sqrt(family_count * board_aspect)))
+    column_radius = max(4, math.ceil(ideal_columns / 2))
+    candidate_columns = {
+        1,
+        family_count,
+        *range(max(1, ideal_columns - column_radius), min(family_count, ideal_columns + column_radius) + 1),
+    }
+    candidates = []
+    for columns in sorted(candidate_columns):
+        packed_width, packed_height, column_widths, row_heights, slots = _grid(columns)
+        if packed_width <= 0 or packed_height <= 0:
+            continue
+        fit_scale = min(
+            usable_width / packed_width if packed_width else 1.0,
+            usable_height / packed_height if packed_height else 1.0,
+        )
+        # Preserve natural cell pitch whenever it fits. Shrink only when every
+        # candidate would otherwise exceed the authored board outline.
+        scale = min(1.0, fit_scale)
+        aspect_error = abs(math.log(max(1e-9, (packed_width / packed_height) / board_aspect)))
+        shrink = max(0.0, 1.0 - fit_scale)
+        candidates.append((shrink, aspect_error, packed_width * packed_height, columns,
+                           column_widths, row_heights, slots, packed_width, packed_height, scale))
+    if not candidates:
+        return {}
+    (
+        _shrink,
+        _aspect_error,
+        _natural_area,
+        _columns,
+        column_widths,
+        row_heights,
+        slots,
+        packed_width,
+        packed_height,
+        scale,
+    ) = min(candidates)
+    scaled_width = packed_width * scale
+    scaled_height = packed_height * scale
+    origin_x = (config.board_width_mm - scaled_width) / 2
+    origin_y = (config.board_height_mm - scaled_height) / 2
+    column_starts = []
+    cursor = origin_x
+    for width in column_widths:
+        column_starts.append(cursor)
+        cursor += (width + gap) * scale
+    row_starts = []
+    cursor = origin_y
+    for height in row_heights:
+        row_starts.append(cursor)
+        cursor += (height + gap) * scale
+
+    result: dict[str, tuple[float, float]] = {}
+    for unit, (row, column) in zip(ordered_units, slots, strict=True):
+        layout = unit_layouts[unit]
+        center_x = column_starts[column] + column_widths[column] * scale / 2
+        center_y = row_starts[row] + row_heights[row] * scale / 2
+        for ref in layout["refs"]:
+            record = family_records[ref]
+            offset_x, offset_y = layout["offsets"][ref]
+            x = center_x + offset_x
+            y = center_y + offset_y
+            x = max(config.edge_clearance_mm + record["half_width"],
+                    min(x, config.board_width_mm - config.edge_clearance_mm - record["half_width"]))
+            y = max(config.edge_clearance_mm + record["half_height"],
+                    min(y, config.board_height_mm - config.edge_clearance_mm - record["half_height"]))
+            result[ref] = (x, y)
+    return result
+
+
 def _init_placements(
     components: list[ComponentDef],
     config: PlacementConfig,
@@ -625,6 +971,7 @@ def _init_placements(
     """Create initial placement state with zone-based positions."""
     placements: list[ComponentPlacement] = []
     placement_by_ref: dict[str, ComponentPlacement] = {}
+    family_grid = _family_grid_seed_positions(components, config)
     zone_counters: dict[str, int] = {}
     support_counters: dict[str, int] = {}
     support_seed_counters: dict[tuple[str, str, str, tuple[str, ...]], int] = {}
@@ -681,16 +1028,20 @@ def _init_placements(
             if pad_seed is not None:
                 x, y = pad_seed
         else:
-            zone_cx, zone_cy = _zone_center_mm(cat, config)
+            seeded_position = family_grid.get(comp.source_ref)
+            if seeded_position is not None:
+                x, y = seeded_position
+            else:
+                zone_cx, zone_cy = _zone_center_mm(cat, config)
 
-            idx = zone_counters.get(cat, 0)
-            zone_counters[cat] = idx + 1
-            cols = max(1, int(math.sqrt(idx + 1)))
-            row, col = divmod(idx, cols)
-            offset_x = col * (w + config.min_component_gap_mm + 1.0)
-            offset_y = row * (h + config.min_component_gap_mm + 1.0)
-            x = zone_cx + offset_x
-            y = zone_cy + offset_y
+                idx = zone_counters.get(cat, 0)
+                zone_counters[cat] = idx + 1
+                cols = max(1, int(math.sqrt(idx + 1)))
+                row, col = divmod(idx, cols)
+                offset_x = col * (w + config.min_component_gap_mm + 1.0)
+                offset_y = row * (h + config.min_component_gap_mm + 1.0)
+                x = zone_cx + offset_x
+                y = zone_cy + offset_y
 
         x = max(
             config.edge_clearance_mm + w / 2,
@@ -761,6 +1112,32 @@ def _init_placements(
             pin_offsets=getattr(comp, "placement_pin_offsets", None),
             pin_nets=pin_nets,
             reference_size_mm=getattr(comp, "placement_reference_size_mm", None),
+            native_footprint_id=str(getattr(comp, "placement_native_footprint_id", "") or ""),
+            native_pad_geometry=getattr(comp, "placement_native_pad_geometry", None),
+            native_reference_locked=getattr(comp, "placement_native_reference_locked", None),
+            native_surface_copper_layer_id=getattr(
+                comp, "placement_native_surface_copper_layer_id", None
+            ),
+            native_surface_copper_side=getattr(comp, "placement_native_surface_copper_side", None),
+            native_board_copper_layer_ids=getattr(
+                comp, "placement_native_board_copper_layer_ids", None
+            ),
+            native_board_copper_layer_inventory_complete=getattr(
+                comp, "placement_native_board_copper_layer_inventory_complete", None
+            ),
+            native_known_copper_layer_ids=getattr(
+                comp, "placement_native_known_copper_layer_ids", None
+            ),
+            native_known_copper_layer_inventory_complete=getattr(
+                comp, "placement_native_known_copper_layer_inventory_complete", None
+            ),
+            native_footprint_is_smd=getattr(comp, "placement_native_footprint_is_smd", None),
+            native_opposite_courtyard_known=getattr(
+                comp, "placement_native_opposite_courtyard_known", None
+            ),
+            native_opposite_courtyard_present=getattr(
+                comp, "placement_native_opposite_courtyard_present", None
+            ),
             geometry_status=str(getattr(comp, "placement_geometry_status", "estimated") or "estimated"),
         )
         placements.append(placement)
@@ -769,8 +1146,177 @@ def _init_placements(
     return placements
 
 
-def _overlap_area(a: ComponentPlacement, b: ComponentPlacement, gap: float = 0.0) -> float:
+def _proven_native_surface(placement: ComponentPlacement) -> str | None:
+    """Return the physical surface only for complete, native, solid SMD pads.
+
+    The native inspector must explicitly identify the footprint's copper
+    surface, each pad's copper layers, and confirm no opposite-side courtyard.
+    Every pad must be known, non-drilled SMD geometry on that one surface.
+    Missing, mixed, through-hole, NPTH, or otherwise unfamiliar metadata
+    remains blocking.
+    """
+    side = str(placement.layer).lower()
+    surface_layer = placement.native_surface_copper_layer_id
+    native_side = placement.native_surface_copper_side
+    board_copper_layers = placement.native_board_copper_layer_ids
+    board_layer_signature = tuple(board_copper_layers) if isinstance(board_copper_layers, list) else ()
+    known_copper_layers = placement.native_known_copper_layer_ids
+    known_layer_signature = tuple(known_copper_layers) if isinstance(known_copper_layers, list) else ()
+    pads = placement.native_pad_geometry
+    pad_signature = _native_pad_geometry_signature(pads)
+    cached = placement.native_surface_cache
+    cache_key = (
+        side,
+        surface_layer,
+        native_side,
+        board_layer_signature,
+        known_layer_signature,
+        placement.geometry_status,
+        placement.native_footprint_id,
+        placement.native_board_copper_layer_inventory_complete,
+        placement.native_known_copper_layer_inventory_complete,
+        placement.native_footprint_is_smd,
+        placement.native_opposite_courtyard_known,
+        placement.native_opposite_courtyard_present,
+        placement.width,
+        placement.height,
+        pad_signature,
+    )
+    if cached is not None and cached[0] == cache_key:
+        return cached[1]
+
+    def cache(value: str | None) -> str | None:
+        placement.native_surface_cache = (cache_key, value)
+        return value
+
+    if (placement.geometry_status != "board_geometry" or not placement.native_footprint_id
+            or placement.native_footprint_is_smd is not True
+            or placement.native_opposite_courtyard_known is not True
+            or placement.native_opposite_courtyard_present is not False):
+        return cache(None)
+    if (type(surface_layer) is not int or native_side not in {"front", "back"}
+            or native_side != side):
+        return cache(None)
+    if (not isinstance(board_copper_layers, list) or not board_copper_layers
+            or any(type(value) is not int or value < 0 for value in board_copper_layers)
+            or len(set(board_copper_layers)) != len(board_copper_layers)
+            or placement.native_board_copper_layer_inventory_complete is not True
+            or surface_layer not in board_copper_layers):
+        return cache(None)
+    if (not isinstance(known_copper_layers, list) or not known_copper_layers
+            or any(type(value) is not int or value < 0 for value in known_copper_layers)
+            or len(set(known_copper_layers)) != len(known_copper_layers)
+            or placement.native_known_copper_layer_inventory_complete is not True
+            or not set(board_copper_layers) <= set(known_copper_layers)
+            or surface_layer not in known_copper_layers):
+        return cache(None)
+    known_copper_set = set(known_copper_layers)
+    if not isinstance(pads, list) or not pads:
+        return cache(None)
+    if (not math.isfinite(placement.width) or not math.isfinite(placement.height)
+            or placement.width <= 0 or placement.height <= 0):
+        return cache(None)
+    for pad in pads:
+        if not isinstance(pad, dict) or pad.get("surface_shape_known") is not True:
+            return cache(None)
+        if pad.get("known_shape") is not True:
+            ratio = pad.get("roundrect_radius_ratio")
+            if (pad.get("native_roundrect") is not True
+                    or type(ratio) not in (int, float)
+                    or not math.isfinite(float(ratio)) or not 0.0 <= float(ratio) <= 0.5):
+                return cache(None)
+        if type(pad.get("attribute")) is not int or pad["attribute"] != 1:  # pcbnew.PAD_ATTRIB_SMD
+            return cache(None)
+        if (type(pad.get("shape")) is not int or not isinstance(pad.get("number"), str)
+                or not pad["number"]):
+            return cache(None)
+        size = pad.get("size_iu")
+        drill = pad.get("drill_iu")
+        layers = pad.get("layers")
+        if (not isinstance(size, list) or len(size) != 2
+                or any(type(value) is not int or value <= 0 for value in size)):
+            return cache(None)
+        if (not isinstance(drill, list) or len(drill) != 2
+                or any(type(value) is not int or value != 0 for value in drill)):
+            return cache(None)
+        if (not isinstance(layers, list) or not layers
+                or any(type(value) is not int or value < 0 for value in layers)
+                or len(set(layers)) != len(layers)):
+            return cache(None)
+        copper_layers = pad.get("copper_layers")
+        # Include disabled-but-known copper layers in the pad mask. A pad
+        # spanning an inner copper layer remains mixed even when the current
+        # board stack has that layer disabled.
+        actual_copper_layers = sorted(set(layers) & known_copper_set)
+        if (not isinstance(copper_layers, list) or copper_layers != actual_copper_layers
+                or actual_copper_layers != [surface_layer]):
+            return cache(None)
+    return cache(side)
+
+
+def _native_pad_geometry_signature(pads: Any) -> tuple[Any, ...]:
+    """Build a value signature so in-place native-pad mutations invalidate proof."""
+    fields = (
+        "known_shape", "surface_shape_known", "native_roundrect",
+        "roundrect_radius_ratio", "attribute", "shape", "number", "size_iu",
+        "drill_iu", "layers", "copper_layers",
+    )
+
+    def freeze(value: Any) -> Any:
+        if value is None or type(value) in (bool, int, float, str):
+            return (type(value).__name__, value)
+        if isinstance(value, (list, tuple)):
+            return (type(value).__name__, tuple(freeze(item) for item in value))
+        return ("unsupported", type(value).__module__, type(value).__qualname__, repr(value))
+
+    if not isinstance(pads, list):
+        return ("invalid-container", type(pads).__module__, type(pads).__qualname__, repr(pads))
+    return tuple(
+        ("pad", tuple((name, freeze(pad.get(name))) for name in fields))
+        if isinstance(pad, dict)
+        else ("invalid-pad", type(pad).__module__, type(pad).__qualname__, repr(pad))
+        for pad in pads
+    )
+
+
+def _proven_opposite_native_smd_sides(
+    a: ComponentPlacement,
+    b: ComponentPlacement,
+    *,
+    surface_cache: dict[int, str | None] | None = None,
+    a_index: int | None = None,
+    b_index: int | None = None,
+) -> bool:
+    """Prove both native bodies are mounted on distinct PCB surfaces."""
+    if str(a.layer).lower() == str(b.layer).lower():
+        return False
+
+    def proven(placement: ComponentPlacement, index: int | None) -> str | None:
+        if surface_cache is None or index is None:
+            return _proven_native_surface(placement)
+        if index not in surface_cache:
+            surface_cache[index] = _proven_native_surface(placement)
+        return surface_cache[index]
+
+    first_side = proven(a, a_index)
+    second_side = proven(b, b_index)
+    return first_side is not None and second_side is not None and first_side != second_side
+
+
+def _overlap_area(
+    a: ComponentPlacement,
+    b: ComponentPlacement,
+    gap: float = 0.0,
+    *,
+    _surface_cache: dict[int, str | None] | None = None,
+    _a_index: int | None = None,
+    _b_index: int | None = None,
+) -> float:
     """Calculate overlap area between two components (including gap)."""
+    if _proven_opposite_native_smd_sides(
+        a, b, surface_cache=_surface_cache, a_index=_a_index, b_index=_b_index
+    ):
+        return 0.0
     aw, ah = _effective_dimensions(a)
     bw, bh = _effective_dimensions(b)
     # Split the requested edge-to-edge gap between the two courtyards.
@@ -826,6 +1372,9 @@ def _overlapping_pairs(
     active: dict[int, tuple[float, float, float, float, int, ComponentPlacement]] = {}
     expiry: list[tuple[float, int]] = []
     pairs: list[tuple[int, int, float]] = []
+    # Keep proof reuse local to this unchanged placement sweep. Direct geometry
+    # calls continue to validate current native pad contents on every call.
+    surface_cache: dict[int, str | None] = {}
     for box in boxes:
         left, right, top, bottom, index, placement = box
         while expiry and expiry[0][0] <= left:
@@ -835,8 +1384,12 @@ def _overlapping_pairs(
             other = active[other_index]
             if bottom <= other[2] or top >= other[3]:
                 continue
-            first, second = (other[5], placement) if other_index < index else (placement, other[5])
-            area = _overlap_area(first, second, gap)
+            first_index, second_index = sorted((other_index, index))
+            first, second = placements[first_index], placements[second_index]
+            area = _overlap_area(
+                first, second, gap, _surface_cache=surface_cache,
+                _a_index=first_index, _b_index=second_index,
+            )
             if area > 0:
                 pairs.append((min(index, other_index), max(index, other_index), area))
         active[index] = box
@@ -873,6 +1426,11 @@ def _rectangle_clearance(a: ComponentPlacement, b: ComponentPlacement) -> float:
     return math.hypot(dx, dy)
 
 
+def _support_body_clearance_applies(a: ComponentPlacement, b: ComponentPlacement) -> bool:
+    """Whether 2D body-spacing applies to this pair of board surfaces."""
+    return not _proven_opposite_native_smd_sides(a, b)
+
+
 def _is_parent_support_pair(a: ComponentPlacement, b: ComponentPlacement) -> bool:
     return a.parent_ref == b.ref or b.parent_ref == a.ref
 
@@ -904,6 +1462,8 @@ def _cost_support_body_clearance(placements: list[ComponentPlacement], config: P
             continue
         parent = by_ref.get(support.parent_ref)
         if parent is None:
+            continue
+        if not _support_body_clearance_applies(support, parent):
             continue
         clearance = _rectangle_clearance(support, parent)
         if clearance < config.support_body_clearance_mm:
@@ -949,13 +1509,46 @@ def _cost_thermal(placements: list[ComponentPlacement]) -> float:
     return total * 10.0
 
 
-def _cost_zone(placements: list[ComponentPlacement], config: PlacementConfig) -> float:
-    """Penalty for components far from their preferred zone."""
+def _cost_zone(
+    placements: list[ComponentPlacement],
+    config: PlacementConfig,
+    connectivity_pairs: dict[tuple[str, str], float] | None = None,
+) -> float:
+    """Penalty for drifting from category zones, softened by family affinity.
+
+    Category anchors are useful for isolated components, but can split a
+    connected block when its members have different categories. Scale the
+    anchor term by the root's bounded electrical and explicit grouping degree;
+    generated support parts also inherit their owner's affinity.
+    """
     total = 0.0
+    by_ref = {placement.ref: placement for placement in placements}
+    root_affinity: dict[str, float] = {}
+    for (left, right), weight in (connectivity_pairs or {}).items():
+        if not math.isfinite(weight) or weight <= 0:
+            continue
+        if left in by_ref:
+            root_affinity[left] = root_affinity.get(left, 0.0) + weight
+        if right in by_ref:
+            root_affinity[right] = root_affinity.get(right, 0.0) + weight
+
+    for members in _functional_groups(placements).values():
+        if len(members) < 2:
+            continue
+        for member in members:
+            root_affinity[member.ref] = root_affinity.get(member.ref, 0.0) + min(len(members) - 1, 3)
+
     for p in placements:
         ideal_x, ideal_y = _zone_center_mm(p.category, config)
         dist = math.hypot(p.x - ideal_x, p.y - ideal_y)
-        total += dist * 0.1
+        root_ref = p.parent_ref or p.ref
+        affinity = root_affinity.get(root_ref, 0.0)
+        # Keep at least 30% of the original anchor pull. The square-root
+        # response prevents high-fanout nets from erasing category intent.
+        attraction = max(0.3, 1.0 / (1.0 + math.sqrt(affinity)))
+        if p.parent_ref:
+            attraction = min(attraction, 0.3)
+        total += dist * 0.1 * attraction
     return total
 
 
@@ -1882,7 +2475,7 @@ def _total_cost(
         cost += _cost_connectivity(placements, connectivity_pairs or {})
         cost += _cost_noise_separation(placements)
     if config.strategy in ("cost", "balanced"):
-        cost += _cost_zone(placements, config)
+        cost += _cost_zone(placements, config, connectivity_pairs)
         cost += _cost_compactness(placements, config)
 
     return cost
@@ -2076,6 +2669,7 @@ def _legalize_overlaps(
                     return False
                 if (
                     _is_parent_support_pair(placement, other)
+                    and _support_body_clearance_applies(placement, other)
                     and _rectangle_clearance(placement, other) < config.support_body_clearance_mm
                 ):
                     return False
@@ -2275,9 +2869,119 @@ def _placement_hard_defects(
     for p in state:
         if p.parent_ref:
             parent = by_ref.get(p.parent_ref)
-            defects += parent is None or _rectangle_clearance(p, parent) + 0.001 < config.support_body_clearance_mm
+            defects += parent is None or (
+                _support_body_clearance_applies(p, parent)
+                and _rectangle_clearance(p, parent) + 0.001 < config.support_body_clearance_mm
+            )
     defects += len(_constraint_evaluation(state, config, plan)["violations"])
     return int(defects)
+
+
+def _topology_relaxed_seed(
+    state: list[ComponentPlacement],
+    pairs: dict[tuple[str, str], float],
+    config: PlacementConfig,
+    constraint_plan: _ConstraintPlan,
+    *,
+    passes: int = 4,
+    blend: float = 0.5,
+) -> tuple[list[ComponentPlacement], dict[str, int]]:
+    """Relax movable primary families toward connected neighbors synchronously.
+
+    This is only a deterministic seed candidate. The caller legalizes it and
+    accepts it only when the ordinary hard-defect-first placement rank beats
+    the original legalized baseline. Mechanical connector anchors, authored
+    fixed/edge placements, and owner/support relative geometry are preserved.
+    """
+    if passes < 0 or not math.isfinite(blend) or not 0.0 <= blend <= 1.0:
+        raise ValueError("topology seed passes and blend must be finite and within range")
+    candidate = [replace(placement) for placement in state]
+    by_ref = {placement.ref: placement for placement in candidate}
+    families: dict[str, list[ComponentPlacement]] = {}
+    for placement in candidate:
+        if placement.parent_ref:
+            families.setdefault(placement.parent_ref, []).append(placement)
+        else:
+            families.setdefault(placement.ref, []).append(placement)
+
+    adjacency: dict[str, dict[str, float]] = {}
+    for (left, right), weight in pairs.items():
+        if left not in by_ref or right not in by_ref or not math.isfinite(weight) or weight <= 0:
+            continue
+        adjacency.setdefault(left, {})[right] = weight
+        adjacency.setdefault(right, {})[left] = weight
+
+    anchor_categories = {"connector", "usb", "debug", "rf"}
+    authored_edges = constraint_plan.edges
+    movable_roots: set[str] = set()
+    for root, family in families.items():
+        owner = by_ref.get(root)
+        if owner is None or owner.parent_ref or owner.category in anchor_categories:
+            continue
+        if any(
+            member.locked
+            or member.constraint_locked
+            or member.edge_constrained
+            or member.rotation_locked
+            or member.ref in authored_edges
+            for member in family
+        ):
+            continue
+        movable_roots.add(root)
+
+    moved_roots: set[str] = set()
+    for _pass in range(passes):
+        positions = {ref: (placement.x, placement.y) for ref, placement in by_ref.items()}
+        deltas: dict[str, tuple[float, float]] = {}
+        for root in sorted(movable_roots):
+            owner = by_ref[root]
+            neighbors = [
+                (other, weight)
+                for other, weight in adjacency.get(root, {}).items()
+                if other != root and other in positions
+            ]
+            total_weight = sum(weight for _, weight in neighbors)
+            if total_weight <= 0:
+                continue
+            target_x = sum(positions[other][0] * weight for other, weight in neighbors) / total_weight
+            target_y = sum(positions[other][1] * weight for other, weight in neighbors) / total_weight
+            proposed_x = (target_x - owner.x) * blend
+            proposed_y = (target_y - owner.y) * blend
+            family = families[root]
+            min_dx = max(
+                config.edge_clearance_mm + _effective_dimensions(member)[0] / 2 - member.x
+                for member in family
+            )
+            max_dx = min(
+                config.board_width_mm - config.edge_clearance_mm - _effective_dimensions(member)[0] / 2 - member.x
+                for member in family
+            )
+            min_dy = max(
+                config.edge_clearance_mm + _effective_dimensions(member)[1] / 2 - member.y
+                for member in family
+            )
+            max_dy = min(
+                config.board_height_mm - config.edge_clearance_mm - _effective_dimensions(member)[1] / 2 - member.y
+                for member in family
+            )
+            if min_dx > max_dx or min_dy > max_dy:
+                continue
+            dx = max(min_dx, min(proposed_x, max_dx))
+            dy = max(min_dy, min(proposed_y, max_dy))
+            if dx or dy:
+                deltas[root] = (dx, dy)
+
+        if not deltas:
+            break
+        # Jacobi-style updates: every target in this pass used the same
+        # previous state, so results do not depend on component iteration order.
+        for root, (dx, dy) in deltas.items():
+            for member in families[root]:
+                member.x += dx
+                member.y += dy
+            moved_roots.add(root)
+
+    return candidate, {"eligible_families": len(movable_roots), "moved_families": len(moved_roots)}
 
 
 def _courtyard_envelope_center(
@@ -2298,8 +3002,12 @@ def _courtyard_envelope_center(
 def _family_alignment_candidates(
     state: list[ComponentPlacement],
     config: PlacementConfig,
+    *,
+    max_candidates: int | None = None,
 ) -> list[list[ComponentPlacement]]:
     """Align distinct owner families, optionally recentering the whole layout."""
+    if max_candidates is not None and max_candidates <= 0:
+        return []
     excluded = {"connector", "usb", "debug", "rf", "passive"}
     roots = [placement for placement in state if not placement.parent_ref and placement.category not in excluded]
     families: list[tuple[str, list[int], tuple[float, float], tuple[float, float, float, float]]] = []
@@ -2357,6 +3065,8 @@ def _family_alignment_candidates(
         )
         spread = max(0.0, channel - gap) / 2
         for fraction in (0.5, 1.0):
+            if max_candidates is not None and len(candidates) >= max_candidates:
+                return candidates
             candidate = [replace(placement) for placement in state]
             shift = delta * fraction / 2
             for index in first_members_indices:
@@ -2387,6 +3097,8 @@ def _family_alignment_candidates(
             candidates.append(candidate)
 
             if can_recenter:
+                if max_candidates is not None and len(candidates) >= max_candidates:
+                    return candidates
                 center_x, center_y = _courtyard_envelope_center(candidate)
                 dx = config.board_width_mm / 2 - center_x
                 dy = config.board_height_mm / 2 - center_y
@@ -2398,6 +3110,335 @@ def _family_alignment_candidates(
     return candidates
 
 
+_POWER_SUPPORT_MAX_TARGETS = 16
+_POWER_SUPPORT_MAX_RAW = 128
+_POWER_SUPPORT_MAX_FULL_RANK = 3
+_POWER_SUPPORT_RAYS = tuple((math.cos(math.radians(a)), math.sin(math.radians(a))) for a in range(0, 360, 45))
+_POWER_SUPPORT_ROTATIONS = (0.0, 90.0, 180.0, 270.0)
+
+
+def _power_support_native_maps_complete_unchecked(p: ComponentPlacement) -> bool:
+    if (p.geometry_status != "board_geometry" or not p.native_footprint_id
+            or p.native_board_copper_layer_inventory_complete is not True
+            or p.native_known_copper_layer_inventory_complete is not True
+            or p.native_surface_copper_side not in {"front", "back"}
+            or p.layer.casefold() != p.native_surface_copper_side.casefold()
+            or p.native_surface_copper_layer_id is None
+            or p.native_surface_copper_layer_id not in (p.native_board_copper_layer_ids or [])
+            or p.native_surface_copper_layer_id not in (p.native_known_copper_layer_ids or [])
+            or p.native_footprint_is_smd is not True
+            or not isinstance(p.native_pad_geometry, list) or not p.native_pad_geometry
+            or not isinstance(p.pin_offsets, dict) or not isinstance(p.pin_nets, dict)
+            or not isinstance(p.net_pad_offsets, dict)):
+        return False
+    rows = p.native_pad_geometry
+    numbers = [str(row.get("number", "")) for row in rows if isinstance(row, dict)]
+    if (len(numbers) != len(rows) or not all(numbers) or len(numbers) != len(set(numbers))
+            or set(numbers) != set(p.pin_offsets) or set(numbers) != set(p.pin_nets)):
+        return False
+    frame_delta = None
+    grouped: dict[str, list[tuple[float, float]]] = {}
+    for row in rows:
+        number, net, pos = str(row["number"]), row.get("net"), row.get("local_position_iu")
+        if not isinstance(net, str) or not isinstance(pos, (list, tuple)) or len(pos) != 2:
+            return False
+        if (not isinstance(row.get("copper_layers"), (list, tuple)) or not row["copper_layers"]
+                or p.native_surface_copper_layer_id not in row["copper_layers"]):
+            return False
+        try:
+            native_xy = (float(pos[0]) / 1_000_000.0, float(pos[1]) / 1_000_000.0)
+            offset = p.pin_offsets[number]
+            if not isinstance(offset, (list, tuple)) or len(offset) != 2:
+                return False
+            mapped_xy = (float(offset[0]), float(offset[1]))
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return False
+        if (not all(math.isfinite(value) for value in (*native_xy, *mapped_xy))
+                or p.pin_nets[number] != net):
+            return False
+        delta = (native_xy[0] - mapped_xy[0], native_xy[1] - mapped_xy[1])
+        if frame_delta is None:
+            frame_delta = delta
+        elif max(abs(delta[0] - frame_delta[0]), abs(delta[1] - frame_delta[1])) > 1e-6:
+            return False
+        if net:
+            grouped.setdefault(net, []).append(mapped_xy)
+    declared = {str(net): list(offsets) for net, offsets in p.net_pad_offsets.items() if offsets}
+    if set(declared) != set(grouped):
+        return False
+    for net, expected in grouped.items():
+        remaining = list(declared[net])
+        if len(remaining) != len(expected):
+            return False
+        for x, y in expected:
+            match = next((i for i, point in enumerate(remaining) if len(point) == 2
+                          and abs(float(point[0]) - x) <= 1e-6
+                          and abs(float(point[1]) - y) <= 1e-6), None)
+            if match is None:
+                return False
+            remaining.pop(match)
+    return True
+
+
+def _power_support_native_maps_complete(p: ComponentPlacement) -> bool:
+    """Treat malformed native geometry as unproven instead of raising."""
+    try:
+        return _power_support_native_maps_complete_unchecked(p)
+    except (AttributeError, IndexError, KeyError, OverflowError, TypeError, ValueError):
+        return False
+
+
+def _power_support_state_maps_complete(state: list[ComponentPlacement]) -> bool:
+    """Prove complete physical pad endpoints for global rail/return HPWL."""
+    if not state:
+        return False
+    for placement in state:
+        if (placement.geometry_status != "board_geometry" or not placement.native_footprint_id
+                or placement.native_board_copper_layer_inventory_complete is not True
+                or placement.native_known_copper_layer_inventory_complete is not True
+                or not isinstance(placement.native_board_copper_layer_ids, list)
+                or not isinstance(placement.native_known_copper_layer_ids, list)
+                or not isinstance(placement.native_pad_geometry, list)
+                or not isinstance(placement.pin_offsets, dict)
+                or not isinstance(placement.net_pad_offsets, dict)):
+            return False
+        try:
+            board_layers = set(placement.native_board_copper_layer_ids)
+            known_layers = set(placement.native_known_copper_layer_ids)
+            if (not board_layers or not known_layers or not board_layers <= known_layers
+                    or any(isinstance(layer, bool) or not isinstance(layer, int)
+                           for layer in board_layers | known_layers)):
+                return False
+            rows = placement.native_pad_geometry
+            counts: dict[str, int] = {}
+            grouped_native: dict[str, list[tuple[float, float]]] = {}
+            for row in rows:
+                if not isinstance(row, dict):
+                    return False
+                number = row.get("number")
+                net = row.get("net")
+                pos = row.get("local_position_iu")
+                layers = row.get("copper_layers")
+                if (not isinstance(number, str) or not isinstance(net, str)
+                        or not isinstance(pos, (list, tuple)) or len(pos) != 2
+                        or not isinstance(layers, (list, tuple))):
+                    return False
+                if (any(isinstance(layer, bool) or not isinstance(layer, int) for layer in layers)
+                        or not set(layers) <= known_layers or (net and not set(layers))):
+                    return False
+                native_xy = (float(pos[0]) / 1_000_000.0, float(pos[1]) / 1_000_000.0)
+                if not all(math.isfinite(value) for value in native_xy):
+                    return False
+                if not number and net:
+                    return False
+                counts[number] = counts.get(number, 0) + 1
+                if net:
+                    grouped_native.setdefault(net, []).append(native_xy)
+            unique_numbers = {number for number, count in counts.items() if number and count == 1}
+            if set(placement.pin_offsets) != unique_numbers:
+                return False
+            frame_delta = None
+            for number in sorted(unique_numbers):
+                offset = placement.pin_offsets[number]
+                if not isinstance(offset, (list, tuple)) or len(offset) != 2:
+                    return False
+                mapped_xy = (float(offset[0]), float(offset[1]))
+                row = next(row for row in rows if row["number"] == number)
+                native_xy = tuple(float(value) / 1_000_000.0 for value in row["local_position_iu"])
+                delta = (native_xy[0] - mapped_xy[0], native_xy[1] - mapped_xy[1])
+                if frame_delta is None:
+                    frame_delta = delta
+                elif max(abs(delta[0] - frame_delta[0]), abs(delta[1] - frame_delta[1])) > 1e-6:
+                    return False
+            declared = placement.net_pad_offsets
+            if any(not isinstance(net, str) or not isinstance(points, list) for net, points in declared.items()):
+                return False
+            normalized_declared = {net: points for net, points in declared.items() if points}
+            if set(normalized_declared) != set(grouped_native):
+                return False
+            if grouped_native and frame_delta is None:
+                return False
+            dx, dy = frame_delta or (0.0, 0.0)
+            for net, expected in grouped_native.items():
+                remaining = list(normalized_declared[net])
+                if len(remaining) != len(expected):
+                    return False
+                for x, y in expected:
+                    target = (x - dx, y - dy)
+                    match = next((i for i, point in enumerate(remaining)
+                                  if isinstance(point, (list, tuple)) and len(point) == 2
+                                  and all(math.isfinite(float(value)) for value in point)
+                                  and abs(float(point[0]) - target[0]) <= 1e-6
+                                  and abs(float(point[1]) - target[1]) <= 1e-6), None)
+                    if match is None:
+                        return False
+                    remaining.pop(match)
+        except (KeyError, TypeError, ValueError, OverflowError, StopIteration):
+            return False
+    return True
+
+
+def _power_support_pair(parent: ComponentPlacement, support: ComponentPlacement) -> tuple[str, str] | None:
+    if parent.net_pad_offsets is None or support.net_pad_offsets is None:
+        return None
+    common = {n for n in parent.net_pad_offsets.keys() & support.net_pad_offsets.keys()
+              if parent.net_pad_offsets.get(n) and support.net_pad_offsets.get(n)}
+    rails = sorted(n for n in common if n.upper().startswith(_POWER_NET_PREFIXES) or _is_voltage_rail(n))
+    returns = sorted(n for n in common if n.upper().startswith(_GROUND_NET_PREFIXES))
+    if len(rails) != 1 or len(returns) != 1:
+        return None
+    if len(support.net_pad_offsets[rails[0]]) != 1 or len(support.net_pad_offsets[returns[0]]) != 1:
+        return None
+    return rails[0], returns[0]
+
+
+def _power_support_eligibility(state: list[ComponentPlacement], support: ComponentPlacement,
+                               plan: _ConstraintPlan) -> tuple[ComponentPlacement, str, str] | None:
+    if (support.placement_role.strip().casefold() not in _POWER_LOOP_ROLES or not support.parent_ref
+            or support.locked or support.constraint_locked or support.edge_constrained
+            or support.native_reference_locked is not False or support.ref in plan.fixed or support.ref in plan.edges
+            or not _power_support_native_maps_complete(support)):
+        return None
+    parent = next((p for p in state if p.ref == support.parent_ref), None)
+    if (parent is None or not _power_support_native_maps_complete(parent)
+            or parent.layer.casefold() != support.layer.casefold()):
+        return None
+    nets = _power_support_pair(parent, support)
+    return (parent, *nets) if nets else None
+
+
+def _power_support_legs(parent: ComponentPlacement, support: ComponentPlacement,
+                        rail: str, return_net: str) -> tuple[float, float]:
+    p_rail, s_rail = _rotated_net_endpoints(parent, rail), _rotated_net_endpoints(support, rail)
+    p_gnd, s_gnd = _rotated_net_endpoints(parent, return_net), _rotated_net_endpoints(support, return_net)
+    if not p_rail or not s_rail or not p_gnd or not s_gnd:
+        raise ValueError("native rail/return pad endpoints are incomplete")
+    return (min(math.dist(a, b) for a in p_rail for b in s_rail),
+            min(math.dist(a, b) for a in p_gnd for b in s_gnd))
+
+
+def _power_net_hpwl(state: list[ComponentPlacement], net: str) -> float | None:
+    points = [point for p in state for point in _rotated_net_endpoints(p, net)]
+    if len(points) < 2:
+        return None
+    xs, ys = [p[0] for p in points], [p[1] for p in points]
+    return max(xs) - min(xs) + max(ys) - min(ys)
+
+
+def _power_support_joint_candidates(state: list[ComponentPlacement], support: ComponentPlacement,
+                                    config: PlacementConfig, plan: _ConstraintPlan
+                                    ) -> list[tuple[list[ComponentPlacement], tuple[int, int, int, int]]]:
+    eligible = _power_support_eligibility(state, support, plan)
+    if not eligible:
+        return []
+    parent, rail, return_net = eligible
+    parent_rail, parent_return = _rotated_net_endpoints(parent, rail), _rotated_net_endpoints(parent, return_net)
+    support_rail, support_return = _rotated_net_endpoints(support, rail), _rotated_net_endpoints(support, return_net)
+    if not parent_rail or not parent_return or len(support_rail) != 1 or len(support_return) != 1:
+        return []
+    near_rail = sorted(parent_rail, key=lambda p: (math.dist(p, support_rail[0]), p))[:2]
+    near_return = sorted(parent_return, key=lambda p: (math.dist(p, support_return[0]), p))[:2]
+    pairs = sorted(((math.dist(a, support_rail[0]) + math.dist(b, support_return[0]), a, b)
+                    for a in near_rail for b in near_return), key=lambda row: (row[0], row[1], row[2]))
+    pair_rows = []
+    for _distance, a, b in pairs:
+        if (a, b) not in pair_rows:
+            pair_rows.append((a, b))
+        if len(pair_rows) == 2:
+            break
+    gap = max(config.min_component_gap_mm, config.support_body_clearance_mm)
+    diagonal = math.hypot(config.board_width_mm, config.board_height_mm)
+    rotations = ((support.rotation,) if support.rotation_locked else
+                 tuple((support.rotation + d) % 360.0 for d in _POWER_SUPPORT_ROTATIONS))
+    result, seen = [], set()
+    for pair_i, (owner_rail, owner_return) in enumerate(pair_rows):
+        for rotation_i, rotation in enumerate(rotations):
+            oriented = replace(support, x=0.0, y=0.0, rotation=rotation)
+            sr, sg = _rotated_net_endpoints(oriented, rail), _rotated_net_endpoints(oriented, return_net)
+            if len(sr) != 1 or len(sg) != 1:
+                continue
+            bx = ((owner_rail[0] - sr[0][0]) + (owner_return[0] - sg[0][0])) / 2.0
+            by = ((owner_rail[1] - sr[0][1]) + (owner_return[1] - sg[0][1])) / 2.0
+            for ray_i, (ux, uy) in enumerate(_POWER_SUPPORT_RAYS):
+                def clear(distance: float) -> bool:
+                    trial = replace(oriented, x=bx + ux * distance, y=by + uy * distance)
+                    return (_overlap_area(parent, trial, gap) <= 0
+                            and (not _support_body_clearance_applies(parent, trial)
+                                 or _rectangle_clearance(parent, trial) + 1e-9 >= config.support_body_clearance_mm))
+                low, high = 0.0, 0.0
+                if not clear(0.0):
+                    high = max(gap, 0.25)
+                    while high <= diagonal and not clear(high):
+                        low, high = high, high * 2.0
+                    if high > diagonal:
+                        continue
+                    for _ in range(18):
+                        mid = (low + high) / 2.0
+                        if clear(mid):
+                            high = mid
+                        else:
+                            low = mid
+                for step_i, extra in enumerate((0.0, gap)):
+                    x, y = round(bx + ux * (high + extra), 2), round(by + uy * (high + extra), 2)
+                    key = (x, y, rotation, support.layer)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    candidate = [replace(p) for p in state]
+                    moved = next(p for p in candidate if p.ref == support.ref)
+                    moved.x, moved.y, moved.rotation, moved.layer = x, y, rotation, support.layer
+                    result.append((candidate, (pair_i, rotation_i, ray_i, step_i)))
+                    if len(result) >= _POWER_SUPPORT_MAX_RAW:
+                        return result
+    return result
+
+
+def _power_support_prefilter(candidate: list[ComponentPlacement], baseline: list[ComponentPlacement],
+                             support_ref: str, parent_ref: str, rail: str, return_net: str,
+                             config: PlacementConfig, plan: _ConstraintPlan,
+                             old_legs: tuple[float, float], old_hpwl: tuple[float, float]
+                             ) -> tuple[float, float, float, float] | None:
+    moved = next((p for p in candidate if p.ref == support_ref), None)
+    if moved is None or not _inside_board(moved, config, plan):
+        return None
+    original = next(p for p in baseline if p.ref == support_ref)
+    if moved.layer != original.layer:
+        return None
+    for other in candidate:
+        if other.ref == support_ref:
+            continue
+        if _overlap_area(moved, other, config.min_component_gap_mm) > 0:
+            return None
+        if (_is_parent_support_pair(moved, other) and _support_body_clearance_applies(moved, other)
+                and _rectangle_clearance(moved, other) + 1e-9 < config.support_body_clearance_mm):
+            return None
+    owner = next((p for p in candidate if p.ref == parent_ref), None)
+    if owner is None:
+        return None
+    legs = _power_support_legs(owner, moved, rail, return_net)
+    if legs[0] > old_legs[0] + 1e-6 or legs[1] > old_legs[1] + 1e-6 or sum(legs) >= sum(old_legs) - 1e-6:
+        return None
+    hpwl = (_power_net_hpwl(candidate, rail), _power_net_hpwl(candidate, return_net))
+    if (hpwl[0] is None or hpwl[1] is None or hpwl[0] > old_hpwl[0] + 1e-6
+            or hpwl[1] > old_hpwl[1] + 1e-6):
+        return None
+    return legs[0], legs[1], hpwl[0], hpwl[1]
+
+
+def _power_support_refinement_targets(state: list[ComponentPlacement], config: PlacementConfig,
+                                     plan: _ConstraintPlan) -> list[str]:
+    measured = []
+    for support in sorted(state, key=lambda p: p.ref):
+        eligible = _power_support_eligibility(state, support, plan)
+        if eligible:
+            parent, rail, ret = eligible
+            legs = _power_support_legs(parent, support, rail, ret)
+            measured.append((-(legs[0] + legs[1]), support.ref))
+    return [ref for _loop, ref in sorted(measured)[:_POWER_SUPPORT_MAX_TARGETS]]
+
+
+
+
 def _refine_placement(
     state: list[ComponentPlacement],
     config: PlacementConfig,
@@ -2405,10 +3446,16 @@ def _refine_placement(
     plan: _ConstraintPlan,
     *,
     skip_worse_hard_defects: bool = True,
+    evaluation_budget: int | None = None,
 ) -> tuple[list[ComponentPlacement], int]:
     """Polish legal candidates with deterministic component and block moves."""
+    if evaluation_budget is not None and (
+        isinstance(evaluation_budget, bool) or not isinstance(evaluation_budget, int) or evaluation_budget < 0
+    ):
+        raise ValueError("evaluation_budget must be a non-negative integer or None")
     rank = _placement_rank(state, config, pairs, plan)
     evaluations = 0
+    budget_exhausted = False
 
     def score_candidate(candidate: list[ComponentPlacement]) -> tuple[int, float] | None:
         defects = _placement_hard_defects(candidate, config, plan)
@@ -2419,7 +3466,56 @@ def _refine_placement(
     for pass_index in range(config.refinement_passes):
         step = 1.0 / (2**pass_index)
         changed = False
+        # Prioritize at most 16 eligible native-pad power loops by measured
+        # baseline loop length. Each target gets at most 128 cheap proposals
+        # and at most three full-rank evaluations, all charged to this budget.
+        support_targets = (_power_support_refinement_targets(state, config, plan)
+                           if _power_support_state_maps_complete(state) else [])
+        for support_ref in support_targets:
+            if evaluation_budget is not None and evaluations >= evaluation_budget:
+                budget_exhausted = True
+                break
+            by_ref = {item.ref: item for item in state}
+            support = by_ref.get(support_ref)
+            if support is None:
+                continue
+            eligible = _power_support_eligibility(state, support, plan)
+            if eligible is None:
+                continue
+            parent, rail, return_net = eligible
+            old_legs = _power_support_legs(parent, support, rail, return_net)
+            old_hpwl = (_power_net_hpwl(state, rail), _power_net_hpwl(state, return_net))
+            if old_hpwl[0] is None or old_hpwl[1] is None:
+                continue
+            proposals = _power_support_joint_candidates(state, support, config, plan)
+            shortlist = []
+            for candidate, stable_key in proposals:
+                metrics = _power_support_prefilter(candidate, state, support_ref, parent.ref,
+                                                   rail, return_net, config, plan, old_legs, old_hpwl)
+                if metrics is None:
+                    continue
+                loop_length = metrics[0] + metrics[1]
+                moved = next(item for item in candidate if item.ref == support_ref)
+                displacement = math.hypot(moved.x - support.x, moved.y - support.y)
+                shortlist.append((loop_length, displacement, stable_key, candidate))
+            shortlist.sort(key=lambda row: (row[0], row[1], row[2]))
+            for _loop, _distance, _key, candidate in shortlist[:_POWER_SUPPORT_MAX_FULL_RANK]:
+                if evaluation_budget is not None and evaluations >= evaluation_budget:
+                    budget_exhausted = True
+                    break
+                evaluations += 1
+                candidate_rank = score_candidate(candidate)
+                if candidate_rank is not None and candidate_rank < rank:
+                    state, rank = candidate, candidate_rank
+                    changed = True
+            if budget_exhausted:
+                break
+        if budget_exhausted:
+            break
         for index, placement in enumerate(state):
+            if evaluation_budget is not None and evaluations >= evaluation_budget:
+                budget_exhausted = True
+                break
             if placement.constraint_locked:
                 continue
             groups = [[index]]
@@ -2524,6 +3620,9 @@ def _refine_placement(
                         dx, dy = target_x - placement.x, target_y - placement.y
                         moves.extend((dx * fraction, dy * fraction) for fraction in (0.125, 0.25, 0.375))
                 for dx, dy in moves:
+                    if evaluation_budget is not None and evaluations >= evaluation_budget:
+                        budget_exhausted = True
+                        break
                     candidate = [replace(p) for p in state]
                     for i in group:
                         candidate[i].x += dx
@@ -2536,8 +3635,15 @@ def _refine_placement(
                     if candidate_rank < rank:
                         state, rank = candidate, candidate_rank
                         changed = True
+                if budget_exhausted:
+                    break
+            if budget_exhausted:
+                break
             if not placement.rotation_locked:
                 for rotation in (90, 180, 270):
+                    if evaluation_budget is not None and evaluations >= evaluation_budget:
+                        budget_exhausted = True
+                        break
                     candidate = [replace(p) for p in state]
                     candidate[index].rotation = (state[index].rotation + rotation) % 360
                     evaluations += 1
@@ -2547,7 +3653,17 @@ def _refine_placement(
                     if candidate_rank < rank:
                         state, rank = candidate, candidate_rank
                         changed = True
-        for candidate in _family_alignment_candidates(state, config):
+            if budget_exhausted:
+                break
+        if budget_exhausted:
+            break
+        remaining_budget = None if evaluation_budget is None else evaluation_budget - evaluations
+        for candidate in _family_alignment_candidates(
+            state, config, max_candidates=remaining_budget
+        ):
+            if evaluation_budget is not None and evaluations >= evaluation_budget:
+                budget_exhausted = True
+                break
             evaluations += 1
             candidate_rank = score_candidate(candidate)
             if candidate_rank is None:
@@ -2578,6 +3694,373 @@ def _routing_estimate(state: list[ComponentPlacement], components: list[Componen
         "total_hpwl_mm": round(sum(row["hpwl_mm"] for row in spans), 3),
         "nets": spans,
     }
+
+
+_CONNECTOR_SLOT_REFINEMENT_MAX_GROUP_SIZE = 256
+
+
+def _native_slot_geometry_signature(placement: ComponentPlacement) -> tuple[Any, ...] | None:
+    """Fail closed unless exact native footprint and pad geometry are available."""
+    if placement.geometry_status != "board_geometry" or not placement.native_footprint_id:
+        return None
+    pads = placement.native_pad_geometry
+    offsets = placement.pin_offsets
+    nets = placement.pin_nets
+    if not isinstance(pads, list) or not pads or not isinstance(offsets, dict) or not isinstance(nets, dict):
+        return None
+    numbers = [str(row.get("number", "")) for row in pads if isinstance(row, dict)]
+    if len(numbers) != len(pads) or not all(numbers) or len(numbers) != len(set(numbers)):
+        return None
+    if set(numbers) != set(offsets) or set(numbers) != set(nets):
+        return None
+    normalized = []
+    for row in sorted(pads, key=lambda item: str(item["number"])):
+        if row.get("known_shape") is not True:
+            return None
+        try:
+            size = tuple(int(value) for value in row["size_iu"])
+            drill = tuple(int(value) for value in row["drill_iu"])
+            layers = tuple(sorted(int(value) for value in row["layers"]))
+            local = tuple(int(value) for value in row["local_position_iu"])
+            offset = tuple(int(value) for value in row["offset_iu"])
+            orientation = round(float(row["local_orientation_deg"]) % 360.0, 6)
+            shape = int(row["shape"])
+            attribute = int(row["attribute"])
+            drill_shape = int(row["drill_shape"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None
+        if len(size) != 2 or len(drill) != 2 or len(local) != 2 or len(offset) != 2 or not layers:
+            return None
+        # Circle, rectangle and oval are fully described by dimensions and
+        # local angle here. Reject shape families needing extra parameters.
+        if shape not in {0, 1, 2} or offset != (0, 0):
+            return None
+        normalized.append((str(row["number"]), shape, attribute, size, drill,
+                           drill_shape, layers, orientation, local, offset))
+    try:
+        courtyard = (round(float(placement.width), 6), round(float(placement.height), 6))
+        rotation = round(float(placement.rotation) % 360.0, 6)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return (placement.native_footprint_id, courtyard, placement.layer, rotation, tuple(normalized))
+
+
+def _slot_hungarian(costs: list[list[float]]) -> list[int]:
+    """Return deterministic minimum-cost column per row (square finite matrix)."""
+    n = len(costs)
+    if any(len(row) != n for row in costs):
+        raise ValueError("slot assignment cost matrix must be square")
+    if any(not math.isfinite(float(cost)) for row in costs for cost in row):
+        raise ValueError("slot assignment costs must all be finite")
+    if n == 0:
+        return []
+    u, v = [0.0] * (n + 1), [0.0] * (n + 1)
+    p, way = [0] * (n + 1), [0] * (n + 1)
+    for i in range(1, n + 1):
+        p[0] = i
+        j0 = 0
+        minimum = [math.inf] * (n + 1)
+        used = [False] * (n + 1)
+        while True:
+            used[j0] = True
+            i0 = p[j0]
+            delta, j1 = math.inf, 0
+            for j in range(1, n + 1):
+                if used[j]:
+                    continue
+                current = costs[i0 - 1][j - 1] - u[i0] - v[j]
+                if current < minimum[j] - 1e-12:
+                    minimum[j], way[j] = current, j0
+                if minimum[j] < delta - 1e-12 or (abs(minimum[j] - delta) <= 1e-12 and j < j1):
+                    delta, j1 = minimum[j], j
+            for j in range(n + 1):
+                if used[j]:
+                    u[p[j]] += delta
+                    v[j] -= delta
+                else:
+                    minimum[j] -= delta
+            j0 = j1
+            if p[j0] == 0:
+                break
+        while True:
+            j1 = way[j0]
+            p[j0] = p[j1]
+            j0 = j1
+            if j0 == 0:
+                break
+    assignment = [0] * n
+    for j in range(1, n + 1):
+        assignment[p[j] - 1] = j - 1
+    return assignment
+
+
+def _native_support_family_root(
+    ref: str,
+    by_ref: dict[str, ComponentPlacement],
+    parent_refs: dict[str, set[str]],
+) -> str | None:
+    """Resolve an external net endpoint to a known nonconnector ownership root."""
+    seen: set[str] = set()
+    current = by_ref.get(ref)
+    if current is None or current.category == "connector":
+        return None
+    while True:
+        parents = parent_refs.get(current.ref, set())
+        if len(parents) > 1:
+            return None
+        parent_ref = next(iter(parents), "")
+        if not parent_ref:
+            break
+        if current.ref in seen:
+            return None
+        seen.add(current.ref)
+        parent = by_ref.get(parent_ref)
+        if parent is None or parent.category == "connector":
+            return None
+        current = parent
+    return current.ref if current.ref not in seen and current.category != "connector" else None
+
+
+def _refine_interchangeable_connector_slots(
+    components: list[ComponentDef],
+    state: list[ComponentPlacement],
+    config: PlacementConfig,
+    pairs: dict[tuple[str, str], float],
+    plan: _ConstraintPlan,
+    *,
+    max_group_size: int = _CONNECTOR_SLOT_REFINEMENT_MAX_GROUP_SIZE,
+) -> tuple[list[ComponentPlacement], dict[str, Any]]:
+    """Assign eligible native connector references to existing equivalent slots.
+
+    No geometry is invented: a complete interchangeable component placement is
+    permuted among its group's already occupied slots. The caller's ordinary
+    whole-placement rank is the sole acceptance test.
+    """
+    metadata: dict[str, Any] = {
+        "algorithm": "native_private_net_support_family_euclidean_hungarian",
+        "max_group_size": max_group_size,
+        "assignment_complexity_bound": "O(n^3) Hungarian per group",
+        "execution_order": "final candidate after all annealing and refinement restarts",
+        "groups": [],
+        "eligible_component_count": 0,
+        "moved_refs": [],
+        "geometry_multiset_preserved": True,
+        "accepted": False,
+    }
+    if max_group_size < 1:
+        raise ValueError("max_group_size must be positive")
+    by_ref = {placement.ref: placement for placement in state}
+    comp_by_ref = {comp.source_ref: comp for comp in components if comp.source_ref}
+    parent_refs: dict[str, set[str]] = {}
+    for comp in components:
+        ref = str(getattr(comp, "source_ref", "") or "")
+        parent_ref = str(getattr(comp, "placement_parent_ref", "") or "")
+        if ref and parent_ref:
+            parent_refs.setdefault(ref, set()).add(parent_ref)
+    for placement in state:
+        if placement.parent_ref:
+            parent_refs.setdefault(placement.ref, set()).add(str(placement.parent_ref))
+    parented = {parent for parents in parent_refs.values() for parent in parents}
+    parented.discard("")
+    # Count endpoints only from complete native pad inventories. If one board
+    # footprint has duplicate/missing pad identity, missing offsets, or a net
+    # map disagreement, all nets it touches become ambiguous and cannot be
+    # treated as private/shared from a partial count.
+    net_endpoints: dict[str, list[tuple[str, str, tuple[float, float]]]] = {}
+    ambiguous_nets: set[str] = set()
+    complete_refs: set[str] = set()
+    for placement in state:
+        rows = placement.native_pad_geometry
+        native_nets: dict[str, str] = {}
+        implicated = {str(net) for net in (placement.pin_nets or {}).values() if net}
+        duplicate = False
+        if isinstance(rows, list) and rows:
+            numbers = []
+            for row in rows:
+                if not isinstance(row, dict) or "number" not in row or "net" not in row:
+                    duplicate = True
+                    continue
+                number, net = str(row["number"]), str(row["net"] or "")
+                implicated.update({net} if net else set())
+                numbers.append(number)
+                if number in native_nets:
+                    duplicate = True
+                native_nets[number] = net
+            connected_native = {number: net for number, net in native_nets.items() if net}
+            valid = (
+                not duplicate and len(numbers) == len(set(numbers))
+                and placement.pin_offsets is not None
+                and set(numbers) == set(placement.pin_offsets)
+                and connected_native == (placement.pin_nets or {})
+            )
+        else:
+            valid = False
+        if valid:
+            complete_refs.add(placement.ref)
+        else:
+            ambiguous_nets.update(implicated)
+    for placement in state:
+        if placement.ref not in complete_refs:
+            continue
+        for row in placement.native_pad_geometry or []:
+            pad_number, net = str(row["number"]), str(row["net"] or "")
+            offset = (placement.pin_offsets or {}).get(pad_number)
+            if not net:
+                continue
+            if offset is None:
+                ambiguous_nets.add(net)
+                continue
+            try:
+                local = (float(offset[0]), float(offset[1]))
+            except (TypeError, ValueError, IndexError):
+                ambiguous_nets.add(net)
+                continue
+            net_endpoints.setdefault(net, []).append((placement.ref, pad_number, local))
+
+    buckets: dict[tuple[Any, ...], list[ComponentPlacement]] = {}
+    private_endpoints: dict[str, list[tuple[str, str, tuple[float, float]]]] = {}
+    private_pad_numbers: dict[str, str] = {}
+    ineligible_reasons: dict[str, int] = {}
+    for placement in sorted(state, key=lambda row: row.ref):
+        comp = comp_by_ref.get(placement.ref)
+        reason = None
+        if comp is None or placement.category != "connector":
+            reason = "not_native_connector_inventory"
+        elif _native_slot_geometry_signature(placement) is None:
+            reason = "incomplete_or_unknown_native_geometry"
+        elif placement.native_reference_locked is not False:
+            reason = "native_reference_lock_unknown_or_locked"
+        elif (placement.locked or placement.constraint_locked or placement.edge_constrained
+              or placement.rotation_locked or placement.ref in plan.fixed or placement.ref in plan.edges):
+            reason = "authored_mechanical_constraint"
+        elif placement.parent_ref or placement.ref in parented:
+            reason = "owned_support_family"
+        elif any(affinity["target"] == placement.ref or affinity["near"] == placement.ref
+                 for affinity in plan.affinities):
+            reason = "authored_affinity_constraint"
+        else:
+            pads = placement.native_pad_geometry or []
+            private = []
+            for pad in pads:
+                number = str(pad.get("number", ""))
+                net = str((placement.pin_nets or {}).get(number, "") or "")
+                ends = net_endpoints.get(net, []) if net and net not in ambiguous_nets else []
+                source_count = sum(ref == placement.ref for ref, _, _ in ends)
+                external = [endpoint for endpoint in ends if endpoint[0] != placement.ref]
+                support_roots = {
+                    _native_support_family_root(ref, by_ref, parent_refs)
+                    for ref, _, _ in external
+                }
+                if (net and source_count == 1 and external and None not in support_roots
+                        and len(support_roots) == 1):
+                    private.append((number, net, ends))
+            if len(private) != 1:
+                reason = "requires_exactly_one_private_pad_net"
+        if reason:
+            ineligible_reasons[reason] = ineligible_reasons.get(reason, 0) + 1
+            continue
+        private_number, _private_net, ends = private[0]
+        external = [endpoint for endpoint in ends if endpoint[0] != placement.ref]
+        if (not external or any(ref not in by_ref or by_ref[ref].geometry_status != "board_geometry"
+                                for ref, _pad, _offset in external)):
+            ineligible_reasons["private_net_external_pad_missing"] = ineligible_reasons.get(
+                "private_net_external_pad_missing", 0) + 1
+            continue
+        support_family_root = _native_support_family_root(
+            external[0][0], by_ref, parent_refs
+        )
+        if (support_family_root is None or any(
+                _native_support_family_root(ref, by_ref, parent_refs) != support_family_root
+                for ref, _pad, _offset in external)):
+            ineligible_reasons["private_net_support_family_mismatch"] = ineligible_reasons.get(
+                "private_net_support_family_mismatch", 0) + 1
+            continue
+        shared_map = tuple(sorted(
+            (str(row["number"]), str((placement.pin_nets or {}).get(str(row["number"]), "")))
+            for row in (placement.native_pad_geometry or []) if str(row["number"]) != private_number
+        ))
+        if any(not net or net in ambiguous_nets or len(net_endpoints.get(net, [])) < 2
+               for _, net in shared_map):
+            ineligible_reasons["shared_pad_net_missing"] = ineligible_reasons.get(
+                "shared_pad_net_missing", 0) + 1
+            continue
+        signature = _native_slot_geometry_signature(placement)
+        group_key = (signature, private_number, shared_map)
+        buckets.setdefault(group_key, []).append(placement)
+        private_endpoints[placement.ref] = external
+        private_pad_numbers[placement.ref] = private_number
+    metadata["ineligible_reasons"] = ineligible_reasons
+    metadata["eligible_component_count"] = sum(len(group) for group in buckets.values())
+    candidate = [replace(placement) for placement in state]
+    candidate_by_ref = {placement.ref: placement for placement in candidate}
+    slot_rows = {placement.ref: (placement.x, placement.y, placement.rotation, placement.layer)
+                 for placement in state}
+    assignment_rows = []
+    for group_key, group in sorted(buckets.items(), key=lambda item: repr(item[0])):
+        refs = sorted(row.ref for row in group)
+        if len(refs) < 2:
+            continue
+        if len(refs) > max_group_size:
+            metadata["groups"].append({"size": len(refs), "skipped": "group_size_limit"})
+            continue
+        slots = [slot_rows[ref] for ref in refs]
+        cost_matrix = []
+        for ref in refs:
+            owner_points = [
+                _rotated_local_endpoint(by_ref[owner_ref], owner_offset)
+                for owner_ref, _owner_pad, owner_offset in private_endpoints[ref]
+            ]
+            row_costs = []
+            for slot_x, slot_y, slot_rotation, _slot_layer in slots:
+                angle = math.radians(slot_rotation)
+                local_offset = candidate_by_ref[ref].pin_offsets[private_pad_numbers[ref]]
+                slot_pad_x = slot_x + local_offset[0] * math.cos(angle) + local_offset[1] * math.sin(angle)
+                slot_pad_y = slot_y - local_offset[0] * math.sin(angle) + local_offset[1] * math.cos(angle)
+                row_costs.append(sum(math.hypot(owner_x - slot_pad_x, owner_y - slot_pad_y)
+                                     for owner_x, owner_y in owner_points))
+            cost_matrix.append(row_costs)
+        columns = _slot_hungarian(cost_matrix)
+        mapping = {ref: refs[columns[index]] for index, ref in enumerate(refs)}
+        baseline_euclidean = sum(cost_matrix[index][index] for index in range(len(refs)))
+        assigned_euclidean = sum(cost_matrix[index][columns[index]] for index in range(len(refs)))
+        group_slots_before = sorted(slot_rows[ref] for ref in refs)
+        for ref, slot_ref in mapping.items():
+            slot = slot_rows[slot_ref]
+            moved = candidate_by_ref[ref]
+            moved.x, moved.y, moved.rotation, moved.layer = slot
+            if ref != slot_ref:
+                assignment_rows.append({"ref": ref, "from_slot_ref": ref, "to_slot_ref": slot_ref})
+        group_slots_after = sorted((candidate_by_ref[ref].x, candidate_by_ref[ref].y,
+                                    candidate_by_ref[ref].rotation, candidate_by_ref[ref].layer)
+                                   for ref in refs)
+        metadata["geometry_multiset_preserved"] &= group_slots_before == group_slots_after
+        metadata["groups"].append({"size": len(refs), "mapping": mapping,
+                                   "matching_cost_evaluations": len(refs) * sum(
+                                       len(private_endpoints[ref]) for ref in refs),
+                                   "cost_matrix_entries": len(refs) ** 2,
+                                   "assignment_cubic_size_bound": len(refs) ** 3,
+                                   "euclidean_cost_before_mm": baseline_euclidean,
+                                   "euclidean_cost_after_mm": assigned_euclidean})
+    if not assignment_rows:
+        metadata["candidate_rank"] = None
+        metadata["baseline_rank"] = None
+        return state, metadata
+    if not metadata["geometry_multiset_preserved"]:
+        metadata["candidate_rank"] = None
+        metadata["baseline_rank"] = None
+        metadata["accepted"] = False
+        metadata["rejected_reason"] = "slot_geometry_multiset_changed"
+        return state, metadata
+    baseline_rank = _placement_rank(state, config, pairs, plan)
+    candidate_rank = _placement_rank(candidate, config, pairs, plan)
+    metadata["baseline_rank"] = {"hard_defects": baseline_rank[0], "cost": baseline_rank[1]}
+    metadata["candidate_rank"] = {"hard_defects": candidate_rank[0], "cost": candidate_rank[1]}
+    metadata["moved_refs"] = sorted(row["ref"] for row in assignment_rows)
+    metadata["assignment"] = assignment_rows
+    metadata["accepted"] = candidate_rank < baseline_rank
+    if not metadata["accepted"]:
+        metadata["rejected_reason"] = "ordinary_placement_rank_not_improved"
+    return (candidate if metadata["accepted"] else state), metadata
 
 
 def optimize_placement(
@@ -2672,22 +4155,36 @@ def optimize_placement(
     # Keep the legal initial layout as a fallback. Every trial is compared
     # after legalization, so a cheaper but physically worse layout cannot win.
     initial_state = state
-    baseline, baseline_moves = _legalize_overlaps(_quantize_state(state), config, constraint_plan)
-    baseline = _quantize_state(baseline)
+    original_baseline, original_baseline_moves = _legalize_overlaps(
+        _quantize_state(state), config, constraint_plan
+    )
+    original_baseline = _quantize_state(original_baseline)
+    original_baseline_rank = _placement_rank(original_baseline, config, connectivity_pairs, constraint_plan)
+    relaxed, relaxed_counts = _topology_relaxed_seed(
+        original_baseline, connectivity_pairs, config, constraint_plan, passes=4, blend=0.5
+    )
+    relaxed, relaxed_moves = _legalize_overlaps(_quantize_state(relaxed), config, constraint_plan)
+    relaxed = _quantize_state(relaxed)
+    relaxed_rank = _placement_rank(relaxed, config, connectivity_pairs, constraint_plan)
+    topology_seed_accepted = relaxed_rank < original_baseline_rank
+    baseline = relaxed if topology_seed_accepted else original_baseline
+    baseline_moves = relaxed_moves if topology_seed_accepted else original_baseline_moves
+    baseline_rank = relaxed_rank if topology_seed_accepted else original_baseline_rank
     initial_cost = _total_cost(initial_state, config, connectivity_pairs, constraint_plan)
     winner = baseline
-    winner_rank = _placement_rank(winner, config, connectivity_pairs, constraint_plan)
+    winner_rank = baseline_rank
     winner_index, winner_moves = 0, baseline_moves
     trials = [
         {
             "candidate": 0,
-            "kind": "legalized_baseline",
-            "defects": winner_rank[0],
-            "cost": round(winner_rank[1], 2),
+            "kind": "topology_relaxed_seed" if topology_seed_accepted else "legalized_baseline",
+            "defects": baseline_rank[0],
+            "cost": round(baseline_rank[1], 2),
             "iterations": 0,
         }
     ]
     refinement_evaluations = 0
+    refinement_evaluation_budgets: list[int] = []
     restarts = min(config.restarts, config.iterations)
     seed_rng = random.Random(config.seed)
     for restart in range(restarts):
@@ -2709,12 +4206,15 @@ def optimize_placement(
                     best_state, best_cost = state, current_cost
             temp *= config.cooling_rate**restarts
         candidate, moved = _legalize_overlaps(_quantize_state(best_state), config, constraint_plan)
+        refinement_budget = max(512, budget)
         candidate, evaluations = _refine_placement(
             _quantize_state(candidate),
             config,
             connectivity_pairs,
             constraint_plan,
+            evaluation_budget=refinement_budget,
         )
+        refinement_evaluation_budgets.append(refinement_budget)
         refinement_evaluations += evaluations
         rank = _placement_rank(candidate, config, connectivity_pairs, constraint_plan)
         trials.append(
@@ -2723,6 +4223,8 @@ def optimize_placement(
                 "kind": "annealed",
                 "seed": trial_seed,
                 "iterations": budget,
+                "refinement_evaluation_budget": refinement_budget,
+                "refinement_evaluations": evaluations,
                 "defects": rank[0],
                 "cost": round(rank[1], 2),
             }
@@ -2730,6 +4232,15 @@ def optimize_placement(
         if rank < winner_rank:
             winner, winner_rank = candidate, rank
             winner_index, winner_moves = restart + 1, moved
+    slot_refined, slot_metadata = _refine_interchangeable_connector_slots(
+        components, winner, config, connectivity_pairs, constraint_plan,
+    )
+    if slot_metadata["accepted"]:
+        winner = slot_refined
+        winner_rank = _placement_rank(winner, config, connectivity_pairs, constraint_plan)
+        winner_index = len(trials)
+        trials.append({"candidate": winner_index, "kind": "native_connector_slot_refinement",
+                       "defects": winner_rank[0], "cost": round(winner_rank[1], 2), "iterations": 0})
     result = _build_result(
         winner,
         config,
@@ -2743,8 +4254,25 @@ def optimize_placement(
         "selected_candidate": winner_index,
         "restarts": restarts,
         "iteration_budget": config.iterations,
+        "refinement_evaluation_budgets": refinement_evaluation_budgets,
         "refinement_evaluations": refinement_evaluations,
+        "topology_seed": {
+            "passes": 4,
+            "blend": 0.5,
+            **relaxed_counts,
+            "accepted": topology_seed_accepted,
+            "fallback_baseline_rank": {
+                "hard_defects": original_baseline_rank[0],
+                "cost": round(original_baseline_rank[1], 2),
+            },
+            "candidate_rank": {
+                "hard_defects": relaxed_rank[0],
+                "cost": round(relaxed_rank[1], 2),
+            },
+            "legalization_moves": relaxed_moves,
+        },
         "candidates": trials,
+        "native_connector_slot_refinement": slot_metadata,
     }
     result["routing_estimate"] = {
         "initial": _routing_estimate(baseline, components),
@@ -2808,7 +4336,8 @@ def _build_result(
                         }
                     )
                 clearance = _rectangle_clearance(first, parent)
-                if clearance + 0.001 < config.support_body_clearance_mm:
+                if (_support_body_clearance_applies(first, parent)
+                        and clearance + 0.001 < config.support_body_clearance_mm):
                     support_body_violations.append(
                         {
                             "support_ref": first.ref,

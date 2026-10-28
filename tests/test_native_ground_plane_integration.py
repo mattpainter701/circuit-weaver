@@ -219,3 +219,110 @@ def test_public_ground_plane_api_passes_full_drc(tmp_path):
     assert result["ground_plane"]["tracks_preserved"] is True
     assert len(result["ground_plane"]["protected_connections"]) == 2
     assert all(row["status"] == "preserved" for row in result["ground_plane"]["protected_connections"])
+
+
+@pytest.mark.skip_category("optional-tool")
+def test_native_plane_connectivity_falls_back_for_legacy_neighbor_binding(tmp_path):
+    native_python = find_kicad_python()
+    if not native_python:
+        reason = "Native plane-connectivity regression requires KiCad pcbnew Python"
+        if os.getenv("CW_REQUIRE_NATIVE_PCB_TESTS") == "1":
+            pytest.fail(reason)
+        pytest.skip(reason)
+
+    source = tmp_path / "legacy_connectivity_source.kicad_pcb"
+    output = tmp_path / "legacy_connectivity_filled.kicad_pcb"
+    script = tmp_path / "check_legacy_connectivity.py"
+    script.write_text(
+        textwrap.dedent(
+            """
+            import json, os, sys
+            sys.path.insert(0, sys.argv[3])
+            import pcbnew
+            if os.name == "nt":
+                import wx
+                _wx_app = wx.GetApp() or wx.App(False)
+            from circuit_weaver import _native_ground_plane as ground
+
+            source, output = sys.argv[1:3]
+            def point(x, y):
+                return pcbnew.VECTOR2I(pcbnew.FromMM(x), pcbnew.FromMM(y))
+
+            board = pcbnew.BOARD()
+            gnd = pcbnew.NETINFO_ITEM(board, "GND")
+            board.Add(gnd)
+            for start, end in (((0, 0), (22, 0)), ((22, 0), (22, 20)),
+                               ((22, 20), (0, 20)), ((0, 20), (0, 0))):
+                edge = pcbnew.PCB_SHAPE(board)
+                edge.SetShape(pcbnew.SHAPE_T_SEGMENT)
+                edge.SetStart(point(*start)); edge.SetEnd(point(*end))
+                edge.SetLayer(pcbnew.Edge_Cuts); edge.SetWidth(pcbnew.FromMM(0.05))
+                board.Add(edge)
+
+            for ref, xy, layer in (("J_PLANE", (4, 4), pcbnew.F_Cu),
+                                   ("J_REMOTE", (16, 4), pcbnew.B_Cu),
+                                   ("J_FLOAT", (16, 15), pcbnew.F_Cu)):
+                footprint = pcbnew.FOOTPRINT(board)
+                footprint.SetReference(ref); footprint.SetPosition(point(*xy))
+                pad = pcbnew.PAD(footprint)
+                pad.SetNumber("1"); pad.SetAttribute(pcbnew.PAD_ATTRIB_SMD)
+                pad.SetShape(pcbnew.PAD_SHAPE_RECT); pad.SetSize(point(0.8, 0.8))
+                pad.SetPosition(point(*xy)); pad.SetNet(gnd)
+                layers = pcbnew.LSET(); layers.AddLayer(layer); pad.SetLayerSet(layers)
+                footprint.Add(pad); board.Add(footprint)
+
+            for start, end, layer in (((4, 4), (12, 4), pcbnew.F_Cu),
+                                      ((12, 4), (16, 4), pcbnew.B_Cu)):
+                track = pcbnew.PCB_TRACK(board)
+                track.SetStart(point(*start)); track.SetEnd(point(*end))
+                track.SetWidth(pcbnew.FromMM(0.3)); track.SetLayer(layer)
+                track.SetNet(gnd); board.Add(track)
+            via = pcbnew.PCB_VIA(board)
+            via.SetViaType(pcbnew.VIATYPE_THROUGH)
+            via.SetLayerPair(pcbnew.F_Cu, pcbnew.B_Cu)
+            via.SetPosition(point(12, 4)); via.SetWidth(pcbnew.FromMM(0.6))
+            via.SetDrill(pcbnew.FromMM(0.3)); via.SetNet(gnd); board.Add(via)
+
+            ground._create_zone(board, pcbnew, gnd, pcbnew.F_Cu, (2, 2, 9, 9), {})
+            if not pcbnew.SaveBoard(source, board):
+                raise RuntimeError("could not save source connectivity fixture")
+            board = pcbnew.LoadBoard(source)
+            board.BuildConnectivity()
+            if not pcbnew.ZONE_FILLER(board).Fill(board.Zones()):
+                raise RuntimeError("could not fill native plane fixture")
+            board.BuildConnectivity()
+
+            class LegacyConnectivity:
+                def __init__(self, inner): self.inner = inner
+                def GetConnectedItems(self, *_args):
+                    raise TypeError("forced unavailable initializer_list binding")
+                def __getattr__(self, name): return getattr(self.inner, name)
+
+            class LegacyBoard:
+                def __init__(self, inner): self.inner = inner
+                def GetConnectivity(self): return LegacyConnectivity(self.inner.GetConnectivity())
+                def __getattr__(self, name): return getattr(self.inner, name)
+
+            normal = ground._unconnected_plane_pads_by_net(board, ["GND"])
+            legacy = ground._unconnected_plane_pads_by_net(LegacyBoard(board), ["GND"])
+            expected = {"GND": ["J_FLOAT.1"]}
+            if normal != expected or legacy != expected:
+                raise AssertionError({"normal": normal, "forced_legacy": legacy, "expected": expected})
+            if not pcbnew.SaveBoard(output, board):
+                raise RuntimeError("could not save filled connectivity fixture")
+            print(json.dumps({"normal": normal, "forced_legacy": legacy,
+                              "native_version": pcbnew.GetBuildVersion()}))
+            """
+        ),
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [native_python, str(script), str(source), str(output), str(Path(__file__).resolve().parents[1] / "src")],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    report = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert source.is_file() and output.is_file()
+    assert report["normal"] == report["forced_legacy"] == {"GND": ["J_FLOAT.1"]}

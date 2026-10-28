@@ -13,6 +13,7 @@ import pytest
 
 from circuit_weaver.dispatcher import ValidationMessage, ValidationReport
 from circuit_weaver.mcp_server import (
+    _as_mcp_tool_result,
     _call_without_stdout,
     _discover_projects_tool,
     _generate_artifacts_tool,
@@ -58,6 +59,43 @@ def test_invalid_json_has_a_stable_error_envelope() -> None:
     assert result["status"] == "error"
     assert result["error"]["code"] == "invalid_json"
     assert "line 1" in result["error"]["message"]
+
+
+@pytest.mark.parametrize("envelope", [
+    {"status": "error", "error": {"code": "invalid_json", "message": "Invalid input"}},
+    {"ok": False, "error": {"code": "project_not_found", "message": "Missing project"}},
+])
+def test_mcp_error_result_preserves_structured_and_text_envelopes(envelope) -> None:
+    payload = json.dumps(envelope)
+
+    result = _as_mcp_tool_result(payload)
+
+    assert result.isError is True
+    assert result.structuredContent == {"result": payload}
+    assert json.loads(result.structuredContent["result"]) == envelope
+    assert len(result.content) == 1
+    assert result.content[0].type == "text"
+    assert result.content[0].text == payload
+
+
+def test_mcp_error_result_satisfies_sdk_wrapped_string_output_schema() -> None:
+    from mcp.server.fastmcp.utilities.func_metadata import func_metadata
+
+    def json_string_tool() -> str:
+        return ""
+
+    metadata = func_metadata(json_string_tool)
+    assert metadata.wrap_output is True
+    payload = json.dumps({"status": "error", "error": {"code": "invalid_json", "message": "Invalid input"}})
+    result = _as_mcp_tool_result(payload)
+
+    assert metadata.convert_result(result) is result
+    assert metadata.output_model.model_validate(result.structuredContent).model_dump() == {"result": payload}
+
+
+@pytest.mark.parametrize("payload", ['{"status": "ok", "value": 1}', "plain text"])
+def test_mcp_normal_result_preserves_original_payload(payload) -> None:
+    assert _as_mcp_tool_result(payload) == payload
 
 
 def test_validate_tool_serializes_evidence_fields(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -161,7 +199,7 @@ def test_validate_tool_rejects_invalid_detail_level(detail_level) -> None:
         "status": "error",
         "error": {
             "code": "invalid_detail_level",
-            "message": "detail_level must be 'summary' or 'full'",
+            "message": "detail_level must be 'summary', 'full', or 'page'",
         },
     }
 
@@ -316,13 +354,23 @@ def test_stdio_server_handshake_and_tool_call(tmp_path: Path) -> None:
             async with ClientSession(read_stream, write_stream) as session:
                 await session.initialize()
                 tools = await session.list_tools()
-                assert {tool.name for tool in tools.tools} == {
+                required_tools = {
                     "validate_design",
                     "generate_artifacts",
                     "discover_projects",
                     "research_component",
                     "manufacturing_readiness",
+                    "runtime_info",
+                    "library_access",
+                    "start_project",
+                    "open_project",
+                    "plan_workflow",
+                    "run_workflow",
+                    "workflow_status",
+                    "resume_workflow",
+                    "cancel_workflow",
                 }
+                assert required_tools <= {tool.name for tool in tools.tools}
 
                 response = await session.call_tool(
                     "discover_projects",

@@ -33,9 +33,23 @@ Circuit Weaver supports **describe the design → validate → generate KiCad ar
 
 Circuit Weaver is an **alpha tool for engineering prototypes**. The 0.37.0 workflow corpus covers all 13 shipped samples and three connected mixed-signal boards with 149, 155 and 145 physical parts. Each passes 16 stages, including native routing, DRC, assembled model previews and a real MCP session. These are finite regression fixtures; passing them does not establish arbitrary-circuit electrical correctness or fabrication readiness.
 
-Claude Code, Codex and OpenCode can use the packaged agent skills and CLI. The optional MCP server exposes five focused tools rather than the entire CLI lifecycle. Installer and MCP tests do not constitute a fresh end-to-end test inside every agent client; see [agent platform support](docs/agent-platforms.md).
+Claude Code, Codex and OpenCode can use the packaged agent skills, CLI and optional MCP server. MCP retains its five focused validation and discovery tools and adds runtime inspection plus checkpointed project lifecycle tools. Workflow execution is a synchronous request/response operation; cancellation is observed at stage boundaries. Installer and MCP tests do not constitute a fresh end-to-end test inside every agent client; see [agent platform support](docs/agent-platforms.md).
+
+| Project workflow need | CLI | MCP | Behavior |
+|-|-|-|-|
+| Check the installed interpreter, capabilities and skill state | `runtime-info --json` | `runtime_info` | Read-only preflight |
+| Discover or start a project | `discover --root <dir> --json`, `start <dir> --json` | `discover_projects`, `start_project` | Project paths are explicit for lifecycle operations |
+| Open, inspect, and plan work | `open <path> --json`, `workflow plan <dir> --json` | `open_project`, `workflow_status`, `plan_workflow` | Planning does not execute stages |
+| Execute or continue checkpointed work | `workflow run <dir>`, `workflow resume <dir>` | `run_workflow`, `resume_workflow` | Stages are validate, generate, build, place, route, preview; checkpoints use input and artifact hashes |
+| Request cancellation | `workflow cancel <dir>` | `cancel_workflow` | Cancellation takes effect at the next stage boundary |
+
+See the [project workflow guide](docs/project-workflows.md) for runtime selection, Python functions, MCP configuration, and checkpoint semantics. These tools report only the evidence their completed stages actually produced; they do not grant manufacturing approval.
 
 RF research and circuit-generation assistance are available, but controlled-impedance routing, matching networks, antenna performance and RF stability require separate engineering verification. Native DRC and a rendered board are not evidence of RF performance. Review the [automation validation guide](docs/automation-validation.md) for prerequisites, evidence and prototype delivery gates.
+
+### Reproducible passive SPICE benchmarks
+
+`python benchmarks/diverse_systems/spice_suite.py --output <new-empty-directory>` runs independently defined IoT, SDR IQ, Butterworth, radar IF-bank, megohm/picofarad, and OT burden fixtures through the product SPICE exporter and runner, then compares parsed results with analytic oracles. Ngspice is discovered on `PATH` or selected with `CIRCUIT_WEAVER_NGSPICE` / `--ngspice <executable>`. The suite reports unverified when ngspice is unavailable and labels the OT comparator unverified; its negative controls and passive-model results do not qualify IC models, RF layout, PCB behavior, or manufacturing readiness. See [the benchmark guide](benchmarks/diverse_systems/README.md).
 
 ---
 
@@ -59,6 +73,9 @@ Verification is conservative: a capability only claims the evidence level its pu
 | `scaffold` | beta | CLI: `scaffold`; Skill: `circuit-weaver` | `static-parse` → `static-parse` | `command-contract`, `static-parse` | 0.32.1 |
 | `register-ic` | experimental | CLI: `register-ic` | `static-parse` → `static-parse` | `command-contract`, `static-parse` | 0.32.1 |
 | `resolve-symbol` | experimental | CLI: `resolve-symbol` | not applicable (operational) | `command-contract` | 0.33.0 |
+| `library-access` | experimental | CLI: `library-access`; Python: `circuit_weaver.library_access:audit_library_access`; MCP: `library_access`; Skill: `circuit-weaver` | not applicable (operational) | `command-contract` | 0.38.0 |
+| `adopt` | experimental | CLI: `adopt`; Python: `circuit_weaver.project_workflow:adopt_project`; MCP: `adopt_project`; Skill: `circuit-weaver` | not applicable (operational) | `command-contract` | 0.38.0 |
+| `library-bundle` | experimental | CLI: `library-bundle`; Python: `circuit_weaver.library_bundle:plan_library_bundle`; MCP: `plan_library_bundle; apply_library_bundle`; Skill: `circuit-weaver` | not applicable (operational) | `command-contract` | 0.38.0 |
 | `export-jlcpcb` | review_only | CLI: `export-jlcpcb`; Skill: `circuit-weaver` | `static-parse` → `static-parse` | `command-contract`, `static-parse` | 0.32.1 |
 | `export-gerbers` | review_only | CLI: `export-gerbers`; Skill: `circuit-weaver` | `static-parse` → `static-parse` | `command-contract`, `static-parse` | 0.32.1 |
 | `cost-bom` | experimental | CLI: `cost-bom`; Skill: `circuit-weaver` | `static-parse` → `static-parse` | `command-contract`, `static-parse` | 0.32.1 |
@@ -69,6 +86,7 @@ Verification is conservative: a capability only claims the evidence level its pu
 | `design-wizard` | experimental | CLI: `design-wizard`; Skill: `design-wizard` | `static-parse` → `static-parse` | `command-contract`, `static-parse` | 0.32.1 |
 | `build-pcb` | experimental | CLI: `build-pcb`; Python: `circuit_weaver.schematic_pcb:schematic_to_pcb`; Skill: `circuit-weaver` | `static-parse` → `kicad-load` | `command-contract`, `static-parse`, `kicad-load`, `external-tool` | 0.35.0 |
 | `place-pcb` | experimental | CLI: `place-pcb`; Skill: `circuit-weaver` | `static-parse` → `static-parse` | `command-contract`, `external-tool`, `user-supplied` | 0.32.1 |
+| `review-pcb` | review_only | CLI: `review-pcb`; Python: `circuit_weaver.board_review:review_pcb`; MCP: `review_board`; Skill: `circuit-weaver` | `static-parse` → `kicad-load` | `command-contract`, `external-tool`, `user-supplied` | 0.38.0 |
 | `plane-pcb` | review_only | CLI: `plane-pcb`; Python: `circuit_weaver.pcb_ground_plane:add_ground_plane`; Skill: `circuit-weaver` | `static-parse` → `kicad-load` | `command-contract`, `kicad-load`, `external-tool`, `user-supplied` | 0.35.0 |
 | `plane-cleanup-pcb` | review_only | CLI: `plane-cleanup-pcb`; Python: `circuit_weaver.pcb_plane_cleanup:cleanup_plane_traces`; Skill: `circuit-weaver` | `static-parse` → `kicad-load` | `command-contract`, `kicad-load`, `external-tool`, `user-supplied` | 0.35.0 |
 | `cleanup-pcb` | review_only | CLI: `cleanup-pcb`; Python: `circuit_weaver.pcb_copper_cleanup:cleanup_copper`; Skill: `circuit-weaver` | `static-parse` → `kicad-load` | `command-contract`, `kicad-load`, `external-tool`, `user-supplied` | 0.35.0 |
@@ -393,10 +411,44 @@ locked footprints and board sides, uses real courtyards and rotated pad location
 and checks physical DRC. Routing publishes the final board only after KiCad DRC
 passes, preserving project rules. See [setup and limits](docs/routing-placement-search.md).
 
+For custom footprint installations, set `KICAD_FOOTPRINT_DIR` or the matching
+`KICAD10_FOOTPRINT_DIR`, `KICAD9_FOOTPRINT_DIR`, or `KICAD8_FOOTPRINT_DIR`.
+An explicit library root takes precedence. Known bare package names use the same
+library-prefix mapping during validation and generation; custom references must
+still resolve exactly.
+
+Native placement permits overlapping front/back SMD body projections only when
+the pad and copper-layer inventory proves separate surfaces and no opposite-side
+courtyard is present. Through-hole and unknown geometry remain blocking. This
+does not establish 3D enclosure clearance or signal integrity.
+
+With complete native pad maps, decoupling refinement considers position and
+quarter-turn rotation together around the owner's supply and return pads.
+Candidates must improve the existing placement rank while preserving constraints,
+board sides, both local power-leg distances and global power-net spans. These
+geometric checks still require native label checks, routing and final DRC; they
+do not establish routed loop inductance or electrical performance.
+
+For imported boards with a legacy `.pro` project, convert and verify the project
+rules in KiCad before placement, routing, or copper edits. These operations
+require a sibling `.kicad_pro` when `.pro` exists; upgrading the PCB format alone
+does not migrate those rules. Read-only inspection and previews remain available.
+
+Router stdout and stderr are retained under `.circuit-weaver-router-logs` beside
+the requested session output, with per-attempt hashes and byte counts in the
+result. Returned diagnostics and statistics parsing use bounded windows; missing
+final statistics remain unverified. Full log files can grow for the duration of
+a run and should be included when diagnosing a timeout.
+
+PCB handoff manifests distinguish requested constraints from emitted KiCad rules.
+DDR interfaces retain explicit unverified requirements for device timing,
+topology, signal roles and stackup. Rule rendering and ordinary DRC do not
+establish DDR timing closure or controlled impedance.
+
 ### 6 — DFM check and panelization
 
 ```bash
-# Check clearances, pad sizes, and DFM rules
+# Check static track/via dimensions; native KiCad DRC is also required
 circuit-weaver check-dfm electrical_board.kicad_pcb --profile jlcpcb
 
 # Get panel layout suggestions for small boards

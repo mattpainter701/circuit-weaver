@@ -119,6 +119,72 @@ def test_refinement_hard_defect_pruning_matches_exhaustive_candidate_ranking(mon
     assert pruned_calls < total_cost_calls
 
 
+def test_refinement_evaluation_budget_counts_rejected_candidates_and_skips_family_search(monkeypatch):
+    import circuit_weaver.placement_optimizer as optimizer
+
+    config = optimizer.PlacementConfig(
+        board_width_mm=30, board_height_mm=24, refinement_passes=2,
+    )
+    state = [
+        optimizer.ComponentPlacement(
+            f"U{index + 1}", 8 + index * 0.2, 8, width=3.2, height=2.4,
+        )
+        for index in range(4)
+    ]
+    defect_calls = 0
+
+    def hard_defects(_candidate, _config, _plan):
+        nonlocal defect_calls
+        defect_calls += 1
+        return 0 if defect_calls == 1 else 1
+
+    def fail_if_family_search_runs(*_args, **_kwargs):
+        raise AssertionError("family candidates must not be built after budget exhaustion")
+
+    monkeypatch.setattr(optimizer, "_placement_hard_defects", hard_defects)
+    monkeypatch.setattr(optimizer, "_family_alignment_candidates", fail_if_family_search_runs)
+    refined, evaluations = optimizer._refine_placement(
+        state, config, {}, optimizer._ConstraintPlan(), evaluation_budget=3,
+    )
+
+    assert evaluations == 3
+    assert defect_calls == 4  # initial ranking plus all three hard-defect rejections
+    assert refined == state
+
+
+def test_optimizer_reports_refinement_budgets_and_preserves_locked_constraints(monkeypatch):
+    import circuit_weaver.placement_optimizer as optimizer
+
+    original_refine = optimizer._refine_placement
+    requested_budgets = []
+
+    def capture_budget(*args, **kwargs):
+        requested_budgets.append(kwargs["evaluation_budget"])
+        return original_refine(*args, **kwargs)
+
+    monkeypatch.setattr(optimizer, "_refine_placement", capture_budget)
+    components = [_make_comp(f"U{index}") for index in range(1, 9)]
+    fixed = {"kind": "placement", "target": "U1", "x_mm": 7.25, "y_mm": 8.5}
+    result = optimizer.optimize_placement(
+        components,
+        config=optimizer.PlacementConfig(
+            board_width_mm=30, board_height_mm=24, iterations=30, restarts=3, seed=21,
+        ),
+        constraints=[fixed],
+    )
+
+    search = result["search"]
+    assert requested_budgets == [512, 512, 512]
+    assert search["refinement_evaluation_budgets"] == requested_budgets
+    assert sum(row["refinement_evaluations"] for row in search["candidates"][1:]) == search[
+        "refinement_evaluations"
+    ]
+    assert all(row["refinement_evaluations"] <= row["refinement_evaluation_budget"] for row in search["candidates"][1:])
+    assert result["placements"]["U1"]["x"] == 7.25
+    assert result["placements"]["U1"]["y"] == 8.5
+    assert not result["quality"]["review_required"]
+
+
 def test_reference_label_space_grid_matches_exhaustive_geometry():
     from circuit_weaver.placement_optimizer import (
         _LABEL_PROXY_BOARD_MARGIN_MM,
@@ -444,6 +510,108 @@ def test_routing_estimate_measures_real_support_refs_but_excludes_ground():
     assert result["estimated"] is True
     assert result["total_hpwl_mm"] == 30
     assert result["nets"] == [{"net": "SIGNAL", "component_count": 3, "hpwl_mm": 30}]
+
+
+def test_topology_relax_seed_moves_primary_family_toward_weighted_anchored_loads():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        PlacementConfig,
+        _ConstraintPlan,
+        _topology_relaxed_seed,
+    )
+
+    config = PlacementConfig(board_width_mm=100, board_height_mm=80)
+    state = [
+        ComponentPlacement("Q7", 15, 15, width=4, height=4, category="power"),
+        ComponentPlacement("C42", 17, 18, width=1, height=1, parent_ref="Q7", category="passive"),
+        ComponentPlacement("P4", 40, 35, width=4, height=4, category="connector", edge_constrained=True),
+        ComponentPlacement("CN11", 80, 55, width=4, height=4, category="connector"),
+    ]
+    pairs = {("Q7", "P4"): 1.0, ("Q7", "CN11"): 3.0}
+
+    relaxed, counts = _topology_relaxed_seed(state, pairs, config, _ConstraintPlan())
+    reversed_state, _ = _topology_relaxed_seed(list(reversed(state)), pairs, config, _ConstraintPlan())
+    original = {item.ref: item for item in state}
+    result = {item.ref: item for item in relaxed}
+    reversed_result = {item.ref: item for item in reversed_state}
+    weighted_target = ((40 * 1 + 80 * 3) / 4, (35 * 1 + 55 * 3) / 4)
+
+    assert counts == {"eligible_families": 1, "moved_families": 1}
+    assert math.dist((result["Q7"].x, result["Q7"].y), weighted_target) < math.dist(
+        (original["Q7"].x, original["Q7"].y), weighted_target
+    )
+    assert (result["P4"].x, result["P4"].y) == (40, 35)
+    assert (result["CN11"].x, result["CN11"].y) == (80, 55)
+    assert result["C42"].parent_ref == "Q7"
+    assert (result["C42"].x - result["Q7"].x, result["C42"].y - result["Q7"].y) == (2, 3)
+    assert {ref: (item.x, item.y) for ref, item in result.items()} == {
+        ref: (item.x, item.y) for ref, item in reversed_result.items()
+    }
+
+
+@pytest.mark.parametrize("protected", ["fixed", "edge"])
+def test_topology_relax_seed_preserves_authored_fixed_and_edge_locked_families(protected):
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        PlacementConfig,
+        _ConstraintPlan,
+        _topology_relaxed_seed,
+    )
+
+    owner = ComponentPlacement("Q9", 12, 12, width=3, height=3)
+    if protected == "fixed":
+        owner.locked = True
+        owner.constraint_locked = True
+        plan = _ConstraintPlan()
+    else:
+        owner.edge_constrained = True
+        owner.rotation_locked = True
+        plan = _ConstraintPlan(edges={"Q9": {"edge": "left", "max_distance_mm": 0}})
+    support = ComponentPlacement("R42", 14, 12, width=1, height=1, parent_ref="Q9")
+    load = ComponentPlacement("PORT5", 80, 60, width=3, height=3, category="connector")
+
+    relaxed, counts = _topology_relaxed_seed(
+        [owner, support, load], {("Q9", "PORT5"): 1.0},
+        PlacementConfig(board_width_mm=100, board_height_mm=80), plan,
+    )
+
+    assert counts["moved_families"] == 0
+    assert [(item.x, item.y) for item in relaxed] == [(12, 12), (14, 12), (80, 60)]
+
+
+def test_optimize_exposes_topology_seed_and_falls_back_deterministically_without_links():
+    from circuit_weaver.placement_optimizer import PlacementConfig, optimize_placement
+
+    config = PlacementConfig(board_width_mm=100, board_height_mm=80, iterations=20, seed=73)
+    first = optimize_placement([_make_comp("U7"), _make_comp("U8")], config=config)
+    second = optimize_placement([_make_comp("U7"), _make_comp("U8")], config=config)
+
+    seed = first["search"]["topology_seed"]
+    assert seed["accepted"] is False
+    assert seed["moved_families"] == 0
+    assert seed["candidate_rank"] == seed["fallback_baseline_rank"]
+    assert first["search"]["candidates"][0]["kind"] == "legalized_baseline"
+    assert first["placements"] == second["placements"]
+
+
+def test_optimize_accepts_topology_seed_only_when_existing_rank_improves():
+    from circuit_weaver.placement_optimizer import PlacementConfig, optimize_placement
+
+    driver = _make_comp("Q7", category="power", footprint="SOIC-16")
+    driver.pin_nets = {"1": "LOAD_SIG"}
+    load = _make_comp("PORT4", category="connector", footprint="SOT-23")
+    load.pin_nets = {"1": "LOAD_SIG"}
+    config = PlacementConfig(board_width_mm=100, board_height_mm=80, iterations=1, seed=3, restarts=1)
+
+    result = optimize_placement([driver, load], config=config)
+
+    seed = result["search"]["topology_seed"]
+    assert seed["candidate_rank"]["hard_defects"] <= seed["fallback_baseline_rank"]["hard_defects"]
+    if seed["accepted"]:
+        assert tuple(seed["candidate_rank"].values()) < tuple(seed["fallback_baseline_rank"].values())
+        assert result["search"]["candidates"][0]["kind"] == "topology_relaxed_seed"
+    else:
+        assert result["search"]["candidates"][0]["kind"] == "legalized_baseline"
 
 
 def test_refinement_never_trades_a_hard_constraint_for_connectivity():
@@ -1900,6 +2068,142 @@ def test_functional_grouping_uses_block_then_section_and_excludes_support_parts(
     assert _cost_functional_grouping(spread) == _cost_functional_grouping(
         [ComponentPlacement(**{**placement.__dict__, "x": placement.x + 1000}) for placement in spread]
     )
+
+
+def test_functional_affinity_softens_conflicting_category_anchors():
+    from circuit_weaver.placement_optimizer import (
+        ComponentPlacement,
+        PlacementConfig,
+        _cost_zone,
+        _total_cost,
+    )
+
+    config = PlacementConfig(strategy="balanced", board_width_mm=100, board_height_mm=80)
+    grouped = [
+        ComponentPlacement("U1", 45, 40, width=2, height=2, category="analog", block_id="receiver"),
+        ComponentPlacement("U2", 49, 40, width=2, height=2, category="comms", block_id="receiver"),
+    ]
+    scattered = [ComponentPlacement(**placement.__dict__) for placement in grouped]
+    scattered[0].x, scattered[0].y = 50, 55
+    scattered[1].x, scattered[1].y = 72, 40
+    pairs = {("U1", "U2"): 4.0}
+
+    assert _cost_zone(grouped, config, pairs) < _cost_zone(grouped, config)
+    assert _total_cost(grouped, config, pairs) < _total_cost(scattered, config, pairs)
+
+
+def test_zone_attraction_for_support_parts_inherits_owner_connectivity():
+    from circuit_weaver.placement_optimizer import ComponentPlacement, PlacementConfig, _cost_zone
+
+    config = PlacementConfig(board_width_mm=100, board_height_mm=80)
+    owner = ComponentPlacement("U1", 20, 20, category="analog")
+    support = ComponentPlacement("C1", 21, 20, category="passive", parent_ref="U1", parent_pin="5")
+    linked = ComponentPlacement("U2", 80, 60, category="digital")
+    pairs = {("U1", "U2"): 2.0}
+
+    family_cost = _cost_zone([owner, support, linked], config, pairs)
+    independent_cost = _cost_zone([owner, support, linked], config)
+
+    assert family_cost < independent_cost
+
+
+def test_connected_category_families_keep_fixed_and_edge_constraints_exact():
+    from circuit_weaver.placement_optimizer import PlacementConfig, optimize_placement
+
+    analog = _make_comp("U1", category="analog", footprint="SOIC-8")
+    comms = _make_comp("U2", category="comms", footprint="SOIC-8")
+    analog.pin_nets = {"1": "RX_DATA"}
+    comms.pin_nets = {"1": "RX_DATA"}
+
+    result = optimize_placement(
+        [analog, comms],
+        config=PlacementConfig(board_width_mm=100, board_height_mm=80, iterations=10, seed=11),
+        constraints=[
+            {"kind": "placement", "target": "board", "board_width_mm": 100, "board_height_mm": 80},
+            {"kind": "placement", "target": "U1", "x_mm": 12.125, "y_mm": 14.25},
+            {"kind": "placement", "target": "U2", "edge": "right", "max_distance_mm": 0},
+        ],
+    )
+
+    fixed = result["placements"]["U1"]
+    edge = result["placements"]["U2"]
+    assert (fixed["x"], fixed["y"], fixed["constraint_locked"]) == (12.125, 14.25, True)
+    assert edge["x"] == pytest.approx(100 - result["constraint_evaluation"]["effective_board"]["edge_clearance_mm"] - 3)
+    assert edge["edge_constrained"] is True
+    assert result["constraint_evaluation"]["violations"] == []
+
+
+def test_large_seed_uses_centered_functional_family_grid_without_anchor_clamping():
+    from circuit_weaver.placement_optimizer import (
+        PlacementConfig,
+        _ConstraintPlan,
+        _init_placements,
+    )
+
+    components = [
+        _make_comp(f"U{index:02d}", category="analog" if index < 24 else "connector", footprint="0402")
+        for index in range(48)
+    ]
+    for component in components[:4]:
+        component.block_id = "rf_front_end"
+    for component in components:
+        component.pin_nets = {}
+    for index in range(10):
+        components[index].pin_nets[f"out{index}"] = f"TRACE_{index}"
+        components[index + 1].pin_nets[f"in{index}"] = f"TRACE_{index}"
+    components[0].pin_nets["rf"] = "RF_IN"
+    support = _make_comp("C100", category="passive", footprint="0402")
+    support.placement_parent_ref = "U00"
+    support.placement_parent_pin = "1"
+    support.pin_nets = {"1": "RF_IN"}
+    components.append(support)
+
+    config = PlacementConfig(board_width_mm=260, board_height_mm=190, seed=31)
+    plan = _ConstraintPlan(
+        fixed={"U46": {"x_mm": 30.125, "y_mm": 24.25, "rotation": 0}},
+        edges={"U47": {"edge": "right", "max_distance_mm": 0}},
+    )
+    placements = _init_placements(components, config, {}, {}, plan)
+    by_ref = {placement.ref: placement for placement in placements}
+    movable_roots = [by_ref[f"U{index:02d}"] for index in range(46)]
+
+    assert all(1.5 <= item.x <= 258.5 and 1.5 <= item.y <= 188.5 for item in movable_roots)
+    assert len({(item.x, item.y) for item in movable_roots}) == 46
+    assert max(item.x for item in movable_roots) < 258
+    assert max(item.y for item in movable_roots) < 188
+    block = [by_ref[f"U{index:02d}"] for index in range(4)]
+    assert max(math.dist((a.x, a.y), (b.x, b.y)) for a in block for b in block) < 15
+    connected_neighbor = math.dist((by_ref["U03"].x, by_ref["U03"].y), (by_ref["U04"].x, by_ref["U04"].y))
+    unrelated_pair = math.dist((by_ref["U04"].x, by_ref["U04"].y), (by_ref["U20"].x, by_ref["U20"].y))
+    assert connected_neighbor < unrelated_pair
+    assert (by_ref["U46"].x, by_ref["U46"].y) == (30.125, 24.25)
+    assert by_ref["U46"].constraint_locked is True
+    assert by_ref["U47"].x == pytest.approx(260 - config.edge_clearance_mm - 0.5)
+    assert by_ref["U47"].edge_constrained is True
+    assert by_ref["C100"].parent_ref == "U00"
+    assert by_ref["C100"].pin_nets == {"1": "RF_IN"}
+    assert by_ref["U00"].pin_nets == components[0].pin_nets
+
+
+def test_family_seed_high_fanout_graph_is_sparse_and_preserves_owner_strength():
+    from circuit_weaver.placement_optimizer import _family_seed_net_edges
+
+    owners = [f"U{index:04d}" for index in range(1200)]
+    weight = 3.0
+    edges = _family_seed_net_edges(owners, weight)
+
+    assert len(edges) == len(owners)
+    assert all(edge_weight == weight / 2 for _, _, edge_weight in edges)
+    incident_weight = {owner: 0.0 for owner in owners}
+    for left, right, edge_weight in edges:
+        incident_weight[left] += edge_weight
+        incident_weight[right] += edge_weight
+    assert set(incident_weight.values()) == {weight}
+
+    ordinary_fanout = owners[:8]
+    ordinary_edges = _family_seed_net_edges(ordinary_fanout, weight)
+    assert len(ordinary_edges) == math.comb(len(ordinary_fanout), 2)
+    assert all(edge_weight == weight / (len(ordinary_fanout) - 1) for _, _, edge_weight in ordinary_edges)
 
 
 def test_result_reports_functional_group_span_and_optimizer_preserves_group_metadata():

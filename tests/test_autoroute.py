@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -10,6 +11,8 @@ from unittest import mock
 
 import pytest
 
+import circuit_weaver.autoroute as autoroute_module
+from circuit_weaver._specctra_canonical import canonicalize_native_dsn
 from circuit_weaver.autoroute import (
     _apply_specctra_clearance_margin,
     _compare_clearance_reports,
@@ -17,6 +20,7 @@ from circuit_weaver.autoroute import (
     _find_freerouting_command,
     _find_freerouting_jar,
     _find_kicad_cli,
+    _freerouting_supports_copper_to_edge_clearance,
     _iter_sexpr_block_spans,
     _kicad_cli_supports_specctra,
     _measure_session_trace_lengths,
@@ -29,10 +33,51 @@ from circuit_weaver.autoroute import (
     _same_native_pad_clearance_pairs,
     _specctra_physical_pad_index,
     _validate_specctra_artifact,
+    _validated_native_edge_clearance,
     autoroute_pcb,
     export_dsn,
     preflight_pcb,
 )
+
+
+@pytest.fixture(autouse=True)
+def _adapt_legacy_router_mocks_to_disk_backed_streams(monkeypatch):
+    """Keep old subprocess.run mocks meaningful after stdout/stderr file redirection."""
+    def run(command, *, timeout_seconds, cwd, stdout_path, stderr_path):
+        try:
+            with stdout_path.open("wb") as stdout_stream, stderr_path.open("wb") as stderr_stream:
+                result = subprocess.run(
+                    command,
+                    stdout=stdout_stream,
+                    stderr=stderr_stream,
+                    timeout=timeout_seconds,
+                    cwd=cwd,
+                )
+        except subprocess.TimeoutExpired as exc:
+            for path, value in ((stdout_path, exc.stdout), (stderr_path, exc.stderr)):
+                if value is not None and path.stat().st_size == 0:
+                    path.write_bytes(value.encode("utf-8") if isinstance(value, str) else value)
+            raise
+        for path, value in ((stdout_path, result.stdout), (stderr_path, result.stderr)):
+            if value is not None and path.stat().st_size == 0:
+                path.write_bytes(value.encode("utf-8") if isinstance(value, str) else value)
+        return result
+
+    monkeypatch.setattr(autoroute_module, "_run_router_to_logs", run)
+    monkeypatch.setattr(
+        autoroute_module,
+        "_inspect_native_edge_clearance",
+        lambda *_args, **_kwargs: (
+            {
+                "status": "ok",
+                "value_iu": 500000,
+                "value_mm": 0.5,
+                "value_um": 500.0,
+                "source": "BOARD_DESIGN_SETTINGS.m_CopperEdgeClearance",
+            },
+            None,
+        ),
+    )
 
 
 @pytest.mark.parametrize(
@@ -101,7 +146,13 @@ VALID_DSN = """(pcb "sensor-board"
   (placement
     (component "Resistor_SMD:R_0402_1005Metric" (place R1 10000 10000 front 0))
   )
-  (library (image "Resistor_SMD:R_0402_1005Metric"))
+  (library
+    (image "Resistor_SMD:R_0402_1005Metric"
+      (outline (polygon F.Cu 10 0 0 10 0 10 10 0 10))
+      (pin 1 0 0 0)
+    )
+    (padstack "Via[0-1]_600:300_um" (shape (circle F.Cu 300)))
+  )
   (network
     (net GND (pins R1-1 J1-2))
     (net VDD_3P3 (pins R1-2 J1-1))
@@ -740,6 +791,74 @@ class TestCommandDiscovery:
         assert result == {"probe_ok": True, "version": "2.2.4", "seed": True, "reason": ""}
 
 
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [("2.4.0", False), ("2.4.1", True), ("2.5.0", True), (None, False)],
+)
+def test_native_edge_clearance_transport_requires_verified_supported_router(version, expected):
+    assert _freerouting_supports_copper_to_edge_clearance(
+        {"probe_ok": version is not None, "version": version}
+    ) is expected
+
+
+def test_native_edge_clearance_metadata_is_strictly_validated():
+    valid = {
+        "status": "ok",
+        "value_iu": 500000,
+        "value_mm": 0.5,
+        "value_um": 500.0,
+        "source": "BOARD_DESIGN_SETTINGS.m_CopperEdgeClearance",
+    }
+    assert _validated_native_edge_clearance(valid) == valid
+    for invalid in (
+        {**valid, "status": "unsupported"},
+        {**valid, "value_iu": True},
+        {**valid, "value_um": float("nan")},
+        {**valid, "value_um": 499.0},
+        {**valid, "source": "default"},
+    ):
+        assert _validated_native_edge_clearance(invalid) is None
+
+
+@pytest.mark.parametrize(
+    ("edge_iu", "edge_mm", "edge_um", "expected_argument"),
+    [(500000, 0.5, 500.0, "500"), (5000001, 5.000001, 5000.001, "5000.001")],
+)
+def test_route_transports_native_edge_clearance_to_freerouting(
+    tmp_path, edge_iu, edge_mm, edge_um, expected_argument,
+):
+    dsn = _write_dsn(tmp_path)
+    edge = {
+        "status": "ok",
+        "value_iu": edge_iu,
+        "value_mm": edge_mm,
+        "value_um": edge_um,
+        "source": "BOARD_DESIGN_SETTINGS.m_CopperEdgeClearance",
+    }
+    with mock.patch(
+        "subprocess.run", side_effect=_fake_freerouting_success(_routing_output(incomplete=0))
+    ) as run:
+        result = _route_specctra(
+            dsn, tmp_path / "edge.ses", ["freerouting"], passes=1,
+            timeout_seconds=30, overwrite=False, headless=True, optimization_threads=0,
+            optimizer_strategy=None, optimizer_hybrid_ratio=None,
+            optimizer_item_selection=None, optimizer_improvement_threshold=None, seed=None,
+            capability_probe={"probe_ok": True, "version": "2.4.1", "seed": False},
+            native_edge_clearance=edge,
+        )
+    assert result["status"] == "ok"
+    command = run.call_args.args[0]
+    assert f"--router.copper_to_edge_clearance_um={expected_argument}" in command
+    assert result["router"]["native_edge_clearance"] == {
+        "value_iu": edge_iu,
+        "value_mm": edge_mm,
+        "value_um": edge_um,
+        "source": "BOARD_DESIGN_SETTINGS.m_CopperEdgeClearance",
+        "transport": "--router.copper_to_edge_clearance_um",
+        "argv": f"--router.copper_to_edge_clearance_um={expected_argument}",
+    }
+
+
 class TestExportDsn:
     def test_preview_is_rejected_before_cli_discovery(self, tmp_path):
         preview = tmp_path / "board_placement_preview.kicad_pcb"
@@ -790,6 +909,7 @@ class TestExportDsn:
         assert result["status"] == "ok"
         assert destination.read_text(encoding="utf-8") == VALID_DSN
         assert result["artifact"]["path"] == str(destination)
+        assert result["native_edge_clearance"]["value_um"] == 500.0
         assert not list(tmp_path.glob(".*.cw-stage-*.dsn"))
 
     def test_failed_export_preserves_existing_destination(self, tmp_path):
@@ -823,6 +943,20 @@ class TestExportDsn:
         assert result["status"] == "error"
         assert "invalid DSN" in result["message"]
         assert not (tmp_path / "bad.dsn").exists()
+
+
+    def test_cli_export_fails_closed_when_native_edge_rule_is_unavailable(self, tmp_path):
+        board = _write_routable_board(tmp_path)
+        with mock.patch(
+            "circuit_weaver.autoroute._inspect_native_edge_clearance",
+            return_value=(None, "Native copper-to-edge clearance is unsupported"),
+        ), mock.patch("circuit_weaver.autoroute._find_kicad_cli", return_value="kicad-cli"), mock.patch(
+            "circuit_weaver.autoroute._kicad_cli_supports_specctra", return_value=True
+        ), mock.patch("subprocess.run") as run:
+            result = export_dsn(board, tmp_path / "unsupported.dsn")
+        assert result["status"] == "error"
+        assert "copper-to-edge" in result["message"]
+        run.assert_not_called()
 
 
 class TestAutoroute:
@@ -909,10 +1043,14 @@ class TestAutoroute:
     def test_real_pcb_requires_supported_dsn_export_and_never_uses_direct_mode(self, tmp_path):
         board = _write_routable_board(tmp_path)
         with mock.patch("circuit_weaver.autoroute._find_freerouting_command", return_value=["freerouting"]):
-            with mock.patch("circuit_weaver.autoroute._find_kicad_cli", return_value="kicad-cli"):
-                with mock.patch("circuit_weaver.autoroute._kicad_cli_supports_specctra", return_value=False):
-                    with mock.patch("subprocess.run") as run:
-                        result = autoroute_pcb(board)
+            with mock.patch(
+                "circuit_weaver.autoroute._probe_freerouting_capabilities",
+                return_value={"probe_ok": True, "version": "2.4.1", "seed": False},
+            ):
+                with mock.patch("circuit_weaver.autoroute._find_kicad_cli", return_value="kicad-cli"):
+                    with mock.patch("circuit_weaver.autoroute._kicad_cli_supports_specctra", return_value=False):
+                        with mock.patch("subprocess.run") as run:
+                            result = autoroute_pcb(board)
 
         assert result["status"] == "error"
         assert "pcbnew" in result["message"]
@@ -925,12 +1063,12 @@ class TestAutoroute:
         def fake_run(command, **_kwargs):
             calls.append(command)
             if "-help" in command:
-                return mock.Mock(returncode=0, stdout="Freerouting v2.2.4", stderr="")
+                return mock.Mock(returncode=0, stdout="Freerouting v2.4.1", stderr="")
             if command[0] == "kicad-cli":
                 Path(command[command.index("-o") + 1]).write_text(VALID_DSN, encoding="utf-8")
                 return mock.Mock(returncode=0, stdout="", stderr="")
             Path(command[command.index("-do") + 1]).write_text(VALID_SES, encoding="utf-8")
-            return mock.Mock(returncode=0, stdout=_routing_output(), stderr="")
+            return mock.Mock(returncode=0, stdout=_routing_output(version="2.4.1"), stderr="")
 
         with mock.patch("circuit_weaver.autoroute._find_freerouting_command", return_value=["freerouting"]):
             with mock.patch("circuit_weaver.autoroute._find_kicad_cli", return_value="kicad-cli"):
@@ -950,6 +1088,7 @@ class TestAutoroute:
         assert result["search"]["attempts"][0]["placement_order"] == ["R1"]
         assert any("specctra" in command for command in calls)
         assert any("-de" in command and "-do" in command for command in calls)
+        assert any("--router.copper_to_edge_clearance_um=500" in command for command in calls)
 
     @pytest.mark.parametrize("newline", ["\n", "\r\n"])
     @pytest.mark.parametrize(
@@ -968,6 +1107,11 @@ class TestAutoroute:
             '(component "Resistor_SMD:R_0402_1005Metric" (place R1 10000 10000 front 0))',
             '(component "Resistor_SMD:R_0402_1005Metric" (place R1 10000 10000 front 0))\n'
             '(component "Connector:USB" (place J1 30000 10000 front 0))',
+        ).replace(
+            '    (padstack "Via[0-1]_600:300_um" (shape (circle F.Cu 300)))\n  )\n  (network',
+            '    (image "Connector:USB" (outline (polygon F.Cu 10 0 0 10 0 10 10 0 10)) (pin 1 0 0 0))\n'
+            '    (padstack "Via[0-1]_600:300_um" (shape (circle F.Cu 300)))\n'
+            '  )\n  (network',
         )
 
         def fake_run(command, **_kwargs):
@@ -1001,7 +1145,7 @@ class TestAutoroute:
 
         assert result["status"] == "ok"
         assert len(route_inputs) == 3
-        assert [entry[2] for entry in route_inputs] == [["J1", "R1"], ["R1", "J1"], ["R1", "J1"]]
+        assert [entry[2] for entry in route_inputs] == [["J1", "R1"], ["R1", "J1"], ["J1", "R1"]]
         assert len({entry[0].parent for entry in route_inputs}) == 3
         assert all(entry[0].name == "sensor-board_autoroute.dsn" for entry in route_inputs)
         assert len({entry[1] for entry in route_inputs}) == 2
@@ -1009,10 +1153,19 @@ class TestAutoroute:
             "ascending", "descending", "original",
         ]
         assert [row["placement_order"] for row in result["search"]["attempts"]] == [
-            ["J1", "R1"], ["R1", "J1"], ["R1", "J1"],
+            ["J1", "R1"], ["R1", "J1"], ["J1", "R1"],
         ]
+        assert result["search"]["native_dsn_canonicalization"]["root_design_name_preserved"] is True
         assert [row["optimizer_strategy"] for row in result["search"]["attempts"]] == optimizer_strategies
-        assert all(command[command.index("-mt") + 1] == str(optimization_threads) for command in route_commands)
+        if optimization_threads == 0:
+            assert all("--router.optimizer.enabled=false" in command for command in route_commands)
+            assert all("-mt" not in command for command in route_commands)
+        else:
+            assert all(
+                f"--router.optimizer.max_threads={optimization_threads}" in command
+                for command in route_commands
+            )
+            assert all("-mt" not in command for command in route_commands)
         assert [
             command[command.index("-us") + 1] if "-us" in command else None
             for command in route_commands
@@ -1029,7 +1182,9 @@ class TestAutoroute:
             start, end = spans[0]
             return (text[:start] + text[end:]).encode("utf-8")
 
-        assert all(without_placement(variant) == without_placement(baseline_snapshots[0])
+        canonical_baseline, canonical_info = canonicalize_native_dsn(baseline_snapshots[0].decode("utf-8"))
+        assert canonical_info["semantic"]["design_name"] == "sensor-board"
+        assert all(without_placement(variant) == without_placement(canonical_baseline.encode("utf-8"))
                    for _, variant, _ in route_inputs)
         assert board.read_bytes() == original_board
         assert (tmp_path / "sensor-board_autoroute.dsn").exists()
@@ -1087,6 +1242,7 @@ class TestAutoroute:
         assert result["status"] == "error"
         assert "connection completeness" in result["message"]
         assert not destination.exists()
+        assert result["rejected_session"]["available"] is True
 
     def test_unreported_clearance_publishes_only_for_kicad_drc_review(self, tmp_path):
         dsn = _write_dsn(tmp_path)
@@ -1114,6 +1270,80 @@ class TestAutoroute:
         assert result["status"] == "error"
         assert "3 clearance violation" in result["message"]
         assert not destination.exists()
+        assert result["rejected_session"]["available"] is True
+        assert result["stats"]["clearance_violations"] == 3
+
+    @pytest.mark.parametrize(
+        ("native_drc_failure", "expected_drc_status"),
+        [(True, "failed"), (False, "not_verified")],
+    )
+    @pytest.mark.parametrize("has_project", [False, True])
+    def test_native_import_failure_does_not_claim_routing_complete(
+        self, tmp_path, monkeypatch, native_drc_failure, expected_drc_status, has_project,
+    ):
+        import circuit_weaver.pcb_layout as layout
+
+        source = _write_routable_board(tmp_path)
+        if has_project:
+            source.with_suffix(".kicad_pro").write_text("{}", encoding="utf-8")
+        session = tmp_path / "candidate.ses"
+        board = tmp_path / "candidate.kicad_pcb"
+        monkeypatch.setattr(layout, "_require_modern_project_settings", lambda *_: None)
+        monkeypatch.setattr(autoroute_module, "preflight_pcb", lambda *_: {
+            "routable": True,
+            "reason": "",
+            "stats": {"footprints": 2, "pads": 4, "nets": 2, "connected_pad_nets": 2},
+        })
+        monkeypatch.setattr(autoroute_module, "_find_kicad_cli", lambda *_: "kicad-cli")
+        monkeypatch.setattr(autoroute_module, "_find_freerouting_command", lambda *_: ["freerouting"])
+        monkeypatch.setattr(autoroute_module, "_probe_freerouting_capabilities", lambda *_args, **_kwargs: {
+            "probe_ok": True, "version": "2.4.1", "seed": False,
+        })
+        monkeypatch.setattr(autoroute_module, "export_dsn", lambda *_args, **_kwargs: {
+            "status": "ok",
+            "native_edge_clearance": {
+                "status": "ok", "value_iu": 500000, "value_mm": 0.5, "value_um": 500.0,
+                "source": "BOARD_DESIGN_SETTINGS.m_CopperEdgeClearance",
+            },
+        })
+        monkeypatch.setattr(
+            autoroute_module, "_preexisting_fixed_pad_clearance_baseline", lambda *_args, **_kwargs: None,
+        )
+        candidates = mock.Mock(return_value={
+            "status": "ok",
+            "artifact": {"valid": True, "kind": "ses", "path": str(session)},
+            "stats": {"incomplete": 0, "clearance_violations": 0, "traces": 4, "vias": 0},
+            "router": {"version": "2.4.1"},
+            "verification": {"clearance": "verified_clear"},
+        })
+        monkeypatch.setattr(autoroute_module, "_route_candidates", candidates)
+        native_rejection = {
+            "status": "error",
+            "message": (
+                "Imported routing failed KiCad DRC; board was not published"
+                if native_drc_failure else "Could not import SES"
+            ),
+        }
+        if native_drc_failure:
+            native_rejection["drc"] = {"status": "ok", "passed": False, "blocker_count": 1}
+        monkeypatch.setattr(layout, "import_routing_session", lambda *_args, **_kwargs: native_rejection)
+
+        result = autoroute_module.autoroute_pcb(
+            source,
+            output_path=str(session),
+            routed_board_path=str(board),
+            freerouting_path="freerouting",
+            kicad_cli_path="kicad-cli",
+            _native_fanout_profile=True,
+        )
+
+        assert result["status"] == "error"
+        assert result["routing_complete"] is False
+        assert result["requires_kicad_drc"] is True
+        assert result["verification"]["connection_completeness"] == "native_import_rejected"
+        assert result["verification"]["kicad_drc"] == expected_drc_status
+        assert result["board_import"] is native_rejection
+        assert candidates.call_args.kwargs["native_fanout_profile"] is has_project
 
     def test_only_exact_unchanged_same_native_pad_pair_can_be_classified(self):
         native, dsn = _same_pad_identity_fixture()
@@ -1275,6 +1505,70 @@ class TestAutoroute:
             assert result["status"] == "error"
             assert expected in result["message"]
             assert not destination.exists()
+            assert result["rejected_session"]["available"] is True
+            assert Path(result["rejected_session"]["path"]).is_file()
+
+    def test_invalid_ses_is_retained_privately_with_stats_and_bounded_logs(self, tmp_path):
+        dsn = _write_dsn(tmp_path)
+        destination = tmp_path / "rejected.ses"
+        incomplete_ses = VALID_SES.replace(
+            '      (net VDD_3P3 (wire (path F.Cu 250 10500 10000 20000 10000)))\n',
+            "",
+        )
+
+        with mock.patch("circuit_weaver.autoroute._find_freerouting_command", return_value=["freerouting"]):
+            with mock.patch(
+                "subprocess.run",
+                side_effect=_fake_freerouting_success(
+                    output=_routing_output(incomplete=2, traces=7, vias=3),
+                    ses_text=incomplete_ses,
+                ),
+            ):
+                result = autoroute_pcb(dsn, output_path=str(destination), attempts=2)
+
+        assert result["status"] == "error"
+        assert "No routing attempt" in result["message"]
+        assert not destination.exists()
+        attempt = result["search"]["attempts"][0]
+        assert "missing net(s) from source DSN" in attempt["message"]
+        assert attempt["artifact"]["valid"] is False
+        assert "missing net(s) from source DSN" in attempt["artifact"]["reason"]
+        assert attempt["stats"]["incomplete"] == 2
+        assert attempt["stats"]["traces"] == 7
+        assert attempt["stats"]["vias"] == 3
+        assert attempt["router"]["version"] == "2.2.4"
+        assert "incomplete_count" in attempt["diagnostic_stdout"]
+        assert attempt["router_logs"]["stdout"]["available"] is True
+        assert attempt["router_logs"]["stdout"]["preserved_full_log"] is True
+        rejected = attempt["rejected_session"]
+        rejected_path = Path(rejected["path"])
+        assert rejected["available"] is True
+        assert rejected["published"] is False
+        assert rejected["bytes"] == rejected_path.stat().st_size
+        assert rejected["sha256"] == hashlib.sha256(rejected_path.read_bytes()).hexdigest()
+        assert rejected_path.read_text(encoding="utf-8") == incomplete_ses
+
+    def test_invalid_ses_retention_failure_still_fails_closed(self, tmp_path):
+        dsn = _write_dsn(tmp_path)
+        destination = tmp_path / "not-published.ses"
+        incomplete_ses = VALID_SES.replace(
+            '      (net VDD_3P3 (wire (path F.Cu 250 10500 10000 20000 10000)))\n',
+            "",
+        )
+
+        with mock.patch("circuit_weaver.autoroute._find_freerouting_command", return_value=["freerouting"]):
+            with mock.patch(
+                "subprocess.run",
+                side_effect=_fake_freerouting_success(ses_text=incomplete_ses),
+            ):
+                with mock.patch("circuit_weaver.autoroute.shutil.copyfile", side_effect=OSError("disk full")):
+                    result = autoroute_pcb(dsn, output_path=str(destination))
+
+        assert result["status"] == "error"
+        assert not destination.exists()
+        assert result["artifact"]["valid"] is False
+        assert result["rejected_session"]["available"] is False
+        assert "disk full" in result["rejected_session"]["reason"]
 
     def test_no_overwrite_publication_cannot_clobber_file_created_during_route(self, tmp_path):
         dsn = _write_dsn(tmp_path)
@@ -1311,6 +1605,50 @@ class TestAutoroute:
         assert "netlist rejected" in failure["message"]
         assert "timed out" in timeout["message"]
         assert not list(tmp_path.glob(".*.cw-stage-*.ses"))
+
+    def test_timeout_preserves_partial_diagnostics_and_cleans_staging_workspace(self, tmp_path):
+        dsn = _write_dsn(tmp_path)
+        destination = tmp_path / "timeout.ses"
+        timeout = subprocess.TimeoutExpired(
+            ["freerouting"], 3, output=b"partial route log \xff", stderr=b"timeout detail\n"
+        )
+        with mock.patch("subprocess.run", side_effect=timeout):
+            result = _route_specctra(
+                dsn, destination, ["freerouting"], passes=10, timeout_seconds=3,
+                overwrite=False, headless=True, optimization_threads=0, optimizer_strategy=None,
+                optimizer_hybrid_ratio=None, optimizer_item_selection=None,
+                optimizer_improvement_threshold=None, seed=None, capability_probe={},
+            )
+
+        assert result["status"] == "error"
+        assert result["diagnostic_stdout"] == "partial route log \ufffd"
+        assert result["diagnostic_stderr"] == "timeout detail\n"
+        assert not destination.exists()
+        assert not list(tmp_path.glob(".cw-router-*"))
+        assert not list(tmp_path.glob(".*.cw-stage-*.ses"))
+
+    def test_portfolio_attempt_retains_timeout_diagnostics_without_accepting_candidate(self, tmp_path):
+        dsn = _write_dsn(tmp_path)
+        destination = tmp_path / "portfolio-timeout.ses"
+        timeout_result = {
+            "status": "error",
+            "message": "Freerouting timed out after 15 seconds",
+            "diagnostic_stdout": "partial progress",
+            "diagnostic_stderr": "worker timeout",
+        }
+        with mock.patch.object(autoroute_module, "_route_specctra", return_value=timeout_result):
+            result = autoroute_module._route_candidates(
+                dsn, destination, ["freerouting"], attempts=2, timeout_seconds=15,
+                overwrite=False, seed=None, passes=10, headless=True, optimization_threads=0,
+                optimizer_strategy=None, optimizer_hybrid_ratio=None, optimizer_item_selection=None,
+                optimizer_improvement_threshold=None, capability_probe={}, clearance_baseline=None,
+            )
+
+        assert result["status"] == "error"
+        assert result["search"]["attempts"][0]["diagnostic_stdout"] == "partial progress"
+        assert result["search"]["attempts"][0]["diagnostic_stderr"] == "worker timeout"
+        assert result["search"]["selected_attempt"] is None
+        assert not destination.exists()
 
     def test_seed_is_capability_gated_and_passed_when_supported(self, tmp_path):
         dsn = _write_dsn(tmp_path)
@@ -1456,3 +1794,386 @@ def test_current_router_final_scores_and_geometry_counts(tmp_path):
     assert result["stats"]["vias"] == 0
     assert result["stats"]["traces"] == 2
     assert not list(tmp_path.glob(".cw-router-*"))
+
+
+class TestFreerouting25CompatibilityProposal:
+    def test_bounded_native_fanout_profile_is_opt_in_and_v25_only(self, tmp_path):
+        dsn = _write_dsn(tmp_path)
+        common = dict(
+            passes=10, timeout_seconds=90, overwrite=False, headless=True, optimization_threads=0,
+            optimizer_strategy=None, optimizer_hybrid_ratio=None, optimizer_item_selection=None,
+            optimizer_improvement_threshold=None, seed=None,
+            capability_probe={"version": "2.5.0", "probe_ok": True, "seed": False},
+        )
+        with mock.patch("subprocess.run", side_effect=_fake_freerouting_success()) as ordinary_run:
+            _route_specctra(dsn, tmp_path / "ordinary.ses", ["freerouting"], **common)
+        assert "--router.fanout.enabled=false" in ordinary_run.call_args.args[0]
+
+        with mock.patch("subprocess.run", side_effect=_fake_freerouting_success()) as bounded_run:
+            bounded = _route_specctra(
+                dsn, tmp_path / "bounded.ses", ["freerouting"], **common,
+                allow_partial_nets=True, native_fanout_profile=True,
+            )
+        assert bounded["status"] == "ok"
+        command = bounded_run.call_args.args[0]
+        assert "--router.fanout.enabled=true" in command
+        assert "--router.fanout.enabled=false" not in command
+        assert command.count("--router.fanout.enabled=true") == 1
+        assert "--router.fanout.max_passes=1" in command
+        assert "--router.fanout.max_milliseconds_per_pin=50" in command
+        assert "--router.fanout.min_escape_length_mm=1.0" in command
+        assert "--router.fanout.max_escape_length_mm=3.0" in command
+        assert "--router.fanout.fallback_to_board_vias=false" in command
+        assert "--router.fanout.ripup_allowed=false" in command
+        assert "--router.automatic_neckdown=false" in command
+        assert "--router.neck_width_um=0" in command
+
+    def test_bounded_native_fanout_rejects_unsupported_version(self, tmp_path):
+        dsn = _write_dsn(tmp_path)
+        result = _route_specctra(
+            dsn, tmp_path / "unsupported.ses", ["freerouting"], passes=1,
+            timeout_seconds=30, overwrite=False, headless=True, optimization_threads=0,
+            optimizer_strategy=None, optimizer_hybrid_ratio=None, optimizer_item_selection=None,
+            optimizer_improvement_threshold=None, seed=None,
+            capability_probe={"version": "2.4.1", "probe_ok": True, "seed": False},
+            allow_partial_nets=True, native_fanout_profile=True,
+        )
+        assert result["status"] == "error"
+        assert "requires Freerouting 2.5.0" in result["message"]
+
+    def test_bounded_profile_runs_only_on_last_native_partial_portfolio_attempt(self, tmp_path, monkeypatch):
+        dsn = _write_dsn(tmp_path)
+        calls = []
+
+        def fake_route(_dsn, output, _command, **options):
+            calls.append(options)
+            Path(output).write_text(VALID_SES, encoding="utf-8")
+            return {"status": "error", "message": "diagnostic; no accepted candidate"}
+
+        monkeypatch.setattr(autoroute_module, "_route_specctra", fake_route)
+        result = autoroute_module._route_candidates(
+            dsn, tmp_path / "fanout-portfolio.ses", ["freerouting"], attempts=3,
+            timeout_seconds=30, overwrite=False, seed=None, passes=10, headless=True,
+            optimization_threads=1, optimizer_strategy=None, optimizer_hybrid_ratio=None,
+            optimizer_item_selection=None, optimizer_improvement_threshold=None,
+            capability_probe={"version": "2.5.0", "probe_ok": True, "seed": False},
+            clearance_baseline=None, allow_partial_nets=True, cooperative_partial_timeout=True,
+            native_placement_portfolio=True, native_fanout_profile=True,
+        )
+        assert [call.get("native_fanout_profile", False) for call in calls] == [False, False, True]
+        assert result["search"]["requested_attempts"] == 3
+        assert [row["placement_order_strategy"] for row in result["search"]["attempts"]] == [
+            "ascending", "descending", "ascending"
+        ]
+        assert [row["routing_profile"] for row in result["search"]["attempts"]] == [
+            "standard", "standard", "bounded_fanout"
+        ]
+        assert result["search"]["native_dsn_canonicalization"]["bounded_fanout_input_eligible"] is True
+
+    def test_requested_bounded_profile_falls_back_to_standard_on_v24(self, tmp_path, monkeypatch):
+        dsn = _write_dsn(tmp_path)
+        calls = []
+
+        def fake_route(_dsn, output, _command, **options):
+            calls.append(options)
+            Path(output).write_text(VALID_SES, encoding="utf-8")
+            return {"status": "error", "message": "diagnostic; no accepted candidate"}
+
+        monkeypatch.setattr(autoroute_module, "_route_specctra", fake_route)
+        result = autoroute_module._route_candidates(
+            dsn, tmp_path / "v24-portfolio.ses", ["freerouting"], attempts=3,
+            timeout_seconds=30, overwrite=False, seed=None, passes=10, headless=True,
+            optimization_threads=1, optimizer_strategy=None, optimizer_hybrid_ratio=None,
+            optimizer_item_selection=None, optimizer_improvement_threshold=None,
+            capability_probe={"version": "2.4.1", "probe_ok": True, "seed": False},
+            clearance_baseline=None, allow_partial_nets=True, cooperative_partial_timeout=True,
+            native_placement_portfolio=True, native_fanout_profile=True,
+        )
+        assert [call.get("native_fanout_profile", False) for call in calls] == [False, False, False]
+        assert [row["placement_order_strategy"] for row in result["search"]["attempts"]] == [
+            "ascending", "descending", "original"
+        ]
+        assert [row["routing_profile"] for row in result["search"]["attempts"]] == [
+            "standard", "standard", "standard"
+        ]
+
+    @pytest.mark.parametrize(
+        "dsn_text",
+        [
+            VALID_DSN.replace(
+                '    (layer "B.Cu" (type signal))',
+                '    (layer "B.Cu" (type signal))\n    (layer "In1.Cu" (type signal))',
+            ),
+            VALID_DSN.replace(
+                '    (boundary (path pcb',
+                '    (plane GND F.Cu (polygon 0 0 0 10 0 10 10))\n'
+                '    (boundary (path pcb',
+            ),
+            VALID_DSN.replace(
+                '  (comment "(clearance 99) is quoted data, not a rule")',
+                '  (wiring (wire (path F.Cu 250 0 0 10 10)))\n'
+                '  (comment "(clearance 99) is quoted data, not a rule")',
+            ),
+        ],
+        ids=["four-copper-layers", "plane-in-structure", "source-wiring"],
+    )
+    def test_bounded_profile_requires_source_empty_two_layer_zone_free_input(
+        self, tmp_path, dsn_text, monkeypatch
+    ):
+        dsn = _write_dsn(tmp_path, text=dsn_text)
+        calls = []
+
+        def fake_route(_dsn, output, _command, **options):
+            calls.append(options)
+            Path(output).write_text(VALID_SES, encoding="utf-8")
+            return {"status": "error", "message": "diagnostic; no accepted candidate"}
+
+        monkeypatch.setattr(autoroute_module, "_route_specctra", fake_route)
+        result = autoroute_module._route_candidates(
+            dsn, tmp_path / "ineligible-portfolio.ses", ["freerouting"], attempts=3,
+            timeout_seconds=30, overwrite=False, seed=None, passes=10, headless=True,
+            optimization_threads=1, optimizer_strategy=None, optimizer_hybrid_ratio=None,
+            optimizer_item_selection=None, optimizer_improvement_threshold=None,
+            capability_probe={"version": "2.5.0", "probe_ok": True, "seed": False},
+            clearance_baseline=None, allow_partial_nets=True, cooperative_partial_timeout=True,
+            native_placement_portfolio=True, native_fanout_profile=True,
+        )
+        assert result["status"] == "error"
+        assert [call.get("native_fanout_profile", False) for call in calls] == [False, False, False]
+        assert [row["placement_order_strategy"] for row in result["search"]["attempts"]] == [
+            "ascending", "descending", "original"
+        ]
+        assert [row["routing_profile"] for row in result["search"]["attempts"]] == [
+            "standard", "standard", "standard"
+        ]
+        assert result["search"]["native_dsn_canonicalization"]["bounded_fanout_input_eligible"] is False
+
+    def test_private_partial_mode_uses_bounded_v25_job_timeout_and_reports_budget(self, tmp_path):
+        dsn = _write_dsn(tmp_path)
+        with mock.patch(
+            "subprocess.run", side_effect=_fake_freerouting_success(_routing_output(incomplete=2))
+        ) as run:
+            result = _route_specctra(
+                dsn, tmp_path / "partial-modern.ses", ["freerouting"], passes=10,
+                timeout_seconds=90.8, overwrite=False, headless=True, optimization_threads=0,
+                optimizer_strategy=None, optimizer_hybrid_ratio=None,
+                optimizer_item_selection=None, optimizer_improvement_threshold=None, seed=None,
+                capability_probe={"version": "2.5.0", "probe_ok": True, "seed": False},
+                allow_partial_nets=True, cooperative_partial_timeout=True,
+            )
+        assert result["status"] == "ok"
+        command = run.call_args.args[0]
+        assert "--router.job_timeout=00:00:30" in command
+        assert result["router"]["timeout_budget"] == {
+            "host_timeout_seconds": 90.8,
+            "reserved_export_seconds": 60,
+            "internal_job_timeout_seconds": 30,
+            "configured": True,
+            "reason": "configured; this records a requested deadline, not a confirmed timeout",
+        }
+
+    @pytest.mark.parametrize(
+        ("version", "private_mode"),
+        [("2.5.0", False), ("2.4.1", True)],
+    )
+    def test_job_timeout_flag_stays_off_for_normal_routes_and_legacy_routers(
+        self, tmp_path, version, private_mode
+    ):
+        dsn = _write_dsn(tmp_path)
+        with mock.patch(
+            "subprocess.run", side_effect=_fake_freerouting_success(_routing_output(incomplete=2))
+        ) as run:
+            result = _route_specctra(
+                dsn, tmp_path / f"timeout-{version}-{private_mode}.ses", ["freerouting"], passes=10,
+                timeout_seconds=90, overwrite=False, headless=True, optimization_threads=0,
+                optimizer_strategy=None, optimizer_hybrid_ratio=None,
+                optimizer_item_selection=None, optimizer_improvement_threshold=None, seed=None,
+                capability_probe={"version": version, "probe_ok": True, "seed": False},
+                allow_partial_nets=True, cooperative_partial_timeout=private_mode,
+            )
+        assert result["status"] == "ok"
+        command = run.call_args.args[0]
+        assert not any(arg.startswith("--router.job_timeout=") for arg in command)
+        if not private_mode:
+            assert "timeout_budget" not in result["router"]
+        else:
+            assert result["router"]["timeout_budget"]["configured"] is False
+            assert result["router"]["timeout_budget"]["host_timeout_seconds"] == 90
+
+    def test_portfolio_reports_each_internal_timeout_from_its_actual_allowance(self, tmp_path):
+        dsn = _write_dsn(tmp_path)
+        seen = []
+
+        def fake_run(command, **kwargs):
+            seen.append((command, kwargs["timeout"]))
+            Path(command[command.index("-do") + 1]).write_text(VALID_SES, encoding="utf-8")
+            return mock.Mock(returncode=0, stdout=_routing_output(incomplete=2), stderr="")
+
+        with mock.patch.object(autoroute_module.time, "perf_counter", return_value=0):
+            with mock.patch("subprocess.run", side_effect=fake_run):
+                result = autoroute_module._route_candidates(
+                    dsn, tmp_path / "partial-portfolio.ses", ["freerouting"], attempts=3,
+                    timeout_seconds=300, overwrite=False, seed=None, passes=10, headless=True,
+                    optimization_threads=0, optimizer_strategy=None, optimizer_hybrid_ratio=None,
+                    optimizer_item_selection=None, optimizer_improvement_threshold=None,
+                    capability_probe={"version": "2.5.0", "probe_ok": True, "seed": False},
+                    clearance_baseline=None, allow_partial_nets=True, cooperative_partial_timeout=True,
+                )
+
+        rows = result["search"]["attempts"]
+        assert [row["timeout_seconds"] for row in rows] == [100, 150, 300]
+        expected_internal = [40, 90, 240]
+        assert [row["timeout_budget"]["internal_job_timeout_seconds"] for row in rows] == expected_internal
+        assert [kwargs_timeout for _, kwargs_timeout in seen] == [100, 150, 300]
+        assert [
+            next(arg.split("=", 1)[1] for arg in command if arg.startswith("--router.job_timeout="))
+            for command, _ in seen
+        ] == ["00:00:40", "00:01:30", "00:04:00"]
+        summary = result["search"]["timeout_budget"]
+        assert summary["overall_host_timeout_seconds"] == 300
+        assert summary["per_attempt_internal_job_timeout_seconds"] == expected_internal
+        assert "internal_job_timeout_seconds" not in summary
+        assert 1140 not in summary.values()
+
+    @pytest.mark.parametrize(
+        ("version", "timeout", "enabled", "expected_timeout"),
+        [
+            ("2.4.1", 90, True, None),
+            ("2.5.0", 60, True, None),
+            ("2.5.0", 60.5, True, None),
+            ("2.5.0", 90, False, None),
+        ],
+    )
+    def test_partial_job_timeout_is_omitted_for_unsupported_or_short_budgets(
+        self, version, timeout, enabled, expected_timeout
+    ):
+        budget = autoroute_module._partial_route_timeout_budget(
+            timeout,
+            capability_probe={"version": version, "probe_ok": True},
+            enabled=enabled,
+        )
+        assert budget["internal_job_timeout_seconds"] is expected_timeout
+        assert budget["configured"] is False
+
+    @pytest.mark.parametrize(
+        ("seconds", "expected"),
+        [(1, "00:00:01"), (60, "00:01:00"), (3600, "01:00:00"), (36000, "10:00:00")],
+    )
+    def test_job_timeout_format_is_hh_mm_ss(self, seconds, expected):
+        assert autoroute_module._format_job_timeout(seconds) == expected
+
+    @pytest.mark.parametrize("version", ["2.4.1", "2.5.0"])
+    def test_modern_zero_threads_explicitly_disables_optimizer_stage(self, tmp_path, version):
+        dsn = _write_dsn(tmp_path)
+        with mock.patch(
+            "subprocess.run", side_effect=_fake_freerouting_success(_routing_output())
+        ) as run:
+            result = _route_specctra(
+                dsn, tmp_path / f"modern-{version}.ses", ["freerouting"], passes=10,
+                timeout_seconds=30, overwrite=False, headless=True, optimization_threads=0,
+                optimizer_strategy=None, optimizer_hybrid_ratio=None,
+                optimizer_item_selection=None, optimizer_improvement_threshold=None, seed=None,
+                capability_probe={"version": version, "probe_ok": True, "seed": False},
+            )
+        assert result["status"] == "ok"
+        command = run.call_args.args[0]
+        assert "--router.optimizer.enabled=false" in command
+        assert "-mt" not in command
+        assert "-us" not in command and "-is" not in command and "-hr" not in command
+        assert "--router.fanout.enabled=false" in command
+        assert "--router.automatic_neckdown=false" in command
+
+    @pytest.mark.parametrize("threads", [0, 2])
+    def test_legacy_thread_count_keeps_legacy_flag(self, tmp_path, threads):
+        dsn = _write_dsn(tmp_path)
+        with mock.patch(
+            "subprocess.run", side_effect=_fake_freerouting_success(_routing_output())
+        ) as run:
+            result = _route_specctra(
+                dsn, tmp_path / "legacy.ses", ["freerouting"], passes=10,
+                timeout_seconds=30, overwrite=False, headless=True, optimization_threads=threads,
+                optimizer_strategy=None, optimizer_hybrid_ratio=None,
+                optimizer_item_selection=None, optimizer_improvement_threshold=None, seed=None,
+                capability_probe={"version": "2.3.0", "probe_ok": True, "seed": False},
+            )
+        assert result["status"] == "ok"
+        command = run.call_args.args[0]
+        assert command[command.index("-mt") + 1] == str(threads)
+        assert "--router.optimizer.enabled=false" not in command
+        assert not any(arg.startswith("--router.optimizer.max_threads=") for arg in command)
+
+    @pytest.mark.parametrize("version", ["2.4.1", "2.5.0"])
+    @pytest.mark.parametrize("threads", [1, 2])
+    def test_modern_positive_thread_count_sets_nested_optimizer_cap(
+        self, tmp_path, version, threads
+    ):
+        dsn = _write_dsn(tmp_path)
+        with mock.patch(
+            "subprocess.run", side_effect=_fake_freerouting_success(_routing_output())
+        ) as run:
+            result = _route_specctra(
+                dsn, tmp_path / f"modern-{version}-{threads}.ses", ["freerouting"], passes=10,
+                timeout_seconds=30, overwrite=False, headless=True, optimization_threads=threads,
+                optimizer_strategy=None, optimizer_hybrid_ratio=None,
+                optimizer_item_selection=None, optimizer_improvement_threshold=None, seed=None,
+                capability_probe={"version": version, "probe_ok": True, "seed": False},
+            )
+        assert result["status"] == "ok"
+        command = run.call_args.args[0]
+        assert f"--router.optimizer.max_threads={threads}" in command
+        assert "-mt" not in command
+        assert "--router.optimizer.enabled=false" not in command
+
+    def test_v25_canonical_optimizer_modes_and_removed_modes_rejected_before_route(self, tmp_path):
+        dsn = _write_dsn(tmp_path)
+        help_result = mock.Mock(returncode=0, stdout="Freerouting v2.5.0", stderr="")
+        for kwargs, expected in [
+            ({"optimizer_strategy": "greedy"}, "removed"),
+            ({"optimizer_strategy": "hybrid", "optimizer_hybrid_ratio": "1:1"}, "removed"),
+            ({"optimizer_item_selection": "random"}, "removed"),
+        ]:
+            with mock.patch("circuit_weaver.autoroute._find_freerouting_command", return_value=["freerouting"]):
+                with mock.patch("subprocess.run", return_value=help_result) as run:
+                    result = autoroute_pcb(dsn, **kwargs)
+            assert result["status"] == "error"
+            assert expected in result["message"]
+            assert run.call_count == 1  # capability probe only; no route launch
+
+        with mock.patch(
+            "subprocess.run", side_effect=_fake_freerouting_success(_routing_output())
+        ) as run:
+            result = _route_specctra(
+                dsn, tmp_path / "canonical.ses", ["freerouting"], passes=10,
+                timeout_seconds=30, overwrite=False, headless=True, optimization_threads=2,
+                optimizer_strategy="global", optimizer_hybrid_ratio=None,
+                optimizer_item_selection="prioritized", optimizer_improvement_threshold=None,
+                seed=None, capability_probe={"version": "2.5.0", "probe_ok": True, "seed": False},
+            )
+        assert result["status"] == "ok"
+        command = run.call_args.args[0]
+        assert command[command.index("-us") + 1] == "GLOBAL_OPTIMAL"
+        assert command[command.index("-is") + 1] == "PRIORITIZED"
+
+    def test_seedless_v25_portfolio_uses_supported_modes_only(self, tmp_path):
+        dsn = _write_dsn(tmp_path)
+        calls = []
+
+        def fake_route(_dsn, output, _command, **options):
+            calls.append(options)
+            Path(output).write_text(VALID_SES, encoding="utf-8")
+            return {"status": "error", "message": "diagnostic; no accepted candidate"}
+
+        with mock.patch.object(autoroute_module, "_route_specctra", side_effect=fake_route):
+            autoroute_module._route_candidates(
+                dsn, tmp_path / "portfolio.ses", ["freerouting"], attempts=3,
+                timeout_seconds=30, overwrite=False, seed=None, passes=10, headless=True,
+                optimization_threads=1, optimizer_strategy=None, optimizer_hybrid_ratio=None,
+                optimizer_item_selection=None, optimizer_improvement_threshold=None,
+                capability_probe={"version": "2.5.0", "probe_ok": True, "seed": False},
+                clearance_baseline=None,
+            )
+        assert [call["optimizer_strategy"] for call in calls] == ["global"] * 3
+        assert [call["optimizer_item_selection"] for call in calls] == [
+            "sequential", "prioritized", "sequential"
+        ]
+        assert all(call["optimizer_hybrid_ratio"] is None for call in calls)

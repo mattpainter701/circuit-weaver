@@ -65,12 +65,27 @@ pip install "circuit-weaver[mcp]"
 circuit-weaver-mcp
 ```
 
-The server exposes five tools: `validate_design`, `generate_artifacts`,
-`discover_projects`, `research_component`, and `manufacturing_readiness`.
-These tools cover focused operations; they do not run the conversational
-design wizard or provide the full CLI project lifecycle. Use the `circuit-weaver`
-agent skill or CLI for end-to-end design, import, analysis, resume, and
-manufacturing workflows. Installing skills does not configure an MCP client.
+The 18-tool server retains the focused tools `validate_design`, `generate_artifacts`,
+`discover_projects`, `research_component`, and `manufacturing_readiness`, plus
+`runtime_info`, the read-only `library_access` audit, and the shared project lifecycle tools `start_project`,
+`open_project`, `adopt_project`, `plan_workflow`, `run_workflow`, `workflow_status`,
+`resume_workflow`, and `cancel_workflow`. `plan_library_bundle` and
+`apply_library_bundle` expose the hash-bound local asset import workflow.
+`review_board` adds read-only native placement diagnostics and authored route
+checks; callers must inspect review_required, failed and unverified states.
+The lifecycle tools require explicit
+absolute project paths; specs and options are JSON objects and stage selections
+are JSON arrays. Calls are synchronous request/response operations: a run tool
+returns after its selected stages finish or fail. `resume_workflow` executes the
+verified saved workflow; `plan_workflow` inspects without executing.
+`cancel_workflow` records a request that the runner observes at a stage
+boundary. The MCP server does not run the conversational design wizard.
+`library_access` requires an absolute `project_root` when one is supplied and
+reports local KiCad asset availability separately from functional and SPICE
+support; it does not qualify electrical behavior or RF performance.
+Installing skills does not configure an MCP client. See
+[`project-workflows.md`](project-workflows.md) for the lifecycle API and
+checkpoint behavior.
 
 `validate_design` defaults to `detail_level="summary"`. It preserves validity,
 category counts, every finding and evidence ID, but omits the embedded evidence
@@ -78,6 +93,86 @@ ledger and its per-reference index from metadata. The response identifies those
 omissions. Request `detail_level="full"` for the complete report; that larger
 payload can exceed an agent client's tool-output limit. Neither view changes
 validation or manufacturing approval.
+
+For reports that exceed a client's output limit, request `detail_level="page"`
+with `collection="findings"` or `collection="evidence_ids"`. Retrieve **both**
+collections. Start at `offset=0`, then follow `next_offset` until it is null;
+pass the first page's `report_sha256` as `expected_report_sha256` on subsequent
+requests. Each collection supplies its total count and SHA-256 digest, and the
+page header preserves validity, category counts, metadata and the manifest
+reference. Finding records retain every audit field and their evidence IDs.
+The provenance collection also includes IDs not attached to any finding.
+
+`limit` is an upper bound of 1–100 items. The server reduces the returned count
+when necessary to keep serialized pages at or below 16 KB; `next_offset`
+reflects the actual item count. It returns an explicit error if a single item
+or header cannot fit, rather than cutting its text or provenance. A changed
+report also fails with an error so the client can restart retrieval. Summary
+and full-detail responses retain their existing behavior; paging covers the
+summary's complete findings and provenance, while full detail includes the
+embedded ledger and per-reference index.
+
+## OpenCode with an isolated package installation
+
+Use a fresh environment and bind both the shell and MCP server to its Python.
+Activating a different shell or installing a package does not change an already
+running agent's PATH. A global `circuit-weaver` executable can otherwise run an
+older package even while the MCP server uses the new environment.
+
+For example, in PowerShell:
+
+```powershell
+py -3.13 -m venv .venv
+$cwPython = (Resolve-Path .venv/Scripts/python.exe).Path
+& $cwPython -m pip install "circuit-weaver[mcp]"
+$env:VIRTUAL_ENV = (Resolve-Path .venv).Path
+$env:PATH = "$env:VIRTUAL_ENV\Scripts;$env:PATH"
+& $cwPython -m circuit_weaver --version
+```
+
+Configure OpenCode's optional local MCP entry with that same absolute Python
+path (replace the example path below). Provider credentials remain managed by
+OpenCode, outside this configuration:
+
+```json
+{
+  "mcp": {
+    "circuit-weaver": {
+      "type": "local",
+      "command": ["C:/absolute/path/.venv/Scripts/python.exe", "-m", "circuit_weaver.mcp_server"],
+      "environment": {"CIRCUIT_WEAVER_MCP_PORT": "0"},
+      "enabled": true
+    }
+  }
+}
+```
+
+For an isolated skill/config test, set `OPENCODE_CONFIG_DIR` to a new directory
+before `install-skills --platform opencode --skills circuit-weaver` and before
+starting OpenCode. Use `opencode --pure run --format json` to retain inspectable
+tool events. Verify that OpenCode actually executes the commands and reads the
+saved result; a successful agent exit alone does not establish workflow success.
+
+Large inline circuit specifications also consume the model's tool-call output
+budget. In the OpenCode 1.17.15 / DeepSeek Flash stress test, an 8192-token cap
+produced malformed tool arguments for the 438-part fixture. Setting
+`OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=32768` before starting the client allowed
+the exact complete specification to reach `validate_design` directly. Verify
+your provider supports the requested budget and check the actual tool events;
+report paging bounds the response, but does not shorten the input specification.
+Keep the same `OPENCODE_CONFIG_DIR` for continued sessions and confirm the server
+is connected with `opencode --pure mcp list`.
+
+The full native workflow additionally needs KiCad and its libraries, Java, and
+Freerouting. From a matching source checkout, have the agent run the
+[workflow validator](automation-validation.md) using the environment's absolute
+Python, `--installed`, `--expected-wheel`, `--render-3d`, and `--mcp-smoke`.
+The checkout supplies the benchmark scripts; the application runs from the
+installed wheel. Save a new output directory for every attempt and require all
+16 stages to pass, including native DRC and model coverage. For the ESP32 IoT
+sample, retain the suite's explicit 0.20 mm minimum-drill assumption; the default
+0.30 mm rule correctly rejects its smaller thermal holes. This prototype
+assumption does not authorize manufacturing export.
 
 ## Upgrade and Conflict Policy
 

@@ -78,6 +78,8 @@ def _footprints(inventory: Any) -> dict[str, Mapping[str, Any]]:
             if not isinstance(pad, Mapping):
                 raise ConnectivityContractError(f"native footprint {ref} contains an invalid pad")
             number = pad.get("number")
+            if number == "" and _proven_unassigned_non_copper_pad(pad, row):
+                continue
             if not isinstance(number, (str, int)) or isinstance(number, bool) or not str(number):
                 raise ConnectivityContractError(f"native footprint {ref} has a pad without a number")
             number = str(number)
@@ -92,6 +94,23 @@ def _footprints(inventory: Any) -> dict[str, Mapping[str, Any]]:
                 )
         result[ref] = row
     return result
+
+
+def _proven_unassigned_non_copper_pad(pad: Mapping[str, Any], footprint: Mapping[str, Any]) -> bool:
+    """Prove an unnumbered pad is a non-electrical stencil-only aperture."""
+    layers = pad.get("layers")
+    copper_layers = pad.get("copper_layers")
+    return (
+        pad.get("net") == ""
+        and isinstance(pad.get("attribute"), int)
+        and not isinstance(pad.get("attribute"), bool)
+        and isinstance(layers, list)
+        and bool(layers)
+        and all(isinstance(layer, int) and not isinstance(layer, bool) for layer in layers)
+        and isinstance(copper_layers, list)
+        and not copper_layers
+        and footprint.get("native_known_copper_layer_inventory_complete") is True
+    )
 
 
 def _require_pad_net(

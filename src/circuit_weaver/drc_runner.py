@@ -4,16 +4,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
 import tempfile
+from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 from .evidence import EvidenceLedger, EvidenceSource
+from .kicad_project_context import (
+    _hash_file_limited,
+    _sha256_limited,
+    inspect_project_footprint_context,
+    stage_installed_footprint_context,
+    stage_project_footprint_context,
+)
 from .pcb_contracts import PcbConstraint, drc_validation_issue
 from .validator import ValidationIssue
 
@@ -30,18 +39,17 @@ class DrcResult:
     findings: tuple[ValidationIssue, ...] = ()
     raw_report: Mapping[str, Any] | None = None
     failure_reason: str = ""
+    library_context: Mapping[str, Any] | None = None
+    diagnostics_complete: bool = True
+    native_error_limits_reached: Mapping[str, int] = field(default_factory=dict)
 
     @property
     def blocker_count(self) -> int:
-        return sum(
-            1
-            for finding in self.findings
-            if finding.severity == "blocker" and not finding.suppressed
-        )
+        return sum(1 for finding in self.findings if finding.severity == "blocker" and not finding.suppressed)
 
     @property
     def passed(self) -> bool:
-        return self.status == "ok" and self.blocker_count == 0
+        return self.status == "ok" and self.blocker_count == 0 and self.diagnostics_complete
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -53,6 +61,10 @@ class DrcResult:
             "blocker_count": self.blocker_count,
             "passed": self.passed,
             "failure_reason": self.failure_reason,
+            "library_context": _public_library_context(self.library_context),
+            "diagnostics_complete": self.diagnostics_complete,
+            "native_diagnostics_may_be_truncated": not self.diagnostics_complete,
+            "native_error_limits_reached": dict(self.native_error_limits_reached),
             "findings": [finding.to_dict() for finding in self.findings],
         }
 
@@ -73,8 +85,17 @@ _KNOWN_RULE_NUMBERS = {
     "schematic_parity": 13,
 }
 
+_NATIVE_DRC_ERROR_LIMIT = 199
+_NATIVE_DRC_EXTENDED_ERROR_LIMIT = 499
+_NATIVE_DRC_EXTENDED_ERROR_TYPES = {"clearance", "unconnected_items"}
+
 
 def _kicad_cli_path() -> Path | None:
+    configured = os.environ.get("CIRCUIT_WEAVER_KICAD_CLI")
+    if configured:
+        selected = shutil.which(configured) or configured
+        candidate = Path(selected)
+        return candidate if candidate.is_file() else None
     from_path = shutil.which("kicad-cli")
     if from_path:
         return Path(from_path)
@@ -83,6 +104,34 @@ def _kicad_cli_path() -> Path | None:
         if candidate.is_file():
             return candidate
     return None
+
+
+def _kicad_cli_major(cli: Path, timeout: int) -> int | None:
+    """Ask the selected executable which versioned config directory it reads."""
+    try:
+        result = subprocess.run(
+            [str(cli), "version"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=min(timeout, 15),
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    version_text = result.stdout.strip() or result.stderr.strip()
+    match = re.search(r"(?:^|\s)(8|9|10)\.\d+(?:\.\d+)?(?:\s|$)", version_text)
+    return int(match.group(1)) if match else None
+
+
+def _public_library_context(context: Mapping[str, Any] | None) -> dict[str, Any]:
+    public = {key: value for key, value in (context or {}).items() if not key.startswith("_")}
+    assets = public.get("asset_identity")
+    if isinstance(assets, Mapping):
+        public["asset_identity"] = {key: value for key, value in assets.items() if not key.startswith("_")}
+    return public
 
 
 def _rule_number(rule_type: str) -> int:
@@ -112,15 +161,25 @@ def _raw_findings(raw: Mapping[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _native_error_limits_reached(raw: Mapping[str, Any]) -> dict[str, int]:
+    counts = Counter(str(row.get("type") or "unknown").strip().lower() for row in _raw_findings(raw))
+    reached: dict[str, int] = {}
+    for error_type, count in counts.items():
+        limit = (
+            _NATIVE_DRC_EXTENDED_ERROR_LIMIT
+            if error_type in _NATIVE_DRC_EXTENDED_ERROR_TYPES
+            else _NATIVE_DRC_ERROR_LIMIT
+        )
+        if count >= limit:
+            reached[error_type] = limit
+    return reached
+
+
 def _object_refs(row: Mapping[str, Any]) -> tuple[str, str]:
     descriptions = [str(row.get("description") or "")]
     items = row.get("items")
     if isinstance(items, list):
-        descriptions.extend(
-            str(item.get("description") or "")
-            for item in items
-            if isinstance(item, Mapping)
-        )
+        descriptions.extend(str(item.get("description") or "") for item in items if isinstance(item, Mapping))
     combined = " ".join(descriptions)
     ref_match = re.search(r"\b(?:Footprint|Pad|Reference|Component)\s+([A-Za-z]+\d+)\b", combined)
     net_match = re.search(r"\b[Nn]et\s+['\"]?([^'\"\s,;]+)", combined)
@@ -193,6 +252,7 @@ def run_drc(
     constraints: Sequence[PcbConstraint] = (),
     approved_overrides: Mapping[str, str] | None = None,
     timeout: int = 120,
+    project_context: str | Path | None = None,
 ) -> DrcResult:
     """Run DRC on exact board bytes and record the tool result as evidence."""
 
@@ -201,6 +261,14 @@ def run_drc(
         return DrcResult(status="failed", board=str(board_path), failure_reason="board not found")
     original_bytes = board_path.read_bytes()
     board_hash = hashlib.sha256(original_bytes).hexdigest()
+    settings_hashes = {
+        board_path.with_suffix(suffix): (
+            hashlib.sha256(board_path.with_suffix(suffix).read_bytes()).hexdigest()
+            if board_path.with_suffix(suffix).is_file()
+            else None
+        )
+        for suffix in (".kicad_pro", ".kicad_dru")
+    }
     cli = _kicad_cli_path()
     if cli is None:
         return DrcResult(
@@ -209,16 +277,118 @@ def run_drc(
             board_sha256=board_hash,
             failure_reason="KiCad CLI not available",
         )
+    cli_major = _kicad_cli_major(cli, timeout)
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as handle:
         report_path = Path(handle.name)
     try:
-        process = subprocess.run(
-            [str(cli), "pcb", "drc", "--format", "json", "--output", str(report_path), str(board_path)],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        with tempfile.TemporaryDirectory(prefix="cw-drc-context-") as folder:
+            stage = Path(folder)
+            staged_board = stage / board_path.name
+            shutil.copy2(board_path, staged_board)
+            if hashlib.sha256(staged_board.read_bytes()).hexdigest() != board_hash:
+                raise ValueError("Board changed while staging DRC")
+            for suffix in (".kicad_pro", ".kicad_dru"):
+                sidecar = board_path.with_suffix(suffix)
+                if sidecar.is_file():
+                    shutil.copy2(sidecar, staged_board.with_suffix(suffix))
+                    staged_hash = hashlib.sha256(staged_board.with_suffix(suffix).read_bytes()).hexdigest()
+                    if staged_hash != settings_hashes[sidecar]:
+                        raise ValueError("Project settings changed while staging DRC")
+            context = Path(project_context).resolve() if project_context is not None else board_path.resolve().parent
+            if context.is_file():
+                context = context.parent
+            context_before = inspect_project_footprint_context(context)
+            stage_project_footprint_context(context, stage)
+            installed_context: dict[str, Any]
+            if cli_major is None:
+                installed_context = {
+                    "status": "unavailable",
+                    "reason": "selected KiCad CLI version could not be determined",
+                }
+            else:
+                installed_context = stage_installed_footprint_context(
+                    cli, cli_major, stage, board_bytes=original_bytes, project_root=context
+                )
+            run_env = os.environ.copy()
+            private_config = stage / "kicad-config"
+            if not private_config.exists():
+                private_config.mkdir()
+            run_env["KICAD_CONFIG_HOME"] = str(private_config)
+            for name in (
+                "KICAD_FOOTPRINT_DIR",
+                "KICAD8_FOOTPRINT_DIR",
+                "KICAD9_FOOTPRINT_DIR",
+                "KICAD10_FOOTPRINT_DIR",
+            ):
+                run_env.pop(name, None)
+            if installed_context.get("status") == "staged":
+                run_env[str(installed_context["footprint_env"])] = str(installed_context["effective_root"])
+            process = subprocess.run(
+                [
+                    str(cli),
+                    "pcb",
+                    "drc",
+                    "--format",
+                    "json",
+                    "--all-track-errors",
+                    "--output",
+                    str(report_path),
+                    str(staged_board),
+                ],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+                env=run_env,
+            )
+            if staged_board.read_bytes() != original_bytes:
+                return DrcResult(
+                    status="failed",
+                    board=str(board_path),
+                    board_sha256=board_hash,
+                    failure_reason="kicad-cli mutated the isolated board bytes during DRC",
+                )
+            for original, digest in settings_hashes.items():
+                staged_settings = staged_board.with_suffix(original.suffix)
+                if digest is not None and (
+                    not staged_settings.is_file() or hashlib.sha256(staged_settings.read_bytes()).hexdigest() != digest
+                ):
+                    raise ValueError("kicad-cli mutated authored project settings during DRC")
+            if installed_context.get("status") == "staged":
+                source_table = Path(str(installed_context["source"]))
+                if _sha256_limited(source_table, 1024 * 1024) != installed_context["sha256"]:
+                    raise ValueError("installed footprint table changed during DRC")
+                staged_table = Path(str(installed_context["config_root"])) / f"{cli_major}.0" / "fp-lib-table"
+                if _sha256_limited(staged_table, 1024 * 1024) != installed_context["generated_table_sha256"]:
+                    raise ValueError("staged installed footprint table changed during DRC")
+                checked_asset_bytes = 0
+                for asset_path, expected in installed_context.get("asset_identity", {}).get("_paths", []):
+                    actual_hash, actual_size = _hash_file_limited(
+                        Path(asset_path), 64 * 1024 * 1024 - checked_asset_bytes
+                    )
+                    checked_asset_bytes += actual_size
+                    if actual_hash != expected:
+                        raise ValueError("installed stock footprint changed during DRC")
+                staged_asset_bytes = 0
+                for asset_path, expected in installed_context.get("_staged_paths", []):
+                    actual_hash, actual_size = _hash_file_limited(
+                        Path(asset_path), 64 * 1024 * 1024 - staged_asset_bytes
+                    )
+                    staged_asset_bytes += actual_size
+                    if actual_hash != expected:
+                        raise ValueError("staged stock footprint changed during DRC")
+        for original, digest in settings_hashes.items():
+            current = hashlib.sha256(original.read_bytes()).hexdigest() if original.is_file() else None
+            if current != digest:
+                raise ValueError("Source project settings changed during DRC")
+        if inspect_project_footprint_context(context) != context_before:
+            return DrcResult(
+                status="failed",
+                board=str(board_path),
+                board_sha256=board_hash,
+                failure_reason="Project footprint context changed during DRC",
+            )
         if process.returncode != 0:
             detail = (process.stderr or process.stdout or "").strip()
             return DrcResult(
@@ -245,12 +415,48 @@ def run_drc(
                 failure_reason="kicad-cli mutated the staged board bytes during DRC",
             )
         tool_version = str(raw.get("kicad_version") or "unknown")
+        report_major_match = re.search(r"\b(8|9|10)\.\d+", tool_version)
+        if cli_major is not None and report_major_match and int(report_major_match.group(1)) != cli_major:
+            return DrcResult(
+                status="failed",
+                board=str(board_path),
+                board_sha256=board_hash,
+                tool_version=tool_version,
+                failure_reason="kicad-cli version output did not match the selected executable",
+                library_context=_public_library_context(installed_context),
+            )
+        native_error_limits_reached = _native_error_limits_reached(raw)
+        diagnostics_complete = not native_error_limits_reached
+        raw["native_diagnostics_may_be_truncated"] = not diagnostics_complete
+        raw["native_error_limits_reached"] = dict(native_error_limits_reached)
         observed_count = len(_raw_findings(raw))
+        cap_detail = ", ".join(
+            f"{error_type} ({limit})" for error_type, limit in sorted(native_error_limits_reached.items())
+        )
+        diagnostics_failure_reason = (
+            f"Native DRC diagnostic limit reached; findings may be omitted: {cap_detail}"
+            if native_error_limits_reached
+            else ""
+        )
         claim = json.dumps(
             {
                 "board_sha256": board_hash,
                 "kicad_version": tool_version,
                 "observed_findings": observed_count,
+                "diagnostics_complete": diagnostics_complete,
+                "native_error_limits_reached": native_error_limits_reached,
+                "library_context_status": installed_context.get("status", "unavailable"),
+                "stock_table_sha256": installed_context.get("sha256", ""),
+                "generated_table_sha256": installed_context.get("generated_table_sha256", ""),
+                "stock_asset_identity_status": installed_context.get("asset_identity", {}).get("status", "unverified"),
+                "stock_asset_manifest_sha256": installed_context.get("asset_identity", {}).get("sha256", ""),
+                "stock_asset_file_count": installed_context.get("asset_identity", {}).get("file_count", 0),
+                "project_context_sha256": hashlib.sha256(
+                    "".join(
+                        f"{path}\0{digest}\n"
+                        for path, digest in sorted(context_before.get("source_hashes", {}).items())
+                    ).encode("utf-8")
+                ).hexdigest(),
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -281,6 +487,10 @@ def run_drc(
             evidence_id=evidence_id,
             findings=findings,
             raw_report=raw,
+            failure_reason=diagnostics_failure_reason,
+            library_context=_public_library_context(installed_context),
+            diagnostics_complete=diagnostics_complete,
+            native_error_limits_reached=native_error_limits_reached,
         )
     except subprocess.TimeoutExpired:
         return DrcResult(

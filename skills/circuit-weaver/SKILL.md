@@ -23,6 +23,115 @@ All platforms follow the same design flow — just different UI for user input.
 
 ## Domain Routing
 
+## Start, Open, and Resume Projects (First Route)
+
+For every request to start, open, continue, or resume a project, first identify the
+runtime that will perform the work. Use the installed `circuit-weaver` command
+when available; otherwise use the explicitly selected Python interpreter with
+`-m circuit_weaver`. Run `runtime-info --json` (or `python -m circuit_weaver
+runtime-info --json`) and report its installed version, declared capabilities,
+and any discovered native-tool paths. Treat KiCad, Java/Freerouting, and
+optional-library paths as candidates only: this probe does not run tool-version
+checks or verify KiCad Python `pcbnew`. Do not claim those executables, APIs, or
+libraries work until the relevant operation checks them successfully.
+
+Discover the current working directory with the platform's shell and run
+`circuit-weaver discover --root <cwd> --json` (or the matching explicit Python
+command). Offer the discovered projects plus a choice to browse to another
+directory, create a new project, or start from a detected sample. Never assume
+the agent process is already in the user's project directory. Once a project is
+selected, use the same project path for every operation below and for the
+interactive CLI (`circuit-weaver` with no subcommand), Python CLI, or MCP.
+
+Use the shared project lifecycle commands:
+
+```text
+circuit-weaver start <absolute-project-dir> [--spec <yaml>] [--name <name>] --json
+circuit-weaver open <absolute-project-or-source-path> --json
+circuit-weaver adopt <absolute-existing-circuit-dir> --json
+circuit-weaver workflow plan <absolute-project-dir> [--stages validate generate build place route preview] --json
+circuit-weaver workflow run <absolute-project-dir> [--stages ...] --json
+circuit-weaver workflow status <absolute-project-dir> --json
+circuit-weaver workflow resume <absolute-project-dir> --json
+circuit-weaver workflow cancel <absolute-project-dir> --json
+circuit-weaver resume <absolute-project-dir> --json
+circuit-weaver resume <absolute-project-dir> --execute --json
+```
+
+Use the explicitly selected Python executable in place of `circuit-weaver` when
+the installed command is missing or could resolve to a different environment.
+The equivalent module form is `& $python -m circuit_weaver ...` in PowerShell
+or `"$python" -m circuit_weaver ...` in POSIX shells. `workflow resume` and
+the Python/MCP `resume_workflow` execute the verified saved workflow from its
+first incomplete stage. The legacy top-level `resume` command prints a plan by
+default; add `--execute` only when the user asked to continue execution.
+Reconcile status and file hashes before retrying work.
+`open` leaves untracked native circuits unchanged. When the user asks to continue
+one, `adopt` / Python or MCP `adopt_project` records a deliberate source baseline
+without replacing sources. The native runner can also initialize tracking
+directly. Select and plan the applicable stages.
+Stages are checkpointed and resumable. Cancellation takes effect at a stage
+boundary. A successful stage means only what its evidence records: planning,
+preview, or placement does not claim a completed native KiCad build or route.
+Never imply manufacture approval from a workflow status.
+
+After placement/routing, use `review-pcb <absolute-board-path> --plan <review.json>
+--json` or MCP `review_board(board_path, plan_json)` for read-only geometry and
+authored route checks. Inspect verified/review_required/unverified states;
+invocation success is not design acceptance. Put authored routing contracts in
+shared workflow `options.route_contracts` to gate staged routing publication.
+Missing evidence or failed limits must retain a failed workflow stage. See
+`docs/board-quality-review.md` for schema, measurement limits and CLI exit codes.
+
+For MCP, call `runtime_info` first and use the same explicit interpreter to
+launch `python -m circuit_weaver.mcp_server`. Invoke `start_project`,
+`open_project`, `adopt_project`, `plan_workflow`, `run_workflow`, `workflow_status`,
+`resume_workflow`, and `cancel_workflow` with explicit absolute project paths.
+`resume_workflow` executes the verified saved plan; call `plan_workflow` for a
+non-executing plan. Pass specs and options as JSON objects and stage selections
+as JSON string arrays. MCP registration is a separate client configuration step; installing
+Circuit Weaver or its agent skill does not register the server. See
+[`docs/project-workflows.md`](../../docs/project-workflows.md) for signatures,
+examples, checkpoint behavior, and the installation/registration distinction.
+
+Use `circuit-weaver library-access [query] --project-root <absolute-dir> --json`
+or MCP `library_access` to inspect local KiCad symbols, footprints, and 3D
+models separately from curated functional/topology support and project SPICE
+bindings. The report is read-only and labels library-root provenance. An exact
+symbol may resolve to a generic package footprint and model even when those
+filenames do not contain the MPN. Treat that as asset identity only: it does
+not validate pinout, package fit, electrical behavior, or RF performance. A
+missing functional builder or SPICE contract remains a separate engineering
+gap; library availability alone does not qualify RF, radar, SDR, or transmitter
+circuits.
+
+For user-supplied local assets, use `library-bundle plan <manifest.json>
+--project-root <dir> --json` (Python/MCP `plan_library_bundle`) and review the
+SHA-bound destinations before `library-bundle apply <plan.json>` (Python/MCP
+`apply_library_bundle`). Preserve the returned plan JSON exactly. Imports stay
+inside project `libraries/` and preserve unrelated library table entries.
+Provenance and license fields are user assertions; an imported symbol, model,
+or declared SPICE pin order still needs engineering verification.
+
+For `simulate`, report the returned status and evidence rather than treating a
+successful ngspice process as acceptance. `verified` requires fresh parsed
+output and explicit supported project targets that pass; `failed` identifies a
+failed analysis or target; `unverified` covers incomplete evidence, absent
+models, or no explicit targets. CLI exit codes are 0 verified, 1 failed, and 2
+unverified. IC models need readable files plus explicit `subckt` and
+`pin_order` metadata matching connected pin numbers. Do not infer RF
+qualification from generic SPICE models, KiCad assets, or a simulation pass.
+For passive or custom analyses, use `spec.simulation.analyses` to state the
+analysis kind, validated `analysis_params`, structured V/I `sources`, and
+explicit `target_metrics`; AC `input_trace` / `output_trace` must identify
+connected nodes. No stimulus or acceptance target is invented. See
+`docs/project-workflows.md#explicit-spice-testbenches` for a complete RC example
+and the evidence limits of a verified result.
+
+Only after the project route is selected should a new-design request enter the
+interactive wizard below. Existing projects should resume through the shared
+lifecycle interface before invoking focused commands.
+
 Do **not** treat the absence of built-in topology coverage as evidence that a design
 domain is unsupported.
 
@@ -261,7 +370,7 @@ Examples:
 
 **All platforms:** Ask as open text input.
 
-**Action:** 
+**Action:**
 1. Take the project name
 2. Create folder: `${PROJECT_NAME}/`
 3. Create logfile: `${PROJECT_NAME}/design.log`
@@ -905,7 +1014,8 @@ Current phase: placement_review
 Next actions: deterministic commands/inspections for this state
 ```
 
-`resume` reports a restart plan and never executes it. Use `log-status` and
+`resume` reports a restart plan by default; `resume --execute` and
+`workflow resume` execute the saved verified plan. Use `log-status` and
 `log-view` only as supporting diagnostics after durable state is reconciled.
 
 ### Offer Actions

@@ -1,0 +1,19 @@
+# Unseen scale fixtures
+
+This suite contains three connected Circuit Weaver designs with expanded physical counts of 187, 268, and 438 parts. The gateway retains eight analog acquisition channels; the relay card exercises 160 output paths; and the analog card exercises 72 DAC setpoint outputs through generated output-filter capacitors. Counts are measured after compiler expansion, including generated straps and bypass capacitors.
+
+`distributed_facility_gateway` is an explicitly disclosed scale derivative of the existing `field_io_gateway`, not a wholly new architecture. It retains eight differential input channels, the three original RS-485 links, CAN, and adds four independently wired RS-485 trunks with dedicated protected field connectors. Its expanded count is 187 physical parts. The extra trunks use GPIO pins whose firmware operation assumes JTAG is disabled while SWD remains available. Each added software UART is intended for sequential polling at 9600 baud; throughput and simultaneous-channel timing are not claimed or measured.
+
+`serial_relay_output_card` uses a different topology: a 20-register serial output chain drives 160 ULN2003A low-side coil channels, each with a dedicated two-pin relay header. The 160 required-path contracts trace every register output through its driver input/output to its matching connector. The expanded count is 268 physical parts. The logic assumes the active-low output-enable control is pulled high during reset. Relay-coil load behavior is represented for workflow testing, not characterized as a finished product.
+
+`multichannel_analog_setpoint_card` is a controller/DAC topology with 36 dual SPI DACs, a cascaded chip-select bank, a shared reference, and 72 independent outputs. Each output uses the DAC block's generated series filter resistor and shunt capacitor before its own two-pin setpoint connector. Its 110 required paths cover shared SPI buses, every DAC select, and every DAC-to-filter-to-connector output. The expanded count is 438 physical parts after passive expansion. Firmware updates one DAC at a time. Output accuracy and load-drive capability are not claimed.
+
+`build_stress_fixtures.py --output NEW_DIRECTORY` regenerates the existing inputs and full suite contracts into a new or empty directory. The runner materializes them automatically when given this suite's `cases.yaml` index, including in installed CI. The frozen inventory compares all four expanded files against their pre-trim parsed hashes; loss of a path, return assertion or component rejects generation. The handcrafted gateway source remains tracked. Expanded generated copies stay with run evidence.
+
+Analog pad mapping follows the generated capacitor symbol convention (the signal side is pad 2 and the return side is pad 1); the unit test models that convention from compiled design and assembly-manifest data. The builder does not independently parse a KiCad schematic netlist.
+
+For cases with native contracts, `run_general_scale.py` snapshots the contract JSON and hash with the case input. The workflow validator builds the unplaced PCB, then runs native KiCad inspection and strict channel/signal-path checks before placement or routing. A failed preflight stops the workflow. After routing, the runner performs the existing native contract checks again against the final board. Return assertions are supplementary pad/net checks attached to functional signal paths; they do not count as signal paths, and power-only nets remain forbidden as signal segments.
+
+The separate 13-sample suite has no native contract snapshots and keeps its existing workflow behavior.
+
+The unseen-suite CI recipe uses one original-order route with a total 1,800-second budget. This gives the larger connected boards a continuous attempt instead of splitting the same budget among three cold starts. Completion, imported-board DRC, native path, label and model-coverage gates remain required.

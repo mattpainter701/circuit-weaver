@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -696,3 +697,62 @@ def test_authoritative_golden_round_trips_through_kicad_cli(
     assert actual_drc.status == "ok"
     assert actual_drc.passed
     assert all(type(finding).__name__ == "ValidationIssue" for finding in actual_drc.findings)
+
+
+def test_authoritative_manifest_reports_unrendered_constraint_ids(tmp_path: Path) -> None:
+    output = tmp_path / "out"
+    placements = {"U1": {"x_mm": 20, "y_mm": 15, "rotation_deg": 90, "layer": "F.Cu"}}
+    requested = (*_constraints(), PcbConstraint.create(
+        klass="impedance",
+        target="net:SIG",
+        params={"target": {"value": 50, "unit": "ohm"}, "mode": "single-ended"},
+        origin="user",
+        evidence_ids=("EV-DATASHEET-0123456789ab",),
+    ))
+    result = generate_authoritative_board(
+        [_component()], placements, {"U1": _bundle()}, output, project_name="PartialRules",
+        placement_approval=_approval(placements), board_constraints=requested,
+        footprint_library=_library(tmp_path / "libs"),
+    )
+    manifest = json.loads(Path(result.board_manifest_path).read_text(encoding="utf-8"))
+    rules = Path(result.board_rules_path).read_text(encoding="utf-8")
+    accounting = manifest["board_constraint_rendering"]
+    assert accounting["status"] == "partial"
+    assert accounting["requested_ids"] == [item.id for item in requested]
+    assert accounting["emitted_ids"] == [requested[0].id]
+    assert accounting["unemitted_ids"] == [requested[1].id]
+    assert "requested intent only" in rules
+    assert requested[1].id not in "\\n".join(
+        line for line in rules.splitlines() if line.startswith('(rule ')
+    )
+
+
+def test_authoritative_manifest_preserves_unverified_ddr_requirements(tmp_path: Path) -> None:
+    memory = replace(
+        _component(),
+        description="DDR3 memory device",
+        pin_nets={"1": "DQ0", "2": "GND"},
+    )
+    compilation = compile_pcb_constraints(
+        DesignIR(),
+        components=[memory],
+        fab_profile="jlcpcb",
+        fab_profile_evidence_id="EV-DATASHEET-abcdef012345",
+    )
+    assert compilation.ready
+    assert compilation.unverified_requirements[0]["bus_type"] == "ddr3"
+    assert compilation.unverified_requirements[0]["generated_hard_constraints"] == []
+    assert compilation.to_dict()["unverified_requirements"][0]["verification_status"] == "not_verified"
+
+    placements = {"U1": {"x_mm": 20, "y_mm": 15, "rotation_deg": 90, "layer": "F.Cu"}}
+    result = generate_authoritative_board(
+        [memory], placements, {"U1": _bundle()}, tmp_path / "out", project_name="UnverifiedDDR",
+        placement_approval=_approval(placements), board_constraints=compilation,
+        footprint_library=_library(tmp_path / "libs"),
+    )
+    manifest = json.loads(Path(result.board_manifest_path).read_text(encoding="utf-8"))
+    requirement = manifest["unverified_board_requirements"][0]
+    assert requirement["verification_status"] == "not_verified"
+    assert requirement["bus_type"] == "ddr3"
+    assert requirement["nets"] == ["DQ0"]
+    assert requirement["generated_hard_constraints"] == []

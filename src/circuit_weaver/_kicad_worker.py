@@ -2,14 +2,340 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import sys
 from collections import Counter
+from pathlib import Path
 
 _SILK_CLEARANCE_MM = 0.2
 _SILK_EDGE_MARGIN_MM = 0.4
 _SILK_SEARCH_STEP_MM = 0.5
+
+
+def _placement_envelope(footprint, courtyard):
+    """Never let an undersized courtyard hide pads or other body geometry."""
+    boxes = [footprint.GetBoundingBox(False, False)]
+    if not courtyard.IsEmpty():
+        boxes.append(courtyard.BBox())
+    return (min(box.GetX() for box in boxes), min(box.GetY() for box in boxes),
+            max(box.GetRight() for box in boxes), max(box.GetBottom() for box in boxes))
+
+
+def _native_is_roundrect(pad, pcbnew):
+    try:
+        return int(pad.GetShape()) == int(pcbnew.PAD_SHAPE_ROUNDRECT)
+    except (AttributeError, RuntimeError, TypeError, ValueError, OverflowError):
+        return False
+
+
+def _native_roundrect_radius_ratio(pad, pcbnew):
+    """Return a validated native roundrect ratio, or None when unavailable."""
+    try:
+        shape = int(pad.GetShape())
+        roundrect = int(pcbnew.PAD_SHAPE_ROUNDRECT)
+        if shape != roundrect:
+            return None
+        getter = getattr(pad, "GetRoundRectRadiusRatio", None)
+        if not callable(getter):
+            getter = getattr(pad, "GetRoundrectRadiusRatio", None)
+        if not callable(getter):
+            return None
+        ratio = float(getter())
+        return ratio if math.isfinite(ratio) and 0.0 <= ratio <= 0.5 else None
+    except (AttributeError, RuntimeError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def _native_surface_shape_known(pad, pcbnew):
+    """Known solid occupancy geometry, separate from legacy known_shape."""
+    try:
+        shape = int(pad.GetShape())
+        ordinary = {
+            int(getattr(pcbnew, name)) for name in (
+                "PAD_SHAPE_CIRCLE", "PAD_SHAPE_RECT", "PAD_SHAPE_OVAL")
+            if hasattr(pcbnew, name)
+        }
+        return shape in ordinary or _native_roundrect_radius_ratio(pad, pcbnew) is not None
+    except (AttributeError, RuntimeError, TypeError, ValueError, OverflowError):
+        return False
+
+
+def _opposite_courtyard_state(footprint, pcbnew):
+    """Return (known, present) for the courtyard on the other PCB surface."""
+    try:
+        layer = pcbnew.F_CrtYd if footprint.GetLayer() == pcbnew.B_Cu else pcbnew.B_CrtYd
+        courtyard = footprint.GetCourtyard(layer)
+        polygon_present = not courtyard.IsEmpty()
+        graphics = list(footprint.GraphicalItems())
+        graphics_on_layer = [item for item in graphics if int(item.GetLayer()) == int(layer)]
+        return True, polygon_present or bool(graphics_on_layer)
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return False, None
+
+
+def _native_copper_layer_inventory(board, pcbnew):
+    """Return the enabled copper stack and whether the API inventory is complete."""
+    known_ids, known_complete = _native_known_copper_layer_inventory(pcbnew)
+    try:
+        stack = board.GetEnabledLayers().CuStack()
+        seq = getattr(stack, "Seq", None)
+        values = seq() if callable(seq) else stack
+        layer_ids = sorted(set(int(layer) for layer in values))
+        complete = (known_complete
+                    and len(layer_ids) == int(board.GetCopperLayerCount())
+                    and set(layer_ids) <= set(known_ids)
+                    and {int(pcbnew.F_Cu), int(pcbnew.B_Cu)} <= set(known_ids))
+        return layer_ids, complete
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return [], False
+
+
+def _native_copper_layer_stack(board, pcbnew):
+    """Return enabled copper IDs in native physical stack order, fail-closed."""
+    known_ids, known_complete = _native_known_copper_layer_inventory(pcbnew)
+    try:
+        stack = board.GetEnabledLayers().CuStack()
+        seq = getattr(stack, "Seq", None)
+        layer_ids = [int(layer) for layer in (seq() if callable(seq) else stack)]
+        complete = (known_complete and len(layer_ids) == len(set(layer_ids))
+                    and len(layer_ids) == int(board.GetCopperLayerCount())
+                    and set(layer_ids) <= set(known_ids)
+                    and {int(pcbnew.F_Cu), int(pcbnew.B_Cu)} <= set(layer_ids))
+        return layer_ids, complete
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return [], False
+
+
+def _native_via_layer_span(via, copper_stack_ids, stack_complete):
+    """Expand a via's physical end layers through the enabled copper stack.
+
+    ``TopLayer``/``BottomLayer`` identify the span endpoints; they do not list
+    every internal layer crossed by a through via. Preserve the board's native
+    physical order (which is not numeric layer-ID order) and fail closed when
+    either endpoint or the stack cannot be verified.
+    """
+    if not stack_complete or not isinstance(copper_stack_ids, (list, tuple)):
+        return None
+    try:
+        stack = [int(layer) for layer in copper_stack_ids]
+        if len(stack) < 2 or len(stack) != len(set(stack)):
+            return None
+        top, bottom = int(via.TopLayer()), int(via.BottomLayer())
+        if top == bottom or top not in stack or bottom not in stack:
+            return None
+        top_index, bottom_index = stack.index(top), stack.index(bottom)
+        first, last = sorted((top_index, bottom_index))
+        span = stack[first:last + 1]
+        return span if len(span) >= 2 else None
+    except (AttributeError, RuntimeError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def _native_pad_is_plated_through(pad, pcbnew):
+    """Return exact PAD_ATTRIB_PTH evidence, or None if the API cannot prove it."""
+    try:
+        pth_attribute = getattr(pcbnew, "PAD_ATTRIB_PTH", None)
+        if pth_attribute is None:
+            return None
+        attribute = int(pad.GetAttribute())
+        if attribute == int(pth_attribute):
+            return True
+        other_attributes = {
+            int(value) for name in ("PAD_ATTRIB_SMD", "PAD_ATTRIB_CONN", "PAD_ATTRIB_NPTH")
+            if (value := getattr(pcbnew, name, None)) is not None
+        }
+        if attribute not in other_attributes:
+            return None
+        return False
+    except (AttributeError, RuntimeError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def _native_pad_enabled_copper_layers(pad_layer_ids, enabled_layer_ids, enabled_inventory_complete):
+    """Intersect a pad's known copper-layer set with the board-enabled stack."""
+    if (not enabled_inventory_complete or not isinstance(pad_layer_ids, (list, tuple))
+            or not isinstance(enabled_layer_ids, (list, tuple))):
+        return None
+    if any(not isinstance(layer, int) or isinstance(layer, bool)
+           for layer in (*pad_layer_ids, *enabled_layer_ids)):
+        return None
+    return sorted(set(pad_layer_ids) & set(enabled_layer_ids))
+
+
+def _native_stack_state(board, pcbnew):
+    layer_ids, complete = _native_copper_layer_stack(board, pcbnew)
+    if not complete:
+        raise ValueError("native copper stack inventory is incomplete")
+    layers = [{"id": layer_id, "name": str(board.GetLayerName(layer_id))}
+              for layer_id in layer_ids]
+    names = [row["name"] for row in layers]
+    if (any(not name.endswith(".Cu") for name in names)
+            or len(names) != len(set(names))):
+        raise ValueError("native copper stack has invalid or duplicate layer names")
+    return {"count": len(layers), "layers": layers}
+
+
+def _zone_definition_state(board, pcbnew):
+    """Fingerprint zone outlines/settings separately from mutable fill geometry."""
+    rows = []
+    for zone in board.Zones():
+        try:
+            uuid = str(zone.m_Uuid.AsString())
+            outline = zone.Outline().Format(False)
+            layer_id = int(zone.GetLayer())
+            layer_name = str(board.GetLayerName(layer_id))
+            row = {
+                "id": uuid,
+                "net": str(zone.GetNetname()),
+                "layer_id": layer_id,
+                "layer_name": layer_name,
+                "layer_ids": sorted(int(layer) for layer in zone.GetLayerSet().Seq()),
+                "rule_area": _zone_is_rule_area(zone),
+                "outline_sha256": hashlib.sha256(outline.encode("utf-8")).hexdigest(),
+                "settings": {
+                    "clearance_iu": int(zone.GetLocalClearance()),
+                    "min_thickness_iu": int(zone.GetMinThickness()),
+                    "thermal_gap_iu": int(zone.GetThermalReliefGap()),
+                    "thermal_spoke_width_iu": int(zone.GetThermalReliefSpokeWidth()),
+                    "pad_connection": int(zone.GetPadConnection()),
+                    "island_removal_mode": int(zone.GetIslandRemovalMode()),
+                    "min_island_area_iu2": int(zone.GetMinIslandArea()),
+                    "priority": int(zone.GetAssignedPriority()),
+                },
+            }
+            if row["rule_area"]:
+                row["keepout"] = {name: bool(getattr(zone, name)()) for name in (
+                    "GetDoNotAllowTracks", "GetDoNotAllowVias", "GetDoNotAllowPads",
+                    "GetDoNotAllowZoneFills", "GetDoNotAllowFootprints")}
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+            raise ValueError("native zone definition could not be captured completely") from exc
+        rows.append(row)
+    if len({row["id"] for row in rows}) != len(rows):
+        raise ValueError("native zone identities are not unique")
+    return sorted(rows, key=lambda row: row["id"])
+
+
+def _zone_is_rule_area(zone):
+    for name in ("GetIsRuleArea", "IsRuleArea"):
+        member = getattr(zone, name, None)
+        if callable(member):
+            return bool(member())
+        if member is not None:
+            return bool(member)
+    return False
+
+
+def _zone_fill_state(board, pcbnew):
+    rows = []
+    keepout_count = 0
+    non_copper_count = 0
+    for zone in board.Zones():
+        if _zone_is_rule_area(zone):
+            keepout_count += 1
+            continue
+        layer = int(zone.GetLayer())
+        layer_name = str(board.GetLayerName(layer))
+        if not layer_name.endswith(".Cu"):
+            non_copper_count += 1
+            continue
+        if sorted(int(value) for value in zone.GetLayerSet().Seq()) != [layer]:
+            raise ValueError("saved fill verification currently requires single-layer copper zones")
+        if not zone.IsFilled() or not zone.HasFilledPolysForLayer(layer):
+            raise ValueError(f"zone {zone.GetNetname()} on {layer_name} has no saved fill")
+        polygons = zone.GetFilledPolysList(layer)
+        polygon_count = int(polygons.OutlineCount())
+        islands = sum(bool(zone.IsIsland(layer, index)) for index in range(polygon_count))
+        area_mm2 = float(zone.CalculateFilledArea()) / 1e12
+        if not math.isfinite(area_mm2) or area_mm2 < 0:
+            raise ValueError("native zone fill has invalid area")
+        rows.append({
+            "id": str(zone.m_Uuid.AsString()), "net": str(zone.GetNetname()),
+            "layer_name": layer_name, "area_mm2": round(area_mm2, 6),
+            "island_count": islands,
+            "polygon_sha256": hashlib.sha256(polygons.Format(False).encode("utf-8")).hexdigest(),
+        })
+    return {"rows": sorted(rows, key=lambda row: row["id"]),
+            "fillable_zone_count": len(rows), "keepout_zone_count": keepout_count,
+            "non_copper_zone_count": non_copper_count}
+
+
+def _zone_connected_counts(board):
+    board.BuildConnectivity()
+    connectivity = board.GetConnectivity()
+    result = []
+    for zone in board.Zones():
+        layer_name = str(board.GetLayerName(int(zone.GetLayer())))
+        if _zone_is_rule_area(zone) or not layer_name.endswith(".Cu"):
+            continue
+        connected = list(connectivity.GetConnectedPads(zone)) + list(connectivity.GetConnectedTracks(zone))
+        count = sum(1 for item in connected
+                    if item.GetClass() != "ZONE" and str(item.GetNetname()) == str(zone.GetNetname()))
+        result.append({"id": str(zone.m_Uuid.AsString()), "connected_copper_count": count})
+    return sorted(result, key=lambda row: row["id"])
+
+
+def _refill_imported_zones(board, pcbnew, original_definitions, original_stack):
+    if (_zone_definition_state(board, pcbnew) != original_definitions
+            or _native_stack_state(board, pcbnew) != original_stack):
+        raise ValueError("SES import changed existing zone definitions or copper stackup")
+    native_zones = board.Zones()
+    if not pcbnew.ZONE_FILLER(board).Fill(native_zones):
+        raise ValueError("KiCad native zone refill failed after SES import")
+    if (_zone_definition_state(board, pcbnew) != original_definitions
+            or _native_stack_state(board, pcbnew) != original_stack):
+        raise ValueError("zone refill changed existing zone definitions or copper stackup")
+    fill_state = _zone_fill_state(board, pcbnew)
+    return {"status": "pending_saved_verification", "zone_definitions": original_definitions,
+            "copper_stack": original_stack, **fill_state,
+            "connected_copper": _zone_connected_counts(board)}
+
+
+def _verify_saved_imported_zones(board, pcbnew, report):
+    if (_zone_definition_state(board, pcbnew) != report["zone_definitions"]
+            or _native_stack_state(board, pcbnew) != report["copper_stack"]):
+        raise ValueError("saved SES board changed zone definitions or copper stackup")
+    saved_fill_state = _zone_fill_state(board, pcbnew)
+    if saved_fill_state != {key: report[key] for key in (
+            "rows", "fillable_zone_count", "keepout_zone_count", "non_copper_zone_count")}:
+        raise ValueError("saved SES zone-fill geometry differs from fresh native refill")
+    connected = _zone_connected_counts(board)
+    try:
+        from ._native_ground_plane import _unconnected_plane_pads_by_net
+    except ImportError:  # Standalone import from KiCad's bundled Python.
+        from _native_ground_plane import _unconnected_plane_pads_by_net
+    # _zone_connected_counts already rebuilt connectivity. Native cluster
+    # membership, rather than the BOARD_ITEM type flag, proves plane attachment.
+    unconnected_pads_by_net = _unconnected_plane_pads_by_net(
+        board, sorted({row["net"] for row in saved_fill_state["rows"]}), rebuild=False,
+    )
+    unconnected_ground_pads = unconnected_pads_by_net.get("GND", [])
+    report.update({"status": "verified", "saved_fill_geometry_verified": True,
+                   "zone_definitions_preserved": True, "copper_stackup_preserved": True,
+                   "copper_layers_preserved": True,
+                   "zone_count": saved_fill_state["fillable_zone_count"],
+                   "total_zone_count": len(report["zone_definitions"]),
+                   "zones": saved_fill_state["rows"], "connected_copper": connected,
+                   "unconnected_ground_pads": unconnected_ground_pads,
+                   "unconnected_pads_by_net": unconnected_pads_by_net})
+    return report
+
+
+def _native_known_copper_layer_inventory(pcbnew):
+    """Return all copper IDs, proving enum symbols match KiCad's full copper mask."""
+    try:
+        enum_ids = {
+            int(getattr(pcbnew, name))
+            for name in dir(pcbnew)
+            if (name in {"F_Cu", "B_Cu"} or (name.startswith("In") and name.endswith("_Cu")))
+            and isinstance(getattr(pcbnew, name, None), int)
+        }
+        all_copper_ids = sorted(set(int(layer) for layer in pcbnew.LSET.AllCuMask().Seq()))
+        complete = bool(all_copper_ids) and set(all_copper_ids) == enum_ids
+        return all_copper_ids, complete
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return [], False
 
 
 def _identity(board):
@@ -79,8 +405,15 @@ def _ground_plane_graphic_state(item, pcbnew):
     uuid = item.m_Uuid.AsString()
     if kind == "PCB_SHAPE":
         shape = item.GetShapeStr()
-        if item.GetShape() == pcbnew.SHAPE_T_SEGMENT:
+        native_shape = item.GetShape()
+        if native_shape == pcbnew.SHAPE_T_SEGMENT:
             geometry = ((item.GetStart().x, item.GetStart().y), (item.GetEnd().x, item.GetEnd().y))
+        elif native_shape == pcbnew.SHAPE_T_ARC:
+            start, middle, end = item.GetStart(), item.GetArcMid(), item.GetEnd()
+            geometry = ((start.x, start.y), (middle.x, middle.y), (end.x, end.y))
+        elif native_shape == pcbnew.SHAPE_T_CIRCLE:
+            center, radius_point = item.GetStart(), item.GetEnd()
+            geometry = ((center.x, center.y), (radius_point.x, radius_point.y))
         elif shape == "Rect":
             geometry = tuple((point.x, point.y) for point in item.GetRectCorners())
         elif shape == "Polygon":
@@ -136,16 +469,129 @@ def _ground_plane_source_geometry_state(board, pcbnew):
     return tuple(sorted(footprints, key=repr)), tuple(drawings)
 
 
-def _inspect(board, pcbnew):
+def _rectangular_outline_bounds_iu(edges, pcbnew):
+    """Use Edge.Cuts centerlines, never the stroke-inflated drawing box."""
+    if len(edges) == 1 and edges[0].GetShape() == pcbnew.SHAPE_T_RECT:
+        points = [(point.x, point.y) for point in (edges[0].GetStart(), edges[0].GetEnd())]
+    elif len(edges) == 4 and all(edge.GetShape() == pcbnew.SHAPE_T_SEGMENT for edge in edges):
+        points = [(point.x, point.y) for edge in edges for point in (edge.GetStart(), edge.GetEnd())]
+        unique = set(points)
+        if not (
+            len(unique) == 4 and len({p[0] for p in unique}) == 2 and len({p[1] for p in unique}) == 2
+            and all(points.count(p) == 2 for p in unique)
+            and len({tuple(sorted(((edge.GetStart().x, edge.GetStart().y),
+                                   (edge.GetEnd().x, edge.GetEnd().y)))) for edge in edges}) == 4
+            and all(edge.GetStart().x == edge.GetEnd().x or edge.GetStart().y == edge.GetEnd().y
+                    for edge in edges)
+        ):
+            return None
+    else:
+        return None
+    x0, x1 = min(p[0] for p in points), max(p[0] for p in points)
+    y0, y1 = min(p[1] for p in points), max(p[1] for p in points)
+    return (x0, y0, x1 - x0, y1 - y0) if x1 > x0 and y1 > y0 else None
+
+
+def _inspect(board, pcbnew, include_route_geometry=False):
+    try:
+        from _native_board_rules import native_edge_clearance_metadata
+    except ImportError:  # package-level inspection tests; worker execution uses sibling import
+        from ._native_board_rules import native_edge_clearance_metadata
+
+    edge_clearance = native_edge_clearance_metadata(board, pcbnew)
     footprints = []
+    tracks, vias = [], []
+    copper_layer_ids, copper_layer_inventory_complete = _native_copper_layer_inventory(board, pcbnew)
+    copper_stack_ids, copper_stack_complete = _native_copper_layer_stack(board, pcbnew)
+    board_copper_layers = []
+    if copper_stack_complete:
+        try:
+            board_copper_layers = [{"id": layer_id, "name": str(board.GetLayerName(layer_id))}
+                             for layer_id in copper_stack_ids]
+            names = [row["name"] for row in board_copper_layers]
+            copper_stack_complete = (all(name.endswith(".Cu") for name in names)
+                                     and len(names) == len(set(names)))
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            board_copper_layers = []
+            copper_stack_complete = False
+    if not copper_stack_complete:
+        board_copper_layers = []
+    known_copper_layer_ids, known_copper_layer_inventory_complete = (
+        _native_known_copper_layer_inventory(pcbnew)
+    )
+    known_copper_layer_id_set = set(known_copper_layer_ids)
+    enabled_copper_layer_id_set = set(copper_layer_ids) if copper_layer_inventory_complete else None
+    pad_connectivity_inventory_complete = True
     for footprint in board.GetFootprints():
         position = footprint.GetPosition()
         rotation = footprint.GetOrientationDegrees()
         reference_field = footprint.Reference()
         reference_size_mm = None
-        pads = [{"number": p.GetNumber(), "net": p.GetNetname(),
-                 "x": pcbnew.ToMM(p.GetPosition().x), "y": pcbnew.ToMM(p.GetPosition().y)}
-                for p in footprint.Pads()]
+        pads = []
+        for pad in footprint.Pads():
+            try:
+                layers = sorted(int(layer) for layer in pad.GetLayerSet().Seq())
+                copper_layers = sorted(set(layers) & known_copper_layer_id_set)
+                attribute = int(pad.GetAttribute())
+            except (AttributeError, RuntimeError, TypeError, ValueError, OverflowError):
+                layers = None
+                copper_layers = None
+                attribute = None
+            enabled_copper_layers = _native_pad_enabled_copper_layers(
+                copper_layers, list(enabled_copper_layer_id_set or ()),
+                enabled_copper_layer_id_set is not None and copper_layer_inventory_complete,
+            )
+            plated_through = _native_pad_is_plated_through(pad, pcbnew)
+            if plated_through is None or enabled_copper_layers is None:
+                pad_connectivity_inventory_complete = False
+            pads.append({
+                "number": pad.GetNumber(),
+                "net": pad.GetNetname(),
+                "x": pcbnew.ToMM(pad.GetPosition().x),
+                "y": pcbnew.ToMM(pad.GetPosition().y),
+                "layers": layers,
+                "copper_layers": copper_layers,
+                "enabled_copper_layers": enabled_copper_layers,
+                "attribute": attribute,
+                "plated_through": plated_through,
+            })
+        pad_geometry = []
+        for pad in footprint.Pads():
+            try:
+                layers = sorted(int(layer) for layer in pad.GetLayerSet().Seq())
+                copper_layers = sorted(set(layers) & known_copper_layer_id_set)
+                local_orientation = (float(pad.GetOrientationDegrees()) - float(rotation)) % 360.0
+                pad_geometry.append({
+                    "number": pad.GetNumber(),
+                    "net": pad.GetNetname(),
+                    "shape": int(pad.GetShape()),
+                    "attribute": int(pad.GetAttribute()),
+                    "size_iu": [int(pad.GetSize().x), int(pad.GetSize().y)],
+                    "drill_iu": [int(pad.GetDrillSize().x), int(pad.GetDrillSize().y)],
+                    "drill_shape": int(pad.GetDrillShape()),
+                    "layers": layers,
+                    "copper_layers": copper_layers,
+                    "local_orientation_deg": round(local_orientation, 6),
+                    "offset_iu": [int(pad.GetOffset().x), int(pad.GetOffset().y)],
+                    "local_position_iu": [
+                        round((pad.GetPosition().x - position.x) * math.cos(math.radians(rotation))
+                                  - (pad.GetPosition().y - position.y) * math.sin(math.radians(rotation))),
+                        round((pad.GetPosition().x - position.x) * math.sin(math.radians(rotation))
+                                  + (pad.GetPosition().y - position.y) * math.cos(math.radians(rotation))),
+                    ],
+                    "known_shape": int(pad.GetShape()) in {
+                        int(getattr(pcbnew, name)) for name in (
+                            "PAD_SHAPE_CIRCLE", "PAD_SHAPE_RECT", "PAD_SHAPE_OVAL")
+                        if hasattr(pcbnew, name)
+                    },
+                    "native_roundrect": _native_is_roundrect(pad, pcbnew),
+                    "roundrect_radius_ratio": _native_roundrect_radius_ratio(pad, pcbnew),
+                    "surface_shape_known": _native_surface_shape_known(pad, pcbnew),
+                })
+            except (AttributeError, TypeError, ValueError):
+                pad_geometry.append({"number": pad.GetNumber(), "net": pad.GetNetname(),
+                                     "known_shape": False, "surface_shape_known": False,
+                                     "native_roundrect": False, "roundrect_radius_ratio": None})
         fields = [footprint.Reference(), footprint.Value(), *list(footprint.GetFields())]
         field_state = []
         seen_fields = set()
@@ -172,19 +618,35 @@ def _inspect(board, pcbnew):
             row["local_y"] = pcbnew.ToMM(pad.GetPosition().y - position.y)
         courtyard_layer = pcbnew.B_CrtYd if footprint.GetLayer() == pcbnew.B_Cu else pcbnew.F_CrtYd
         courtyard = footprint.GetCourtyard(courtyard_layer)
-        box = courtyard.BBox() if not courtyard.IsEmpty() else footprint.GetBoundingBox(False, False)
+        left, top, right, bottom = _placement_envelope(footprint, courtyard)
+        # Two-sided placement is permitted only when absence is explicit.
+        opposite_courtyard_known, opposite_courtyard_present = _opposite_courtyard_state(
+            footprint, pcbnew
+        )
+        native_surface_side = (
+            "back" if footprint.GetLayer() == pcbnew.B_Cu
+            else "front" if footprint.GetLayer() == pcbnew.F_Cu
+            else None
+        )
+        try:
+            native_footprint_is_smd = (
+                int(footprint.GetAttributes()) == int(pcbnew.FP_SMD)
+            )
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            native_footprint_is_smd = None
         # Enclose geometry about the footprint origin, including off-center
         # THT connectors; a width/height alone cannot describe such parts.
-        width = 2 * max(abs(box.GetX() - position.x), abs(box.GetRight() - position.x))
-        height = 2 * max(abs(box.GetY() - position.y), abs(box.GetBottom() - position.y))
-        # Keep the true courtyard shape available to placement optimizers.
+        width = 2 * max(abs(left - position.x), abs(right - position.x))
+        height = 2 * max(abs(top - position.y), abs(bottom - position.y))
+        # Retain the legacy courtyard field names for the conservative envelope.
+        # Authored courtyards can be smaller than the physical pads/body.
         # Width/height above intentionally remain origin-symmetric for older
         # consumers; off-center connectors can make those legacy values much
-        # larger than the actual courtyard rectangle.
-        courtyard_width = box.GetWidth()
-        courtyard_height = box.GetHeight()
-        courtyard_center_x = (box.GetX() + box.GetRight()) // 2 - position.x
-        courtyard_center_y = (box.GetY() + box.GetBottom()) // 2 - position.y
+        # larger than the actual envelope rectangle.
+        courtyard_width = right - left
+        courtyard_height = bottom - top
+        courtyard_center_x = (left + right) // 2 - position.x
+        courtyard_center_y = (top + bottom) // 2 - position.y
         footprint.SetOrientationDegrees(rotation)
         # pcbnew may rotate footprint fields as a side effect of changing the
         # footprint angle. Inspection must not alter their authored positions.
@@ -193,35 +655,96 @@ def _inspect(board, pcbnew):
             field.SetTextAngleDegrees(text_angle)
         footprints.append({
             "ref": footprint.GetReference(), "footprint": str(footprint.GetFPID().GetLibItemName()),
+            "footprint_id": footprint.GetFPIDAsString(), "pad_geometry": pad_geometry,
             "x": pcbnew.ToMM(position.x), "y": pcbnew.ToMM(position.y), "rotation": rotation,
             "layer": "back" if footprint.GetLayer() == pcbnew.B_Cu else "front",
-            "locked": footprint.IsLocked(), "width": pcbnew.ToMM(width), "height": pcbnew.ToMM(height),
+            "native_surface_copper_side": native_surface_side,
+            "native_surface_copper_layer_id": int(footprint.GetLayer()),
+            "native_board_copper_layer_ids": sorted(copper_layer_ids),
+            "native_board_copper_layer_inventory_complete": copper_layer_inventory_complete,
+            "native_known_copper_layer_ids": known_copper_layer_ids,
+            "native_known_copper_layer_inventory_complete": known_copper_layer_inventory_complete,
+            "native_footprint_is_smd": native_footprint_is_smd,
+            "locked": footprint.IsLocked(), "reference_locked": reference_field.IsLocked(),
+            "width": pcbnew.ToMM(width), "height": pcbnew.ToMM(height),
             "courtyard_width": pcbnew.ToMM(courtyard_width),
             "courtyard_height": pcbnew.ToMM(courtyard_height),
             "courtyard_center_x": pcbnew.ToMM(courtyard_center_x),
             "courtyard_center_y": pcbnew.ToMM(courtyard_center_y),
+            "native_opposite_courtyard_known": opposite_courtyard_known,
+            "native_opposite_courtyard_present": opposite_courtyard_present,
             "reference_size_mm": reference_size_mm,
             "pads": pads,
         })
+    # Export centerline geometry in millimetres for read-only route metrics.
+    # Copper shapes are deliberately not converted into inferred connectivity.
+    if include_route_geometry:
+        for item in board.GetTracks():
+            net = str(item.GetNetname())
+            kind_name = type(item).__name__.upper()
+            if "VIA" in kind_name:
+                try:
+                    layer_span = _native_via_layer_span(item, copper_stack_ids, copper_stack_complete)
+                    vias.append({
+                        "net": net,
+                        "x_mm": pcbnew.ToMM(item.GetPosition().x),
+                        "y_mm": pcbnew.ToMM(item.GetPosition().y),
+                        "layer_ids": layer_span,
+                        "layer_span_complete": layer_span is not None,
+                        "kind": "via",
+                    })
+                except (AttributeError, RuntimeError, TypeError, ValueError, OverflowError):
+                    vias.append({"net": net, "kind": "unknown", "layer_ids": None,
+                                 "layer_span_complete": False})
+                continue
+            kind = "arc" if "ARC" in kind_name else "segment"
+            try:
+                tracks.append({
+                    "net": net,
+                    "start_mm": [pcbnew.ToMM(item.GetStart().x), pcbnew.ToMM(item.GetStart().y)],
+                    "end_mm": [pcbnew.ToMM(item.GetEnd().x), pcbnew.ToMM(item.GetEnd().y)],
+                    "layer_id": int(item.GetLayer()),
+                    "kind": kind,
+                })
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                tracks.append({"net": net, "kind": "unknown"})
     box = board.GetBoardEdgesBoundingBox()
     edges = [d for d in board.GetDrawings() if d.GetLayer() == pcbnew.Edge_Cuts]
-    rectangular = len(edges) == 1 and edges[0].GetShape() == pcbnew.SHAPE_T_RECT
-    if len(edges) == 4 and all(d.GetShape() == pcbnew.SHAPE_T_SEGMENT for d in edges):
-        points = [(d.GetStart().x, d.GetStart().y) for d in edges]
-        points += [(d.GetEnd().x, d.GetEnd().y) for d in edges]
-        unique = set(points)
-        rectangular = (
-            len(unique) == 4 and len({p[0] for p in unique}) == 2 and len({p[1] for p in unique}) == 2
-            and all(points.count(p) == 2 for p in unique)
-            and len({tuple(sorted(((d.GetStart().x, d.GetStart().y), (d.GetEnd().x, d.GetEnd().y))))
-                     for d in edges}) == 4
-            and all(d.GetStart().x == d.GetEnd().x or d.GetStart().y == d.GetEnd().y for d in edges)
+    outline_bounds = _rectangular_outline_bounds_iu(edges, pcbnew)
+    # Nonrectangular inputs retain their diagnostic box, but placement rejects
+    # them through rectangular_outline. Verified rectangles use the actual
+    # cut boundary independent of line width and direction.
+    bounds = outline_bounds or (box.GetX(), box.GetY(), box.GetWidth(), box.GetHeight())
+    result = {"footprints": footprints,
+            "track_count": len(list(board.GetTracks())), "zone_count": len(list(board.Zones())),
+            "copper_layer_count": len(board_copper_layers) if copper_stack_complete else None,
+            "copper_layer_names": [row["name"] for row in board_copper_layers] if copper_stack_complete else None,
+            "copper_layers": board_copper_layers if copper_stack_complete else None,
+            "copper_layer_inventory_complete": copper_stack_complete,
+            "pad_connectivity_inventory_complete": pad_connectivity_inventory_complete,
+            "rectangular_outline": outline_bounds is not None,
+            "native_edge_clearance": edge_clearance,
+            "bounds": dict(zip(("x", "y", "width", "height"), (pcbnew.ToMM(value) for value in bounds)))}
+    if include_route_geometry:
+        zone_nets = []
+        zone_net_inventory_complete = True
+        for zone in board.Zones():
+            try:
+                zone_net = zone.GetNetname()
+                if not isinstance(zone_net, str) or not zone_net:
+                    zone_net_inventory_complete = False
+                else:
+                    zone_nets.append(zone_net)
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                zone_net_inventory_complete = False
+        result.update(tracks=tracks, vias=vias)
+        result.update(
+            zone_nets=zone_nets,
+            zone_net_inventory_complete=(
+                zone_net_inventory_complete and len(zone_nets) == result["zone_count"]
+            ),
         )
-    return {"footprints": footprints, "track_count": len(list(board.GetTracks())),
-            "zone_count": len(list(board.Zones())),
-            "rectangular_outline": rectangular,
-            "bounds": {"x": pcbnew.ToMM(box.GetX()), "y": pcbnew.ToMM(box.GetY()),
-                       "width": pcbnew.ToMM(box.GetWidth()), "height": pcbnew.ToMM(box.GetHeight())}}
+    return result
 
 
 def _box(item, pcbnew, margin_mm=0.0):
@@ -708,6 +1231,280 @@ def _reference_conflict_report(board, pcbnew, moved_count, orientation_normalize
             "conflict_counts": conflict_counts}
 
 
+def _reference_conflict_signature(board, pcbnew):
+    """Return exact native label-conflict identities for no-new-conflict checks."""
+    signature = Counter()
+    obstacles = _silk_obstacles(board, pcbnew)
+    obstacle_indexes, peer_indexes = _silk_indexes(obstacles, pcbnew)
+    entries = _reference_entries(board, pcbnew)
+    bounds = _board_text_bounds(board, pcbnew)
+    by_layer = {pcbnew.F_SilkS: [], pcbnew.B_SilkS: []}
+    for entry in entries:
+        ref, layer, box = entry["ref"], entry["layer"], entry["box"]
+        if not _inside_bounds(box, bounds):
+            signature[("edge", ref)] += 1
+        rows = obstacles[layer]
+        for index in obstacle_indexes[layer].query(box):
+            kind, owner, obstacle = rows[index]
+            if _boxes_overlap(box, obstacle):
+                signature[(kind, ref, owner, tuple(obstacle))] += 1
+        center = ((box[0] + box[2]) // 2, (box[1] + box[3]) // 2)
+        courtyard = _courtyard_box(entry["footprint"], pcbnew)
+        if not _candidate_associated(center, courtyard, ref, rows, peer_indexes[layer]):
+            signature[("association", ref)] += 1
+        by_layer[layer].append(entry)
+    for layer_entries in by_layer.values():
+        index = _AabbIndex([entry["box"] for entry in layer_entries], pcbnew.FromMM(5.0))
+        for first_index, first in enumerate(layer_entries):
+            for second_index in index.query(first["box"]):
+                if second_index <= first_index:
+                    continue
+                second = layer_entries[second_index]
+                if _boxes_overlap(first["box"], second["box"]):
+                    refs = tuple(sorted((first["ref"], second["ref"])))
+                    signature[("reference_reference", *refs)] += 1
+    return signature
+
+
+def _reference_repair_preservation_state(board, pcbnew, movable_refs=()):
+    """Capture all footprint/pad geometry and non-position reference properties."""
+    footprints = {}
+    text = {}
+    for footprint in board.GetFootprints():
+        ref = footprint.GetReference()
+        pads = []
+        for pad in footprint.Pads():
+            position = pad.GetPosition()
+            layers = pad.GetLayerSet()
+            layer_state = layers.FmtBin() if hasattr(layers, "FmtBin") else str(layers)
+            pads.append((pad.GetNumber(), pad.GetNetname(), position.x, position.y,
+                         int(pad.GetOrientationDegrees()), layer_state, pad.IsLocked()))
+        position = footprint.GetPosition()
+        uuid = footprint.m_Uuid.AsString() if hasattr(footprint, "m_Uuid") else None
+        footprints[ref] = (uuid, position.x, position.y, float(footprint.GetOrientationDegrees()),
+                           int(footprint.GetLayer()), bool(footprint.IsLocked()), tuple(sorted(pads)))
+        for field in footprint.GetFields():
+            field_position = field.GetTextPos()
+            size = field.GetTextSize()
+            thickness = field.GetTextThickness()
+            key = (ref, field.GetTextTypeDescription(), field.GetText())
+            uuid = field.m_Uuid.AsString() if hasattr(field, "m_Uuid") else None
+            is_reference = field.GetTextTypeDescription() == "Reference"
+            text[key] = (
+                None if is_reference and ref in movable_refs else (field_position.x, field_position.y),
+                float(field.GetTextAngleDegrees()), size.x, size.y, thickness,
+                int(field.GetLayer()), _field_visible(field), bool(field.IsLocked()), uuid,
+            )
+    return footprints, text, _copper_state(board)
+
+
+def _bounded_reference_field_repair(board, pcbnew, baseline_report):
+    """Try a bounded native-clear reassignment of only conflicting labels.
+
+    The routine uses the ordinary tidy algorithm's candidate generator,
+    association rule, obstacle inventory, and complete conflict reporter.
+    It fails closed on locked fields, oversized neighborhoods, empty domains,
+    search limits, new conflicts, or any changed footprint/pad/copper state.
+    """
+    from _native_reference_repair import apply_candidate_positions, solve_bounded_assignment
+
+    max_group_size = 8
+    max_ring = 24
+    max_move_mm = 8.0
+    max_options = 96
+    max_center_evaluations = 25000
+    max_search_nodes = 50000
+    active_refs = set(baseline_report.get("unresolved_references", []))
+    if not active_refs:
+        return {"status": "not_needed", "reason": "no_native_conflict_references"}
+    entries = {entry["ref"]: entry for entry in _reference_entries(board, pcbnew)}
+    if active_refs - entries.keys():
+        return {"status": "not_applied", "reason": "conflicted_reference_field_missing"}
+
+    # Partition only actual overlapping labels into neighborhoods. A label
+    # blocked by a static obstacle forms a singleton neighborhood.
+    graph = {ref: set() for ref in active_refs}
+    for ref in sorted(active_refs):
+        first = entries[ref]
+        for other in sorted(active_refs):
+            if other <= ref:
+                continue
+            second = entries[other]
+            if first["layer"] == second["layer"] and _boxes_overlap(first["box"], second["box"]):
+                graph[ref].add(other)
+                graph[other].add(ref)
+    groups = []
+    pending = set(active_refs)
+    while pending:
+        seed = min(pending)
+        component = set()
+        stack = [seed]
+        while stack:
+            ref = stack.pop()
+            if ref in component:
+                continue
+            component.add(ref)
+            stack.extend(sorted(graph[ref] - component, reverse=True))
+        pending -= component
+        groups.append(sorted(component))
+    if any(len(group) > max_group_size for group in groups):
+        return {"status": "not_applied", "reason": "conflict_neighborhood_too_large",
+                "group_sizes": [len(group) for group in groups], "max_group_size": max_group_size}
+
+    original_positions = {
+        ref: (entry["field"].GetTextPos().x, entry["field"].GetTextPos().y)
+        for ref, entry in entries.items()
+    }
+    identity_before = _identity(board)
+    baseline_signature = _reference_conflict_signature(board, pcbnew)
+    static_obstacles = _silk_obstacles(board, pcbnew)
+    obstacle_indexes, peer_indexes = _silk_indexes(static_obstacles, pcbnew)
+    bounds = _board_text_bounds(board, pcbnew)
+    move_limit = pcbnew.FromMM(max_move_mm)
+    candidate_evaluations = 0
+    search_nodes = 0
+    option_counts = {}
+    chosen_all = {}
+    # Virtual reservations let later groups see earlier assignments while no
+    # field mutates until every conflict group has a bounded solution.
+    virtual_boxes = {ref: entry["box"] for ref, entry in entries.items()}
+
+    for group in groups:
+        if any(entries[ref]["locked"] for ref in group):
+            return {"status": "not_applied", "reason": "conflict_neighborhood_contains_locked_reference",
+                    "groups": groups, "candidate_center_evaluations": candidate_evaluations,
+                    "search_nodes": search_nodes}
+        fixed_by_layer = {pcbnew.F_SilkS: [], pcbnew.B_SilkS: []}
+        for ref, entry in entries.items():
+            if ref not in group:
+                fixed_by_layer[entry["layer"]].append(virtual_boxes[ref])
+        options_by_ref = {}
+        group_entries = {ref: entries[ref] for ref in group}
+        for ref in group:
+            entry = entries[ref]
+            field, current, layer = entry["field"], virtual_boxes[ref], entry["layer"]
+            courtyard = _courtyard_box(entry["footprint"], pcbnew)
+            width = current[2] - current[0] - 2 * pcbnew.FromMM(_SILK_CLEARANCE_MM)
+            height = current[3] - current[1] - 2 * pcbnew.FromMM(_SILK_CLEARANCE_MM)
+            initial_center = ((current[0] + current[2]) // 2, (current[1] + current[3]) // 2)
+            position = field.GetTextPos()
+            origin_offset = (position.x - initial_center[0], position.y - initial_center[1])
+            centers = set(_candidate_centers(
+                courtyard, width, height, bounds, pcbnew, max_ring=max_ring,
+            ))
+            centers.add(initial_center)
+            viable = []
+            for center in centers:
+                if candidate_evaluations >= max_center_evaluations:
+                    return {"status": "budget_exhausted", "reason": "candidate_center_budget_exhausted",
+                            "groups": groups, "candidate_center_evaluations": candidate_evaluations,
+                            "candidate_center_budget": max_center_evaluations,
+                            "search_nodes": search_nodes, "search_node_budget": max_search_nodes}
+                candidate_evaluations += 1
+                dx, dy = center[0] - initial_center[0], center[1] - initial_center[1]
+                if dx * dx + dy * dy > move_limit * move_limit:
+                    continue
+                box = (current[0] + dx, current[1] + dy, current[2] + dx, current[3] + dy)
+                if not _inside_bounds(box, bounds):
+                    continue
+                rows = static_obstacles[layer]
+                if any(_boxes_overlap(box, rows[index][2])
+                       for index in obstacle_indexes[layer].query(box)):
+                    continue
+                if any(_boxes_overlap(box, fixed_box)
+                       for fixed_box in fixed_by_layer[layer]):
+                    continue
+                if not _candidate_associated(center, courtyard, ref, rows, peer_indexes[layer]):
+                    continue
+                viable.append({
+                    "center": center,
+                    "box": box,
+                    "pos": (center[0] + origin_offset[0], center[1] + origin_offset[1]),
+                    "move_sq": dx * dx + dy * dy,
+                    "own_distance_sq": _point_box_distance_sq(center, courtyard),
+                })
+            viable.sort(key=lambda row: (row["move_sq"], row["own_distance_sq"],
+                                         row["center"][1], row["center"][0]))
+            options_by_ref[ref] = viable[:max_options]
+        option_counts.update({ref: len(rows) for ref, rows in options_by_ref.items()})
+        if any(not rows for rows in options_by_ref.values()):
+            return {"status": "not_applied", "reason": "empty_candidate_domain",
+                    "groups": groups, "candidate_options_by_ref": option_counts,
+                    "candidate_center_evaluations": candidate_evaluations,
+                    "search_nodes": search_nodes}
+        result = solve_bounded_assignment(
+            options_by_ref,
+            layer_by_ref={ref: group_entries[ref]["layer"] for ref in group},
+            fixed_boxes_by_layer=fixed_by_layer,
+            max_nodes=max_search_nodes - search_nodes,
+        )
+        search_nodes += result["search_nodes"]
+        if result["status"] != "solved":
+            return {"status": result["status"], "reason": "bounded_assignment_failed",
+                    "groups": groups, "candidate_options_by_ref": option_counts,
+                    "candidate_center_evaluations": candidate_evaluations,
+                    "candidate_center_budget": max_center_evaluations,
+                    "search_nodes": search_nodes, "search_node_budget": max_search_nodes}
+        for ref, candidate in result["assignment"].items():
+            chosen_all[ref] = candidate
+            virtual_boxes[ref] = candidate["box"]
+
+    fields_by_ref = {ref: entry["field"] for ref, entry in entries.items()}
+    preservation_before = _reference_repair_preservation_state(board, pcbnew, chosen_all)
+    candidate_report = None
+
+    def validate_candidate():
+        nonlocal candidate_report
+        candidate_report = _reference_conflict_report(board, pcbnew, 0, 0)
+        candidate_signature = _reference_conflict_signature(board, pcbnew)
+        new_conflicts = candidate_signature - baseline_signature
+        improved = candidate_report["remaining_conflict_count"] < baseline_report["remaining_conflict_count"]
+        no_new_conflicts = not new_conflicts
+        preserved = (
+            _identity(board) == identity_before
+            and _reference_repair_preservation_state(board, pcbnew, chosen_all) == preservation_before
+        )
+        return improved and no_new_conflicts and preserved
+
+    applied = apply_candidate_positions(
+        fields_by_ref, chosen_all, lambda x, y: pcbnew.VECTOR2I(x, y), validate_candidate,
+    )
+    if not applied["applied"]:
+        return {"status": "rolled_back", "reason": applied["reason"], "groups": groups,
+                "candidate_options_by_ref": option_counts,
+                "candidate_center_evaluations": candidate_evaluations,
+                "candidate_center_budget": max_center_evaluations,
+                "search_nodes": search_nodes, "search_node_budget": max_search_nodes,
+                "before_conflict_count": baseline_report["remaining_conflict_count"],
+                "candidate_conflict_count": (candidate_report or {}).get("remaining_conflict_count")}
+    moved_refs = sorted(ref for ref, candidate in chosen_all.items()
+                        if tuple(candidate["pos"]) != original_positions[ref])
+    return {
+        "status": "accepted",
+        "reason": applied["reason"],
+        "groups": groups,
+        "moved_refs": moved_refs,
+        "candidate_options_by_ref": option_counts,
+        "candidate_center_evaluations": candidate_evaluations,
+        "candidate_center_budget": max_center_evaluations,
+        "search_nodes": search_nodes,
+        "search_node_budget": max_search_nodes,
+        "max_group_size": max_group_size,
+        "candidate_ring_cap": max_ring,
+        "max_move_mm": max_move_mm,
+        "max_candidates_per_reference": max_options,
+        "before_conflict_count": baseline_report["remaining_conflict_count"],
+        "after_conflict_count": candidate_report["remaining_conflict_count"],
+        "before_conflict_categories": dict(baseline_report["conflict_counts"]),
+        "after_conflict_categories": dict(candidate_report["conflict_counts"]),
+        "no_new_native_conflicts": True,
+        "pad_net_identity_preserved": True,
+        "footprints_and_pad_geometry_preserved": True,
+        "nonreference_text_fields_preserved": True,
+        "copper_preserved": True,
+    }
+
+
 def execute(request):
     import pcbnew
 
@@ -715,26 +1512,44 @@ def execute(request):
     if board is None:
         raise ValueError("KiCad could not load the board")
     identity = _identity(board)
+    reference_positions_before_tidy = None
     operation = request["operation"]
     tidy_summary = None
+    label_repair = None
     refinement = None
     cleanup = None
     plane_cleanup = None
     ground_plane = None
+    plane_stitching = None
+    router_dangling_cleanup = None
+    generated_route_repair = None
+    generated_removed_items = []
+    dangling_removed_items = []
     cleanup_removed_items = []
     plane_cleanup_removed_items = []
     original_copper = None
     original_layout = None
     original_board_geometry = None
+    zone_refill = None
     if operation == "inspect":
-        return {"status": "ok", **_inspect(board, pcbnew)}
+        return {"status": "ok", **_inspect(board, pcbnew,
+                                             include_route_geometry=bool(request.get("include_route_geometry")))}
     if operation == "export_dsn":
+        try:
+            from _native_board_rules import native_edge_clearance
+        except ImportError:  # package-level unit tests
+            from ._native_board_rules import native_edge_clearance
+
+        edge_clearance = native_edge_clearance(board, pcbnew)
         if not pcbnew.ExportSpecctraDSN(board, request["output"]):
             raise ValueError("KiCad Specctra export failed; check the board outline and netlist")
-        return {"status": "ok", "version": pcbnew.Version()}
+        return {"status": "ok", "version": pcbnew.Version(),
+                "native_edge_clearance": {"status": "ok", **edge_clearance}}
     if operation == "import_ses":
         placements = {f.GetReference(): (f.GetPosition().x, f.GetPosition().y, f.GetOrientationDegrees(), f.GetLayer())
                       for f in board.GetFootprints()}
+        original_zone_definitions = _zone_definition_state(board, pcbnew) if list(board.Zones()) else None
+        original_copper_stack = _native_stack_state(board, pcbnew) if original_zone_definitions else None
         if not pcbnew.ImportSpecctraSES(board, request["session"]):
             raise ValueError("KiCad could not import the Specctra session")
         for f in board.GetFootprints():
@@ -743,6 +1558,36 @@ def execute(request):
                 raise ValueError(f"Session unexpectedly changed footprint {f.GetReference()}: "
                                  f"{placements[f.GetReference()]} -> "
                                  f"{(f.GetPosition().x, f.GetPosition().y, f.GetOrientationDegrees(), f.GetLayer())}")
+        if original_zone_definitions is not None:
+            zone_refill = _refill_imported_zones(
+                board, pcbnew, original_zone_definitions, original_copper_stack,
+            )
+    elif operation == "repair_plane_thermals":
+        from _native_plane_stitch import repair as repair_plane_thermals
+
+        expected = request.get("expected_board_sha256")
+        if (not isinstance(expected, str) or len(expected) != 64
+                or hashlib.sha256(Path(request["board"]).read_bytes()).hexdigest() != expected):
+            raise ValueError("Plane thermal DRC does not match the loaded board bytes")
+        original_copper = _copper_state(board)
+        original_layout = _fixed_layout_state(board)
+        original_board_geometry = _ground_plane_source_geometry_state(board, pcbnew)
+        original_zone_definitions = _zone_definition_state(board, pcbnew)
+        original_copper_stack = _native_stack_state(board, pcbnew)
+        plane_stitching = repair_plane_thermals(board, pcbnew, request.get("violations"))
+        if (not isinstance(plane_stitching, dict)
+                or plane_stitching.get("status") != "candidate_only_requires_full_drc"
+                or type(plane_stitching.get("added_vias")) is not int
+                or not 0 < plane_stitching["added_vias"] <= 16
+                or plane_stitching.get("net") != "GND"):
+            raise ValueError("Native plane stitching did not report bounded GND via candidates")
+        if (original_copper - _copper_state(board)
+                or original_layout != _fixed_layout_state(board)
+                or original_board_geometry != _ground_plane_source_geometry_state(board, pcbnew)):
+            raise ValueError("Plane stitching changed original copper, footprints or source geometry")
+        zone_refill = _refill_imported_zones(
+            board, pcbnew, original_zone_definitions, original_copper_stack,
+        )
     elif operation == "refine_returns":
         from _native_return_paths import refine
 
@@ -798,6 +1643,7 @@ def execute(request):
                 "thermal_spoke_width_mm",
             )},
             protected_connections=plan["protected_connections"],
+            pre_route=request.get("pre_route", False),
         )
         if not isinstance(ground_plane, dict) or ground_plane.get("status") != "ok":
             raise ValueError("Native ground-plane operation did not return a successful report")
@@ -864,6 +1710,241 @@ def execute(request):
         plane_cleanup["locked_copper_preserved"] = True
         plane_cleanup["original_geometry_preserved"] = True
         plane_cleanup["original_board_geometry_preserved"] = True
+    elif operation == "cleanup_router_dangling":
+        try:
+            from ._native_router_dangling_cleanup import remove_reported_tracks
+        except ImportError:  # Standalone execution by KiCad's bundled Python.
+            from _native_router_dangling_cleanup import remove_reported_tracks
+
+        source_path = Path(request.get("source_board", "")).resolve()
+        expected_source = request.get("expected_source_board_sha256")
+        expected_board = request.get("expected_board_sha256")
+        if (not source_path.is_file() or not isinstance(expected_source, str) or len(expected_source) != 64
+                or hashlib.sha256(source_path.read_bytes()).hexdigest() != expected_source):
+            raise ValueError("Original source board is missing or changed before dangling-track cleanup")
+        if (not isinstance(expected_board, str) or len(expected_board) != 64
+                or hashlib.sha256(Path(request["board"]).read_bytes()).hexdigest() != expected_board):
+            raise ValueError("Fresh DRC does not match the loaded partial board bytes")
+        source_board = pcbnew.LoadBoard(str(source_path))
+        if source_board is None:
+            raise ValueError("KiCad could not load the immutable original source board")
+        original_copper = _copper_state(board)
+        source_copper = _copper_state(source_board)
+        original_layout = _fixed_layout_state(board)
+        original_board_geometry = _ground_plane_source_geometry_state(board, pcbnew)
+        original_stack = _native_stack_state(board, pcbnew)
+        original_zone_definitions = _zone_definition_state(board, pcbnew)
+        original_zone_fills = _zone_fill_state(board, pcbnew)
+        if source_copper - original_copper:
+            raise ValueError("SES partial does not preserve every original source copper object exactly")
+        if (_identity(source_board) != identity
+                or _fixed_layout_state(source_board) != original_layout
+                or _ground_plane_source_geometry_state(source_board, pcbnew) != original_board_geometry
+                or _native_stack_state(source_board, pcbnew) != original_stack
+                or _zone_definition_state(source_board, pcbnew) != original_zone_definitions):
+            raise ValueError("Imported partial changed source identity, layout, geometry, zones or copper stack")
+        router_dangling_cleanup = remove_reported_tracks(
+            board,
+            pcbnew,
+            request.get("warning_rows"),
+            max_tracks=request.get("max_tracks", 64),
+            enabled_copper_layer_ids={row["id"] for row in original_stack["layers"]},
+        )
+        dangling_removed_items = router_dangling_cleanup.pop("_native_removed_items", [])
+        removed_tracks = router_dangling_cleanup.get("removed_tracks")
+        removed_vias = router_dangling_cleanup.get("removed_vias")
+        if (not isinstance(removed_tracks, list) or not isinstance(removed_vias, list)
+                or not (removed_tracks or removed_vias)):
+            raise ValueError("Dangling cleanup did not identify exact removed native tracks or vias")
+        removed_rows = [*removed_tracks, *removed_vias]
+        removed_uuids = [row.get("uuid") for row in removed_rows if isinstance(row, dict)]
+        if (len(removed_uuids) != len(removed_rows) or len(set(removed_uuids)) != len(removed_uuids)
+                or len(dangling_removed_items) != len(removed_rows)
+                or router_dangling_cleanup.get("removed_count") != len(removed_tracks)
+                or router_dangling_cleanup.get("removed_track_count") != len(removed_tracks)
+                or router_dangling_cleanup.get("removed_via_count") != len(removed_vias)
+                or router_dangling_cleanup.get("removed_item_count") != len(removed_rows)):
+            raise ValueError("Dangling cleanup returned duplicate, malformed or inconsistent removal counts")
+        source_copper_uuids = {
+            item.m_Uuid.AsString() for item in source_board.GetTracks()
+            if type(item).__name__ in {"PCB_TRACK", "PCB_VIA"}
+        }
+        if source_copper_uuids.intersection(removed_uuids):
+            raise ValueError("Dangling cleanup selected copper present in the original source")
+        selected = set(removed_uuids)
+        expected_types = ({row["uuid"]: "PCB_TRACK" for row in removed_tracks}
+                          | {row["uuid"]: "PCB_VIA" for row in removed_vias})
+        removed_state = Counter(
+            raw for raw in original_copper
+            if json.loads(raw).get("uuid") in selected
+            and json.loads(raw).get("type") == expected_types.get(json.loads(raw).get("uuid"))
+            and json.loads(raw).get("locked") is False
+        )
+        if sum(removed_state.values()) != len(selected):
+            raise ValueError("Selected dangling UUIDs do not identify only unlocked source-absent tracks")
+        if (_copper_state(board) - original_copper
+                or original_copper - _copper_state(board) != removed_state):
+            raise ValueError("Dangling-track cleanup changed copper beyond the exact selected tracks")
+        if (source_copper - _copper_state(board)
+                or _identity(board) != identity
+                or original_layout != _fixed_layout_state(board)
+                or original_board_geometry != _ground_plane_source_geometry_state(board, pcbnew)
+                or original_stack != _native_stack_state(board, pcbnew)
+                or original_zone_definitions != _zone_definition_state(board, pcbnew)
+                or original_zone_fills != _zone_fill_state(board, pcbnew)):
+            raise ValueError("Dangling-track cleanup changed original copper or non-routing geometry")
+        router_dangling_cleanup.update({
+            "source_identity_preserved": True,
+            "source_layout_preserved": True,
+            "source_geometry_preserved": True,
+            "source_copper_exact_subset_preserved": True,
+            "nonselected_copper_preserved": True,
+            "zones_and_stack_preserved": True,
+            "removed_copper_item_count": len(removed_rows),
+        })
+    elif operation in {"repair_generated_widths", "prune_generated_width_clearances"}:
+        try:
+            from _native_generated_route_repair import (
+                prune_generated_width_clearances,
+                repair_generated_widths,
+            )
+        except ImportError:
+            from ._native_generated_route_repair import (
+                prune_generated_width_clearances,
+                repair_generated_widths,
+            )
+
+        current_path = Path(request["board"]).resolve()
+        source_path = Path(request["source_board"]).resolve()
+        output_path = Path(request["output"]).resolve()
+        if (current_path == source_path or output_path in {current_path, source_path}
+                or output_path.exists()):
+            raise ValueError("Generated route repair requires separate fresh candidate paths")
+        project_sha = request.get("expected_source_project_sha256")
+        generated_protected_files = {
+            current_path: request.get("expected_board_sha256"),
+            source_path: request.get("expected_source_board_sha256"),
+            current_path.with_suffix(".kicad_pro"): project_sha,
+            source_path.with_suffix(".kicad_pro"): project_sha,
+        }
+
+        def verify_generated_input_files():
+            for path, expected in generated_protected_files.items():
+                if (not isinstance(expected, str) or len(expected) != 64 or not path.is_file()
+                        or hashlib.sha256(path.read_bytes()).hexdigest() != expected):
+                    raise ValueError("Generated route repair input/project hash does not match its source")
+
+        verify_generated_input_files()
+        # Native SaveBoard/LoadBoard may normalize the output project's schema.
+        # The host restores the authored sidecar before obtaining fresh DRC;
+        # source and input project bytes remain protected throughout this call.
+        output_project = output_path.with_suffix(".kicad_pro")
+        if (not output_project.is_file()
+                or hashlib.sha256(output_project.read_bytes()).hexdigest() != project_sha):
+            raise ValueError("Generated route repair output project was not staged from its source")
+        source_board = pcbnew.LoadBoard(str(source_path))
+        if source_board is None or list(source_board.GetTracks()):
+            raise ValueError("Generated route repair requires an original source without authored copper")
+        stack, complete = _native_copper_layer_stack(board, pcbnew)
+        source_stack, source_complete = _native_copper_layer_stack(source_board, pcbnew)
+        if (not complete or not source_complete or len(stack) != 2 or stack != source_stack
+                or list(board.Zones()) or list(source_board.Zones())):
+            raise ValueError("Generated fanout repair supports only verified two-layer boards without zones")
+        if any(type(item).__name__ not in {"PCB_TRACK", "PCB_VIA"} for item in board.GetTracks()):
+            raise ValueError("Generated fanout repair does not support curved or unknown copper")
+
+        def generated_fixed_state(candidate):
+            return (
+                _identity(candidate), _fixed_layout_state(candidate),
+                _ground_plane_source_geometry_state(candidate, pcbnew),
+                _native_stack_state(candidate, pcbnew), _zone_definition_state(candidate, pcbnew),
+                _zone_fill_state(candidate, pcbnew),
+            )
+
+        generated_original_fixed = generated_fixed_state(board)
+        original_copper = _copper_state(board)
+        original_rows = {json.loads(raw)["uuid"]: raw for raw in original_copper}
+        if (len(original_rows) != len(original_copper)
+                or any(count != 1 for count in original_copper.values())):
+            raise ValueError("Generated copper UUIDs are not unique")
+        generated_expected_copper = original_copper.copy()
+        if operation == "repair_generated_widths":
+            generated_route_repair = repair_generated_widths(
+                board, source_board, pcbnew, max_tracks=request.get("max_tracks", 4096),
+            )
+            changed = generated_route_repair.get("changed_tracks", [])
+            if generated_route_repair.get("changed_track_count") != len(changed):
+                raise ValueError("Generated width repair returned inconsistent change counts")
+            selected_uuids = set()
+            for change in changed:
+                uuid = change.get("uuid")
+                if uuid in selected_uuids or uuid not in original_rows:
+                    raise ValueError("Generated width repair returned an unknown or duplicate track UUID")
+                selected_uuids.add(uuid)
+                old_raw = original_rows[uuid]
+                row = json.loads(old_raw)
+                old, new = change.get("before_width_iu"), change.get("after_width_iu")
+                if (row["type"] != "PCB_TRACK" or row["locked"] or row["net"] != change.get("net")
+                        or isinstance(old, bool) or not isinstance(old, int)
+                        or isinstance(new, bool) or not isinstance(new, int)
+                        or row["width"] != old or not 0 < old < new):
+                    raise ValueError("Generated repair may only increase identified unlocked track widths")
+                del generated_expected_copper[old_raw]
+                row["width"] = new
+                generated_expected_copper[json.dumps(row, sort_keys=True)] += 1
+        else:
+            generated_route_repair = prune_generated_width_clearances(
+                board, source_board, pcbnew, request.get("drc_report"),
+                request.get("width_repair_report"), max_items=request.get("max_items", 64),
+            )
+            generated_removed_items = generated_route_repair.pop("_native_removed_items", [])
+            removed = generated_route_repair.get("removed_tracks", [])
+            selected_uuids = {row.get("uuid") for row in removed}
+            if (len(selected_uuids) != len(removed) or len(generated_removed_items) != len(removed)
+                    or generated_route_repair.get("removed_track_count") != len(removed)):
+                raise ValueError("Generated clearance repair returned inconsistent removal counts")
+            for uuid in selected_uuids:
+                if uuid not in original_rows:
+                    raise ValueError("Generated clearance repair selected absent copper")
+                raw = original_rows[uuid]
+                row = json.loads(raw)
+                if row["type"] != "PCB_TRACK" or row["locked"]:
+                    raise ValueError("Generated clearance repair selected unsupported or locked copper")
+                del generated_expected_copper[raw]
+        if (generated_route_repair.get("status") != "candidate_only_requires_fresh_drc"
+                or generated_route_repair.get("source_copper_item_count") != 0
+                or generated_fixed_state(board) != generated_original_fixed
+                or _copper_state(board) != generated_expected_copper):
+            raise ValueError("Generated route repair changed copper or geometry outside its report")
+        verify_generated_input_files()
+    elif operation == "repair_open":
+        from _native_routing_repair import repair_one
+
+        original_copper = _copper_state(board)
+        original_layout = _fixed_layout_state(board)
+        original_board_geometry = _ground_plane_source_geometry_state(board, pcbnew)
+        repair = repair_one(
+            board, pcbnew, request.get("drc_report"),
+            pair_index=request.get("pair_index", 0),
+            max_expanded_states=request.get("max_expanded_states", 150000),
+            grid_step_mm=request.get("grid_step_mm", 0.25),
+            search_mode=request.get("search_mode", "standard"),
+        )
+        if (_identity(board) != identity or original_layout != _fixed_layout_state(board)
+                or original_board_geometry != _ground_plane_source_geometry_state(board, pcbnew)):
+            raise ValueError("Same-net repair changed pad/net identity, layout or original board geometry")
+        added = _copper_state(board) - original_copper
+        removed = original_copper - _copper_state(board)
+        added_rows = [json.loads(raw) for raw, count in added.items() for _ in range(count)]
+        if (removed or not added_rows or any(row["net"] != repair["net"] or row["locked"]
+                or row["type"] not in {"PCB_TRACK", "PCB_VIA"} for row in added_rows)
+                or sum(row["type"] == "PCB_TRACK" for row in added_rows) != repair["added_tracks"]
+                or sum(row["type"] == "PCB_VIA" for row in added_rows) != repair["added_vias"]):
+            raise ValueError("Same-net repair modified existing copper or reported invalid additions")
+        repair["source_identity_preserved"] = True
+        repair["original_footprints_and_text_preserved"] = True
+        repair["original_board_geometry_preserved"] = True
+        repair["existing_copper_preserved"] = True
     elif operation == "place":
         placements = request["placements"]
         if not placements or set(placements) - set(identity):
@@ -894,6 +1975,11 @@ def execute(request):
                 f.SetPosition(target)
                 f.SetOrientationDegrees(p["rotation"])
         if request.get("tidy_references") is True:
+            reference_positions_before_tidy = {
+                footprint.GetReference(): (footprint.Reference().GetTextPos().x,
+                                           footprint.Reference().GetTextPos().y)
+                for footprint in board.GetFootprints()
+            }
             placement_positions = {
                 footprint.GetReference(): (footprint.GetPosition().x, footprint.GetPosition().y,
                                            footprint.GetOrientationDegrees(), footprint.GetLayer())
@@ -906,6 +1992,12 @@ def execute(request):
                           footprint.GetOrientationDegrees(), footprint.GetLayer())
                 if actual != expected:
                     raise ValueError(f"Reference cleanup unexpectedly moved footprint {footprint.GetReference()}")
+            tidy_report = _reference_conflict_report(
+                board, pcbnew, tidy_summary["moved_count"],
+                tidy_summary["orientation_normalized_count"],
+            )
+            if tidy_report["remaining_conflict_count"]:
+                label_repair = _bounded_reference_field_repair(board, pcbnew, tidy_report)
     else:
         raise ValueError(f"Unknown KiCad operation: {operation}")
     if _identity(board) != identity:
@@ -915,6 +2007,41 @@ def execute(request):
     reloaded = pcbnew.LoadBoard(request["output"])
     if reloaded is None or _identity(reloaded) != identity:
         raise ValueError("Saved board failed pad/net identity verification")
+    if zone_refill is not None:
+        zone_refill = _verify_saved_imported_zones(reloaded, pcbnew, zone_refill)
+    if generated_route_repair is not None:
+        if (generated_fixed_state(reloaded) != generated_original_fixed
+                or _copper_state(reloaded) != generated_expected_copper):
+            raise ValueError("Saved generated-route candidate failed exact copper and source-state verification")
+        verify_generated_input_files()
+        generated_route_repair.update({
+            "input_board_sha256": generated_protected_files[current_path],
+            "source_board_sha256": generated_protected_files[source_path],
+            "source_project_sha256": project_sha,
+            "board_sha256": hashlib.sha256(output_path.read_bytes()).hexdigest(),
+            "saved_copper_verified": True,
+            "saved_source_identity_layout_geometry_verified": True,
+            "saved_zones_and_stack_preserved": True,
+        })
+    if plane_stitching is not None:
+        saved_copper = _copper_state(reloaded)
+        if (original_copper - saved_copper or _identity(reloaded) != identity
+                or original_layout != _fixed_layout_state(reloaded)
+                or original_board_geometry != _ground_plane_source_geometry_state(reloaded, pcbnew)
+                or _copper_state(board) != saved_copper):
+            raise ValueError("Saved plane stitching changed original copper, identity or source geometry")
+        additions = [json.loads(raw) for raw, count in (saved_copper - original_copper).items()
+                     for _ in range(count)]
+        if (len(additions) != plane_stitching["added_vias"]
+                or any(row["type"] != "PCB_VIA" or row["net"] != "GND" or row["locked"]
+                       for row in additions)):
+            raise ValueError("Saved plane stitching added copper outside its verified GND via report")
+        plane_stitching.update({"source_identity_preserved": True,
+                               "original_footprints_and_text_preserved": True,
+                               "original_board_geometry_preserved": True,
+                               "existing_copper_preserved": True,
+                               "saved_added_vias_verified": True,
+                               "native_added_copper": additions})
     if refinement is not None and (original_copper - _copper_state(reloaded)
                                    or original_layout != _fixed_layout_state(reloaded)):
         raise ValueError("Saved return refinement failed original geometry preservation")
@@ -958,12 +2085,83 @@ def execute(request):
         cleanup["original_footprints_and_text_preserved"] = True
         if not cleanup.get("all_pads_connected") or not cleanup.get("protected_paths_preserved"):
             raise ValueError("Saved cleanup failed native pad connectivity or protected-path verification")
+    if operation == "repair_open":
+        saved_copper = _copper_state(reloaded)
+        if (original_copper - saved_copper or _identity(reloaded) != identity
+                or original_layout != _fixed_layout_state(reloaded)
+                or original_board_geometry != _ground_plane_source_geometry_state(reloaded, pcbnew)):
+            raise ValueError("Saved repair changed original copper, source geometry or pad/net identity")
+        delta = saved_copper - original_copper
+        delta_rows = [json.loads(raw) for raw, count in delta.items() for _ in range(count)]
+        if (len(delta_rows) != repair["added_tracks"] + repair["added_vias"]
+                or any(row["net"] != repair["net"] or row["locked"]
+                       or row["type"] not in {"PCB_TRACK", "PCB_VIA"} for row in delta_rows)):
+            raise ValueError("Saved repair additions do not match the candidate report")
+        repair.update({"source_identity_preserved": True,
+                       "original_footprints_and_text_preserved": True,
+                       "original_board_geometry_preserved": True,
+                       "existing_copper_preserved": True})
+    if router_dangling_cleanup is not None:
+        saved_copper = _copper_state(reloaded)
+        removed_tracks = router_dangling_cleanup["removed_tracks"]
+        removed_vias = router_dangling_cleanup["removed_vias"]
+        selected_uuids = {row["uuid"] for row in [*removed_tracks, *removed_vias]}
+        expected_types = ({row["uuid"]: "PCB_TRACK" for row in removed_tracks}
+                          | {row["uuid"]: "PCB_VIA" for row in removed_vias})
+        expected_removed = Counter(
+            raw for raw in original_copper
+            if json.loads(raw).get("uuid") in selected_uuids
+            and json.loads(raw).get("type") == expected_types.get(json.loads(raw).get("uuid"))
+            and json.loads(raw).get("locked") is False
+        )
+        if (router_dangling_cleanup["removed_count"] != len(removed_tracks)
+                or len(selected_uuids) != router_dangling_cleanup["removed_item_count"]
+                or router_dangling_cleanup.get("removed_track_count") != len(removed_tracks)
+                or router_dangling_cleanup.get("removed_via_count") != len(removed_vias)
+                or router_dangling_cleanup.get("removed_item_count") != len(selected_uuids)
+                or len(dangling_removed_items) != len(selected_uuids)
+                or saved_copper - original_copper
+                or original_copper - saved_copper != expected_removed
+                or source_copper - saved_copper
+                or _identity(reloaded) != identity
+                or original_layout != _fixed_layout_state(reloaded)
+                or original_board_geometry != _ground_plane_source_geometry_state(reloaded, pcbnew)
+                or original_stack != _native_stack_state(reloaded, pcbnew)
+                or original_zone_definitions != _zone_definition_state(reloaded, pcbnew)
+                or original_zone_fills != _zone_fill_state(reloaded, pcbnew)):
+            raise ValueError("Saved dangling cleanup failed exact copper or source-geometry preservation")
+        router_dangling_cleanup.update({
+            "saved_removed_tracks_verified": True,
+            "saved_removed_vias_verified": True,
+            "saved_removed_copper_items_verified": True,
+            "saved_source_copper_exact_subset_preserved": True,
+            "saved_zones_and_stack_preserved": True,
+        })
     result = {"status": "ok", "version": pcbnew.Version(), **_inspect(reloaded, pcbnew)}
+    if generated_route_repair is not None:
+        result["generated_route_repair"] = generated_route_repair
+        generated_removed_items.clear()
+    if zone_refill is not None:
+        result["zone_refill"] = zone_refill
+    if plane_stitching is not None:
+        result["plane_stitching"] = plane_stitching
     if tidy_summary is not None:
         result["silkscreen"] = _reference_conflict_report(
             reloaded, pcbnew, tidy_summary["moved_count"],
             tidy_summary["orientation_normalized_count"],
         )
+        if label_repair is not None:
+            final_positions = {
+                footprint.GetReference(): (footprint.Reference().GetTextPos().x,
+                                           footprint.Reference().GetTextPos().y)
+                for footprint in reloaded.GetFootprints()
+            }
+            label_repair["final_moved_refs"] = sorted(
+                ref for ref, position in final_positions.items()
+                if reference_positions_before_tidy.get(ref) != position
+            )
+            result["silkscreen"]["moved_count"] = len(label_repair["final_moved_refs"])
+            result["silkscreen"]["local_repair"] = label_repair
     if refinement is not None:
         result["refinement"] = {**refinement, "original_copper_preserved": True,
                                 "original_footprints_and_text_preserved": True}
@@ -975,6 +2173,11 @@ def execute(request):
         # Keep SWIG wrappers alive through save, reload, and native inspection.
         # The list is local only and never enters the JSON response.
         cleanup_removed_items.clear()
+    if operation == "repair_open":
+        result["route_repair"] = repair
+    if router_dangling_cleanup is not None:
+        result["router_dangling_cleanup"] = router_dangling_cleanup
+        dangling_removed_items.clear()
     if ground_plane is not None:
         from _native_ground_plane import verify as verify_ground_plane_after_reload
 
@@ -988,7 +2191,9 @@ def execute(request):
             )
         verification = verify_ground_plane_after_reload(
             reloaded, pcbnew, ground_plane, net=request["plan"]["net"],
+            layers=tuple(request["plan"]["layers"]),
             protected_connections=request["plan"]["protected_connections"],
+            pre_route=request.get("pre_route", False),
         )
         if not isinstance(verification, dict) or verification.get("status") != "ok":
             raise ValueError("Saved ground-plane board failed fill geometry or connectivity verification")
@@ -1049,6 +2254,12 @@ def execute(request):
 
 if __name__ == "__main__":
     try:
+        # Retain the app for the native worker's lifetime; create no window.
+        if sys.platform == "win32":
+            import wx
+            _native_wx_app = wx.GetApp() or wx.App(False)
+            _native_wx_log = wx.LogStderr()
+            wx.Log.SetActiveTarget(_native_wx_log)
         payload = execute(json.load(sys.stdin))
     except Exception as exc:
         payload = {"status": "error", "message": str(exc)}

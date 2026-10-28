@@ -106,7 +106,8 @@ def test_kicad_workflows_use_pinned_official_containers_and_native_runtime_check
     assert '>> "$GITHUB_ENV"' in runtime_text
 
     ci_text = (repo_root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    assert 'python -m pip install ".[mcp]" pytest' in ci_text
+    assert 'python -m pip install "${wheel}[mcp]" pytest' in ci_text
+    assert "name: ci-distributions" in ci_text
     assert "from mcp import ClientSession, StdioServerParameters" in ci_text
     assert ci_text.index("Verify MCP workflow client dependency") < ci_text.index(
         "Validate all samples with native assembled previews and MCP"

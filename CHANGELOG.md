@@ -2,6 +2,178 @@
 
 ## [Unreleased]
 
+- Resume completed native routing from the board selected by its saved plan,
+  including projects whose original PCB has a custom filename. Recognize
+  checkpointed route outputs without confusing them with the source; retain
+  input-change, output-integrity and ambiguous-board checks.
+- Give bounded native recovery a final, explicitly reported Freerouting 2.5+
+  fanout attempt for fresh two-layer boards without zones. Repair generated
+  undersized straight tracks against the authored board/net-class widths in
+  private quarantine, and allow removal only of widened generated tracks
+  implicated by fresh, complete native clearance diagnostics. Share the existing
+  64-item removal cap with dangling-copper cleanup; preserve source geometry,
+  rules, search budgets and the final ordinary native DRC publication gate.
+- Request all native track errors and identify KiCad's per-error-code diagnostic
+  limits. Expose potentially incomplete reports to Python/CLI/MCP callers and
+  reject them as complete recovery or acceptance evidence.
+- Add a bidirectional native search after ordinary routing recovery stalls.
+  Keep the existing search profiles and shared recovery deadline/attempt caps;
+  accept fallback copper only after acknowledged search limits, preserved source
+  state, and a fresh full native DRC with fewer open connections.
+- Apply explicit search-grid and state-budget settings in native same-net repair
+  requests, and report the requested grid alongside the grid used by a candidate.
+  This lets automation verify its search limits before accepting native results.
+- Respect native mounting-hole geometry and board hole-clearance rules during
+  bounded routing recovery, including slotted holes and candidate via drills.
+  Keep copper spacing and hole-to-hole constraints separate, and require fresh
+  full native DRC before publishing a repaired board.
+- Preserve exact native arc and circle geometry in footprint and board drawings
+  during copper-only validation and edits, while rejecting unknown drawing types.
+- Stage each native dangling-copper cleanup pass in its own private project
+  directory so repeated passes preserve footprint libraries without collisions.
+- Carry KiCad's project-backed copper-to-edge minimum into native-board
+  autorouting and radius-aware repair checks. Reject unsupported custom edge
+  constraints before routing, preserve authored rules and outlines, and retain
+  fresh full native DRC as the publication gate.
+- Search long native repairs from both endpoint grids on a coarse lattice,
+  sharing the existing state cap with fine-grid fallbacks and preserving short
+  connection behavior, native collision checks and final DRC requirements.
+- Canonicalize private native routing inputs to remove component-image alias
+  and net/pin ordering differences while verifying geometry, membership, rules
+  and the original design name used for session correlation.
+
+- Before opens-only recovery, retain fresh native DRC and allow bounded removal
+  of only warning-identified, unlocked router-generated dangling tracks and
+  vias, sharing a 64-item cap. Verify original source copper and board state,
+  rerun DRC after each removal, and keep
+  strict zero-finding publication checks. Also handle validated private sessions
+  rejected for recognized dangling warnings after the router reports completion.
+
+- Keep an unclaimed child directory separate from unrelated circuits above its
+  nearest workflow state, including projects used outside a Git checkout.
+
+- Recover private sessions when the router reports completion but a fresh native
+  import finds only open connections. Reject mixed or ambiguous failures, rerun
+  native checks before repair, and report native import failures as incomplete.
+
+- Run all unseen scale cases through one pinned, bounded three-order routing
+  portfolio and recovery profile, retaining the shared route budget and strict
+  native DRC, path and model-coverage gates. Preserve
+  private routing diagnostics in CI artifacts for failed-candidate review.
+- Retain rejected router sessions privately with hashes, available router
+  statistics and validation failures, while leaving requested outputs untouched.
+
+- Support KiCad 8/9 and 10 native via-width APIs in routing and plane repairs,
+  preserving width verification on every enabled copper layer.
+- Add opt-in thermal repair for deferred four-layer GND planes: join nearby
+  local fill components to another plane with bounded, rule-sized stitching
+  vias. Preserve existing copper, placement, labels and rules, and publish only
+  after saved fill/connectivity checks and fresh full native DRC pass.
+- Retain native diagnostics from direct workflow operations, including deferred
+  ground-plane import failures, while keeping public errors concise.
+- Preserve native repair coordinates to the nearest internal unit, avoiding
+  one-nanometre truncation drift when repaired copper passes through Specctra.
+- Request a bounded cooperative stop before the host deadline for private
+  Freerouting 2.5+ recovery attempts, leaving time to export a partial session.
+  Retain strict statistics, source correlation and native publication checks.
+- Expose pass and recovery budgets in the workflow validation runners, retain
+  the route's full native post-processing allowance, and record actual
+  per-command and per-attempt timeout budgets.
+
+- Adapt saved ground-plane connectivity checks to KiCad 8/9 bindings while
+  retaining native copper-path and detached-pad validation.
+
+- Preserve machine-readable MCP error responses on Python 3.10 with newer
+  supported SDKs, retaining the error flag and exact JSON envelope.
+
+- Add opt-in native routing recovery to CLI, Python and shared CLI/MCP workflows:
+  retain private partial copper, resolve authored netclass dimensions, and accept
+  each same-net repair only after fresh improving native DRC. Allow workflow
+  ground-plane preparation after routing while retaining the final plane gates.
+  Sweep fresh open pairs within shared time/attempt bounds, support finer search
+  escapes, and preserve terminal partial-progress evidence on timeouts.
+  Serialize recovered native copper without rerouting it before the final native
+  import gate, retaining strict session correlation and unavailable-statistics evidence.
+
+- Regenerate the existing 187/268/438-part scale inputs and full route contracts
+  into evidence, checking frozen hashes instead of tracking expanded copies.
+
+- Reap timed-out workflow CLI descendants, including Windows virtualenv
+  launchers and their native routers, instead of leaving them running.
+
+- Allow bounded native import and DRC time after a full 30-minute router attempt,
+  so the workflow parent does not expire at the router's own deadline.
+
+- Increase native label retry spacing from the gap actually applied, preserving intermediate feasible placements when a larger preferred gap conflicts with authored constraints. Native DRC and label publication gates remain required.
+- Generate large diverse-circuit benchmark inputs in run evidence and verify them against a frozen pre-trim inventory, retaining all cases and connectivity contracts while removing expanded copies from the repository.
+- Retain structured native failure diagnostics in failed shared-workflow checkpoints while keeping the public error message concise, so rejected placement and DRC candidates can be investigated after a run.
+- Run authored current operating cases through shared validation, CLI and MCP, resolving exact value/unit/subject claims from the evidence ledger. Supported overloads block validation; missing, stale, mismatched or superseded evidence remains unverified. Retain budget results in workflow validation checkpoints.
+- Require complete named workflow stages and explicit CAD/qualification gates in four-layer acceptance reports; preserve gate failures and add a strict CAD exit status for CI. Run native CI in stages and cancel superseded design validation to avoid redundant resource use.
+- Add an explicit Python current-budget checker for authored simultaneous-load cases, preserving unknown limits and evidence mismatches; include a corpus audit and nominal/overload/missing-input controls without implying device or thermal qualification.
+- Reject nonfinite, boolean and nonnumeric rail envelopes and invalid sequencing values before they become PCB constraints; reject peak current below the declared steady load while retaining signed rails and unknown limits.
+- Stage the selected KiCad installation's stock footprint context privately for native DRC while preserving project-local tables, so isolated validation can resolve stock libraries without altering user configuration or suppressing warnings.
+- Distinguish interrupted workflows from active runs using the live advisory lock when opening projects or checking status, while preserving saved checkpoints for guarded resume.
+- Add representative four-layer circuit acceptance checks below 500 physical components, with separate preflight, CAD, resource and electrical qualification evidence.
+- Allow Python validation to disable native schematic export explicitly while retaining generated-text and determinism checks; report whether the native export ran and require a nonempty SVG before accepting it.
+- Preserve internal-layer via contacts and plated component-pad layer joins in authored route checks instead of reporting valid four-layer paths as disconnected.
+- Support repeated physical shield pads on one connector pin when checking ground-plane connectivity, while retaining UUID, net-consistency and duplicate-reference checks.
+- Retry initial board packing with bounded gaps between verified component envelopes, preserving board dimensions, electrical rules and native DRC and reporting the gap used.
+- Build review boards with an explicit 2- or 4-copper-layer count, and select enabled copper layers for ground planes in shared workflows; reports record copper count and order without claiming dielectric stackup or impedance qualification.
+- Correct ground-plane attachment reports for unrouted pads by checking native connectivity clusters instead of KiCad's object-type flag.
+- Keep generated ground-plane and route-quality reports out of design-spec discovery when opening or resuming native PCB projects.
+- Resolve zone layer names from the native board's layer table so inner-layer refill evidence matches the authored ground-plane plan.
+- Review native board placement, endpoint route lengths, via counts and authored clock-pair skew through CLI, Python and MCP. Gate shared workflow publication on explicit route contracts and retain failed candidates for inspection.
+- Add time-window voltage/current acceptance, time-weighted transient means and structured pulsed current sources, with distinct IoT input, industrial current-burden and transmitter bias regression circuits.
+- Seed large assemblies by connected owner/support families and authored functional groups, using compact tiles and natural routing channels while preserving fixed and edge constraints. Bound high fanout seed graphs with a deterministic sparse cycle that retains every owner.
+- Keep native tool probes separate from MCP protocol input, allowing KiCad review to run reliably through real stdio clients.
+- Preserve declared project-local footprint libraries through native staging and DRC, bind generated schematic builds to the explicit circuit directory, and invalidate placement/routing checkpoints when library content or membership changes.
+
+- Keep explicitly selected circuit directories separate from unrelated ancestor state. Preserve recorded source/output ownership and canonical generated output folders, and checkpoint separately requested native outputs in their own directory.
+- Add explicit adoption of existing circuit directories without rewriting their sources, plus shared bounded routing controls. Keep untracked `open` inspection read-only and preserve hash-based resume checks.
+- Add local library bundle plan/apply across CLI, Python and MCP with source hashes, user-declared provenance/license, preserved project tables, conflict checks and rollback.
+- Add exact unit-bearing voltage/current/ripple targets and structured PULSE sources, with generic active-device simulation benchmarks and isolated negative controls. Route dense schematic connections around all symbol bodies before falling back to same-net labels.
+- Add explicit, structured SPICE testbenches with declared sources, sweep settings, trace selectors and engineering limits. Include repeatable IoT, SDR IQ, transmitter-filter, radar IF-bank and industrial-input passive benchmarks with analytic checks and negative controls.
+- Scale native schematic import timeouts within hard limits and reuse unaffected schematic page layouts during root hierarchy splitting. Correct the AD9528 package binding and retain foreign-net guards when routing crowded power labels.
+- Add connected BLE sensor, SDR clock-carrier and 1,202-part relay stress fixtures alongside clearly labeled comparison designs; distinguish CAD asset access, pin-net checks, electrical simulation and routing evidence.
+- Add a read-only `library-access` CLI, Python API, and MCP audit that reports KiCad symbol/footprint/model roots and provenance separately from curated functional templates and project SPICE bindings. Exact symbols can resolve generic package/model assets without implying electrical or RF qualification.
+- Require explicit SPICE subcircuit and pin-order contracts, fresh parsed output, and supported explicit project targets before reporting simulations as verified. Distinguish verified, failed, and unverified simulation outcomes in reports and CLI exit codes.
+- Share project start/open, planning, execution and verified resume across the CLI, Python API, MCP server and agent skill. Record real stage outcomes and artifact hashes, reject changed inputs and conflicting outputs, and expose responsive status and boundary cancellation without reporting unfinished native work as complete.
+- Restore directory-based terminal discovery and report the exact package, interpreter, bundled skill and MCP launch command. Safely migrate recognized legacy skills while preserving customized installations, and audit client configuration without revealing secret arguments.
+- Reserve native pad and body geometry as well as authored courtyards during automatic placement, preventing undersized custom courtyards from hiding physical overlaps. Preserve larger courtyards, asymmetric footprint origins and native DRC rejection.
+- Restore authored project and design-rule files after native board creation, preventing KiCad's fresh defaults from replacing source netclasses or rule severities before DRC. Preserve declared prototype clearance/drill assumptions only where the source permits them, and verify settings remain unchanged through validation.
+- Preserve numbered non-plated holes whose schematic pins are explicitly typed and annotated as no-connect. Accommodate KiCad clearing their bookkeeping numbers while verifying every hole's geometry and lack of net metadata before and after save/reload; connected pins remain blocking.
+- Preserve unconnected `Mechanical:MountingHole` and `Mechanical:Fiducial` footprints when their symbols have no pins. Verify every native pad, including unnumbered pads, remains unconnected through save/reload; retain exact electrical pin mapping and physical DRC checks.
+- Apply the same outline-versus-keepout classification during native PCB handoff as during workflow sizing, avoiding false dimension mismatches for designs with rectangular keepouts.
+- Keep board-outline dimensions separate from keepout rectangles during workflow sizing, explicit size overrides and placement normalization. Preserve authored keepout geometry.
+- Resolve project-local KiCad footprint nicknames through literal `${KIPRJMOD}/...` entries in the source project's `fp-lib-table`, preserving original library names and rejecting ambiguous or unsupported mappings.
+- Reject duplicate placed footprint references in routing exports before publishing a DSN file.
+- Reject invalid microstrip geometry, nonphysical coupled-line results and impedance targets outside the requested width bracket; verify the width solver's final impedance residual.
+- Improve native decoupling placement by searching position and rotation together around actual supply and return pads. Bound the search within the existing refinement budget, preserve locks and board sides, and require improved placement rank without increasing either local power leg or global power-net spans. Retain native label and DRC gates.
+- Resolve known bare footprint names consistently during validation and generation, and discover custom libraries through the KiCad 9/10 footprint-directory variables while preserving exact library matching.
+- Distinguish native SMD bodies on opposite PCB sides during placement. Require complete pad and copper-layer evidence with no opposite-side courtyard; keep through-hole, unknown geometry, mechanical constraints and native DRC blocking. Reuse surface proofs only within an unchanged overlap sweep.
+- Refuse automatic board mutations and routing exports when only a legacy `.pro` project exists, requiring project-rule conversion rather than silently staging without those authored settings. Keep read-only inspection and previews available.
+- Use actual rectangular Edge.Cuts centerlines for native placement bounds, preserving board dimensions and offsets regardless of outline drawing thickness.
+- Initialize the Windows native helpers' wx application before loading boards, preventing crashes or hangs reproduced on a 459-footprint motherboard reference. Preserve hidden operation and the existing geometry, identity and DRC checks.
+- Distinguish declared DDR generations from generic or conflicting data-net names. Retain unverified device-specific DDR requirements through compilation and PCB handoff instead of guessing impedance and flat length-matching limits. Report which requested constraints produced KiCad rules and which remain unrendered.
+- Read KiCad trace and via geometry in millimetres, including arc track widths, and measure via copper clearance from actual rectangular Edge.Cuts. Report malformed inputs and unsupported geometry as unknown instead of assuming zero widths or invented board bounds.
+- Replace the discontinuous stripline approximation with an explicitly named ideal symmetric, zero-thickness Cohn model. Keep the existing helper signature but reject unsupported offset and finite-copper cases instead of returning unreliable impedance values.
+- Stream router stdout and stderr to persistent per-attempt log files instead of retaining unlimited output in memory. Keep full-log hashes and byte counts, bound returned diagnostics and parser windows, and reject uncertain routing statistics after truncation.
+- Repair remaining native reference-label conflicts with a bounded local assignment search before widening placement. Preserve other text, footprint and pad geometry, copper and locked fields; retain the native label and DRC gates.
+- Correct large analog benchmark filter-pad contracts from compiled ownership and native evidence. Check snapshotted channel and signal/return pad-net assertions on the built board before placement and routing, then verify them again on the final board.
+- Assign interchangeable native connector slots using their private-net support-family pad endpoints, preserving references, pad nets, occupied geometry and authored mechanical constraints. Accept only an improved placement rank and retain native label and DRC gates.
+- Explicitly disable the optimizer for zero-thread native routing on Freerouting 2.4+, honor modern optimizer thread caps, and map or reject changed optimizer modes on Freerouting 2.5+.
+- Bound deterministic placement refinement per restart and report its evaluation budgets. Try a topology-derived starting layout only when it improves the existing constraint rank, preserving authored mechanical constraints and support-family geometry.
+- Start reference-aware native placement with spacing derived from actual text dimensions, retaining larger authored gaps and subsequent native label and DRC checks.
+- Shorten generation staging and rollback paths for deeply nested Windows projects.
+- Shorten schematic-to-board staging paths for deeply nested Windows projects, retaining complete copied hierarchies and native build verification.
+- Derive scaled gateway ADC filter contracts from their owning channels and verify generated filter pad nets before native workflow runs.
+- Retain router timeout output and log portfolio candidate progress while continuing to discard partial or unverified sessions.
+- Scale the bounded native placement-worker timeout with footprint count so larger boards can complete the existing DRC and reference-label checks.
+- Split port-heavy schematic hierarchies before their top-level symbols exceed standard pages. Partition connector annotations without duplicating or dropping notes, and fail closed when a hierarchy cannot fit.
+- Page large MCP validation reports without losing findings, audit fields, or provenance IDs. Bind pages to a report digest, verify complete collection counts and hashes, and reject oversized individual records explicitly.
+- Add native signal-path contracts and higher-count fieldbus, relay-output, and analog-setpoint workflow fixtures, with individual physical-part floors and retained routing, model-coverage, label, and delivery gates.
+- Document fresh OpenCode environment binding so shell commands and stdio MCP use the same installed package, and preserve explicit prototype drill assumptions.
+
 ## [0.37.0] - 2026-10-20
 
 ### Physical sample inventory and workflow scale

@@ -11,11 +11,14 @@ from circuit_weaver.allocator import SheetAllocation, ensure_unique_sheet_names
 from circuit_weaver.component_db import BUILTIN_REGISTRY, ComponentDef, PinDef
 from circuit_weaver.generator import (
     _avoid_foreign_net_anchors,
+    _candidate_contacts_foreign_net,
     _generate_root_schematic,
+    _marker_route_avoiding_foreign_nets,
     _normalize_polyline,
     _plan_power_flags,
     _render_sheet,
     _render_symbol_name_and_sexpr,
+    _segment_passes_anchor_clearance,
     _validate_rendered_pin_mappings,
     generate_from_components,
 )
@@ -421,6 +424,28 @@ def test_marker_stub_avoids_foreign_reserved_pin_without_explicit_anchors():
     )
 
     assert length == pytest.approx(3.81)
+
+
+def test_power_marker_stub_detours_around_foreign_reserved_route():
+    start = (10.16, 10.16)
+    foreign_anchors = [
+        ("VDD_3P3", 10.16, 16.51),
+        ("VDD_5V", 12.7, 10.16),  # Adjacent pin; its glyph clearance must not block the route origin.
+    ]
+    route_state = {"reserved_segments": [("VDD_3P3", (10.16, 11.43, 10.16, 20.32))]}
+
+    path = _marker_route_avoiding_foreign_nets(
+        "VDD_1P8", *start, 90, 5.08, foreign_anchors, route_state
+    )
+
+    assert path[0] == start
+    assert len(path) > 2
+    assert not _candidate_contacts_foreign_net(path, route_state, "VDD_1P8")
+    assert not any(
+        _segment_passes_anchor_clearance(first, second, (ax, ay), 0.01)
+        for first, second in zip(path, path[1:])
+        for _net, ax, ay in foreign_anchors
+    )
 
 
 def test_route_polyline_cancels_immediate_hairpin_backtracks():

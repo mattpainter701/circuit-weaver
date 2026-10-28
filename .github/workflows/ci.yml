@@ -66,6 +66,7 @@ jobs:
 
   distribution:
     name: Build exact distribution artifact
+    needs: [test, bundled-skills]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -190,13 +191,17 @@ jobs:
 
   kicad-validation:
     name: KiCad ${{ matrix.kicad-major }} final-artifact validation
+    needs: test-wheel
     runs-on: ubuntu-24.04
     container:
       image: ${{ matrix.container-image }}
       options: --user 0
     timeout-minutes: 90
+    env:
+      CIRCUIT_WEAVER_TEST_PACKAGE: wheel
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include:
           - kicad-major: "8"
@@ -222,8 +227,18 @@ jobs:
         shell: bash
         run: bash scripts/prepare_kicad_ci_container.sh "${{ matrix.kicad-major }}"
 
-      - name: Install Circuit Weaver
-        run: python -m pip install ".[mcp]" pytest
+      - name: Download exact tested distribution artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: ci-distributions
+          path: dist
+
+      - name: Install exact Circuit Weaver wheel with MCP
+        shell: bash
+        run: |
+          wheel=$(find dist -maxdepth 1 -name 'circuit_weaver-*.whl' -print -quit)
+          test -n "$wheel"
+          python -m pip install "${wheel}[mcp]" pytest
 
       - name: Verify MCP workflow client dependency
         run: python -c "from mcp import ClientSession, StdioServerParameters; from mcp.client.stdio import stdio_client"
@@ -258,7 +273,7 @@ jobs:
         run: |
           curl --fail --location --retry 3 https://github.com/freerouting/freerouting/releases/download/v2.4.1/freerouting-2.4.1.jar -o /tmp/freerouting-2.4.1.jar
           echo '251101c3eeac22d7e7dfcf6796603279e5d1000283eb82d8f093780f7afc6aa9  /tmp/freerouting-2.4.1.jar' | sha256sum --check
-          python -m pytest tests/test_package_pin_bindings.py tests/test_voltage_reference_catalog_contract.py tests/test_native_sample_footprints.py tests/test_native_pcb_workflow.py tests/test_native_pcb_preview.py tests/test_native_silkscreen.py tests/test_native_return_paths_integration.py tests/test_native_pcb_copper_cleanup_integration.py tests/test_native_copper_cleanup_engine.py tests/test_native_ground_plane_engine.py tests/test_native_ground_plane_integration.py tests/test_native_plane_cleanup_engine.py tests/test_native_plane_cleanup_integration.py -q
+          python -m pytest tests/test_package_pin_bindings.py tests/test_voltage_reference_catalog_contract.py tests/test_native_sample_footprints.py tests/test_native_pcb_workflow.py tests/test_native_pcb_preview.py tests/test_native_silkscreen.py tests/test_native_return_paths_integration.py tests/test_native_pcb_copper_cleanup_integration.py tests/test_native_copper_cleanup_engine.py tests/test_native_ground_plane_engine.py tests/test_native_ground_plane_integration.py tests/test_native_plane_stitch_integration.py tests/test_native_plane_cleanup_engine.py tests/test_native_plane_cleanup_integration.py -q
 
       - name: Validate generated schematic through routed prototype and export gate
         env:
@@ -270,11 +285,19 @@ jobs:
         if: matrix.kicad-major == '10'
         env:
           CIRCUIT_WEAVER_KICAD_PYTHON: /usr/bin/python3
-          CIRCUIT_WEAVER_FREEROUTING: /tmp/freerouting-2.4.1.jar
-        run: >-
-          python benchmarks/general_scale/run_general_scale.py --suite samples
-          --output .ci-kicad/native-pcb/sample-workflows --require-clean
-          --workers 2 --iterations 6000 --attempts 3 --route-timeout 600
+          CIRCUIT_WEAVER_FREEROUTING: /tmp/freerouting-2.5.0.jar
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 https://github.com/freerouting/freerouting/releases/download/v2.5.0/freerouting-2.5.0.jar -o /tmp/freerouting-2.5.0.jar
+          echo 'f6f51bb02245e8e717f9359bd260cc9c5c0b1bc0acc8b7cb2cd5b8ffeb5de3c7  /tmp/freerouting-2.5.0.jar' | sha256sum --check
+          wheel=$(find dist -maxdepth 1 -name 'circuit_weaver-*.whl' -print -quit)
+          test -n "$wheel"
+          python benchmarks/general_scale/run_general_scale.py --suite samples \
+            --output .ci-kicad/native-pcb/sample-workflows --require-clean \
+            --installed --expected-wheel "$wheel" \
+            --workers 2 --iterations 6000 --attempts 3 --route-timeout 600 \
+            --route-max-passes 20 --repair-open-connections --recovery-timeout 600
 
       - name: Validate diverse 100-part native workflows and channel connectivity
         if: matrix.kicad-major == '10'
@@ -286,10 +309,98 @@ jobs:
           --output .ci-kicad/native-pcb/general-scale --require-clean
           --workers 2 --iterations 6000 --attempts 3 --route-timeout 600
 
+      - name: Require complete shared four-layer CAD acceptance on the installed package
+        if: matrix.kicad-major == '10'
+        env:
+          CIRCUIT_WEAVER_KICAD_PYTHON: /usr/bin/python3
+          CIRCUIT_WEAVER_FREEROUTING: /tmp/freerouting-2.4.1.jar
+        run: >-
+          python benchmarks/four_layer_acceptance/run_acceptance.py
+          --case iot_environment_node --through preview --engine-mode installed
+          --require-cad --output .ci-kicad/native-pcb/four-layer-acceptance
+
       - name: Preserve real PCB validation artifacts
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: native-pcb-kicad-${{ matrix.kicad-major }}
           path: .ci-kicad/native-pcb
+          include-hidden-files: true
+          if-no-files-found: warn
+
+  unseen-scale-validation:
+    name: Unseen native scale / ${{ matrix.case }}
+    needs: [distribution, kicad-validation]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: ghcr.io/kicad/kicad:10.0.6-full@sha256:e36e29b5f4a638a1a7238eba3d2fcbc8e061ffed1e99a8f39cb722706c94a58e
+      options: --user 0
+    env:
+      JAVA_TOOL_OPTIONS: -Xms32m -Xmx384m -XX:+UseSerialGC -XX:ActiveProcessorCount=1
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        case: [distributed_facility_gateway, serial_relay_output_card, multichannel_analog_setpoint_card]
+    steps:
+      - name: Install checkout and native prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update -o Acquire::Retries=3 -o APT::Update::Error-Mode=any
+          DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends -o Acquire::Retries=3 \
+            python3-venv curl git ca-certificates
+
+      - name: Checkout benchmark and validation scripts
+        uses: actions/checkout@v7
+
+      - name: Prepare official KiCad runtime
+        shell: bash
+        run: bash scripts/prepare_kicad_ci_container.sh 10
+
+      - name: Download exact tested distribution artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: ci-distributions
+          path: dist
+
+      - name: Install exact wheel with MCP runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel=$(find dist -maxdepth 1 -name 'circuit_weaver-*.whl' -print -quit)
+          test -n "$wheel"
+          python -m pip install "${wheel}[mcp]"
+
+      - name: Set up routing runtime
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Verify pinned recovery router and run every prototype stage
+        shell: bash
+        env:
+          CIRCUIT_WEAVER_KICAD_PYTHON: /usr/bin/python3
+          CIRCUIT_WEAVER_FREEROUTING: /tmp/freerouting-2.5.0.jar
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 https://github.com/freerouting/freerouting/releases/download/v2.5.0/freerouting-2.5.0.jar -o /tmp/freerouting-2.5.0.jar
+          echo 'f6f51bb02245e8e717f9359bd260cc9c5c0b1bc0acc8b7cb2cd5b8ffeb5de3c7  /tmp/freerouting-2.5.0.jar' | sha256sum --check
+          wheel=$(find dist -maxdepth 1 -name 'circuit_weaver-*.whl' -print -quit)
+          python benchmarks/general_scale/run_general_scale.py \
+            --suite benchmarks/unseen_scale/cases.yaml --case '${{ matrix.case }}' \
+            --output .ci-kicad/unseen-scale --installed --expected-wheel "$wheel" \
+            --require-clean --workers 1 --iterations 6000 --attempts 3 \
+            --route-timeout 1800 --route-max-passes 20 \
+            --repair-open-connections --recovery-timeout 1800 --timeout 7200
+
+      - name: Preserve full workflow, connectivity, and assembled preview evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unseen-native-${{ matrix.case }}
+          path: .ci-kicad/unseen-scale
+          include-hidden-files: true
           if-no-files-found: warn

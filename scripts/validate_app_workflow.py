@@ -33,6 +33,9 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 _BOARD_TARGETS = {"board", "board_outline", "pcb", "outline"}
+# Keep the CLI runner's parent timeout aligned with the workflow route stage:
+# export/serialization, native import, and fresh DRC need this bounded reserve.
+_ROUTE_NATIVE_POSTPROCESS_SECONDS = 600
 
 
 def digest(path: Path) -> str:
@@ -49,8 +52,20 @@ def _finite_number(value) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _is_board_dimension_constraint(raw: dict) -> bool:
+    """Identify placement-stage outline declarations, excluding keepout geometry."""
+    kind = str(raw.get("kind") or raw.get("type") or "").strip().lower()
+    if kind not in {"", "placement"}:
+        return False
+    target = str(raw.get("target") or raw.get("ref") or "").strip().lower()
+    nested = raw.get("board") if isinstance(raw.get("board"), dict) else {}
+    return target in _BOARD_TARGETS or (
+        "board_width_mm" in raw or "board_height_mm" in raw or bool(nested)
+    )
+
+
 def _design_board_size(design: dict, default: tuple[float, float] = (80.0, 60.0)) -> tuple[float, float]:
-    """Resolve board dimensions with the same aliases and precedence as placement."""
+    """Resolve placement-stage board dimensions, never keepout rectangles."""
     width, height = default
     constraints = design.get("pcb_constraints")
     if not isinstance(constraints, list):
@@ -58,13 +73,10 @@ def _design_board_size(design: dict, default: tuple[float, float] = (80.0, 60.0)
     for raw in constraints:
         if not isinstance(raw, dict):
             continue
+        if not _is_board_dimension_constraint(raw):
+            continue
         target = str(raw.get("target") or raw.get("ref") or "").strip().lower()
         nested = raw.get("board") if isinstance(raw.get("board"), dict) else {}
-        explicit_board_keys = (
-            "board_width_mm" in raw or "board_height_mm" in raw or bool(nested)
-        )
-        if target not in _BOARD_TARGETS and not explicit_board_keys:
-            continue
         candidate_width = _finite_number(raw.get(
             "board_width_mm",
             nested.get("width_mm", raw.get("width_mm") if target in _BOARD_TARGETS else None),
@@ -91,13 +103,10 @@ def _apply_size_overrides(design: dict, width: float, height: float) -> None:
     for raw in constraints:
         if not isinstance(raw, dict):
             continue
+        if not _is_board_dimension_constraint(raw):
+            continue
         target = str(raw.get("target") or raw.get("ref") or "").strip().lower()
         nested = raw.get("board") if isinstance(raw.get("board"), dict) else None
-        explicit_board_keys = (
-            "board_width_mm" in raw or "board_height_mm" in raw or bool(nested)
-        )
-        if target not in _BOARD_TARGETS and not explicit_board_keys:
-            continue
 
         if "board_width_mm" in raw:
             raw["board_width_mm"] = width
@@ -160,6 +169,145 @@ def initialize_workflow_project(output: Path, *, cwd: Path, env: dict) -> None:
     state = output / ".circuit-weaver" / "project.json"
     if not state.is_file():
         raise RuntimeError("Workflow project initialization did not produce a local state manifest")
+
+
+def native_contract_preflight(
+    board: Path, contracts: Path, expected_contract_sha256: str, demo: "Demo", output: Path
+) -> dict:
+    """Check snapshotted channel/path pad nets on the unplaced native board."""
+    contract_hash = digest(contracts)
+    if contract_hash != expected_contract_sha256:
+        raise RuntimeError("native contract snapshot hash does not match the runner's expected hash")
+    contract_data = json.loads(contracts.read_text(encoding="utf-8"))
+    if not isinstance(contract_data, dict) or not (
+        contract_data.get("required_channels") or contract_data.get("required_paths")
+    ):
+        raise RuntimeError("native contract snapshot must contain channels or signal paths")
+    board_hash = digest(board)
+    helper_dir = REPO / "benchmarks" / "general_scale"
+    script = (
+        "import json,sys; sys.path.insert(0,sys.argv[3]); "
+        "from circuit_weaver.kicad_bridge import run_kicad; "
+        "from connectivity import verify_native_connectivity; "
+        "from signal_connectivity import verify_native_signal_paths; "
+        "inventory=run_kicad('inspect',board=sys.argv[1],timeout=float(sys.argv[2])); "
+        "contracts=json.load(open(sys.argv[4],encoding='utf-8')); "
+        "channels=contracts.get('required_channels',[]); paths=contracts.get('required_paths',[]); "
+        "proof={'inventory':inventory}; "
+        "proof.update({'connectivity':verify_native_connectivity(inventory,channels)} if channels else {}); "
+        "proof.update({'signal_connectivity':verify_native_signal_paths(inventory,paths)} if paths else {}); "
+        "print(json.dumps(proof))"
+    )
+    timeout = min(max(demo.timeout, 120), 600)
+    evidence_path = output / "native-contract-preflight.json"
+
+    def fail(message: str, **details: object) -> None:
+        proof = {
+            "status": "failed",
+            "error": message,
+            "contract_sha256": contract_hash,
+            "board_sha256_before": board_hash,
+            **details,
+        }
+        try:
+            proof["board_sha256_after"] = digest(board)
+            proof["contract_sha256_after"] = digest(contracts)
+        except OSError:
+            pass
+        evidence_path.write_text(json.dumps(proof, indent=2) + "\n", encoding="utf-8")
+
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                script,
+                str(board.resolve()),
+                str(timeout),
+                str(helper_dir),
+                str(contracts.resolve()),
+            ],
+            cwd=demo.cwd,
+            env=demo.env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout + 30,
+        )
+    except Exception as exc:
+        fail(exception_message(exc))
+        raise RuntimeError("native pad/net contract preflight could not inspect the unplaced board") from exc
+    (output / "native-contract-preflight.stdout.log").write_text(result.stdout, encoding="utf-8")
+    (output / "native-contract-preflight.stderr.log").write_text(result.stderr, encoding="utf-8")
+    if result.returncode != 0:
+        fail(
+            "native contract verifier rejected the unplaced board",
+            verifier_exit_code=result.returncode,
+            stdout_log="native-contract-preflight.stdout.log",
+            stderr_log="native-contract-preflight.stderr.log",
+        )
+        raise RuntimeError("native pad/net contract preflight failed; placement and routing were not started")
+    try:
+        details = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        fail("native contract preflight returned invalid JSON", stdout_log="native-contract-preflight.stdout.log")
+        raise RuntimeError("native contract preflight returned invalid JSON") from exc
+    inventory = details.get("inventory")
+    connectivity = details.get("connectivity")
+    paths = details.get("signal_connectivity")
+    after_board_hash = digest(board)
+    after_contract_hash = digest(contracts)
+    if after_board_hash != board_hash or after_contract_hash != contract_hash:
+        fail("native contract preflight changed its board or contract input")
+        raise RuntimeError("native contract preflight changed its board or contract input")
+    if not isinstance(inventory, dict) or inventory.get("status") != "ok":
+        fail("native contract preflight did not receive an OK inventory")
+        raise RuntimeError("native contract preflight did not receive an OK inventory")
+    expected_channels = len(contract_data.get("required_channels", []))
+    expected_paths = len(contract_data.get("required_paths", []))
+    if expected_channels and (
+        not isinstance(connectivity, dict)
+        or connectivity.get("status") != "pass"
+        or connectivity.get("verified_channels") != expected_channels
+    ):
+        fail("native channel preflight did not pass every contract")
+        raise RuntimeError("native channel preflight did not pass every contract")
+    if expected_paths and (
+        not isinstance(paths, dict)
+        or paths.get("status") != "pass"
+        or paths.get("verified_paths") != expected_paths
+    ):
+        fail("native signal-path preflight did not pass every contract")
+        raise RuntimeError("native signal-path preflight did not pass every contract")
+    proof = {
+        "status": "pass",
+        "board_sha256": board_hash,
+        "contract_sha256": contract_hash,
+        "native_inventory_sha256": hashlib.sha256(json.dumps(inventory, sort_keys=True).encode("utf-8")).hexdigest(),
+        "verified_channels": connectivity.get("verified_channels", 0) if connectivity else 0,
+        "verified_paths": paths.get("verified_paths", 0) if paths else 0,
+        "verified_return_assertions": paths.get("verified_return_assertions", 0) if paths else 0,
+    }
+    evidence_path.write_text(json.dumps({**proof, "checks": details}, indent=2) + "\n", encoding="utf-8")
+    return proof
+
+def place_after_native_contracts(
+    demo: "Demo",
+    board: Path,
+    contracts: Path | None,
+    expected_contract_sha256: str | None,
+    output: Path,
+    placement_arguments: list[str],
+) -> tuple[dict, dict | None]:
+    """Make native preflight a hard barrier before placement starts."""
+    proof = None
+    if contracts is not None:
+        if expected_contract_sha256 is None:
+            raise RuntimeError("native contract preflight is missing its expected hash")
+        proof = native_contract_preflight(board, contracts, expected_contract_sha256, demo, output)
+    placement = demo.command("place", placement_arguments)
+    return placement, proof
 
 
 def _payload_hash(files: dict[str, str]) -> str:
@@ -267,6 +415,45 @@ def verify_routing(payload: dict, board: Path) -> None:
     require(drc.get("blocker_count") == 0, "Native DRC has blockers")
     require(Path(drc.get("board", "")).resolve() == board.resolve(), "DRC refers to a different board")
     require(drc.get("board_sha256") == digest(board), "DRC does not match final board bytes")
+
+
+def route_budget(args: argparse.Namespace) -> dict[str, int | float | bool]:
+    recovery_seconds = math.ceil(args.recovery_timeout) if args.repair_open_connections else 0
+    return {
+        "route_timeout_seconds": args.route_timeout,
+        "route_attempts": args.attempts,
+        "route_max_passes": args.route_max_passes,
+        "repair_open_connections": args.repair_open_connections,
+        "recovery_timeout_seconds": args.recovery_timeout,
+        "active_recovery_timeout_seconds": recovery_seconds,
+        "native_postprocess_budget_seconds": _ROUTE_NATIVE_POSTPROCESS_SECONDS,
+        "minimum_route_parent_timeout_seconds": (
+            args.route_timeout + recovery_seconds + _ROUTE_NATIVE_POSTPROCESS_SECONDS
+        ),
+    }
+
+
+def workflow_command_timeout(args: argparse.Namespace) -> int:
+    return max(300, args.route_timeout + 120)
+
+
+def route_command_timeout(args: argparse.Namespace) -> int:
+    budget = route_budget(args)
+    return math.ceil(max(
+        workflow_command_timeout(args),
+        budget["minimum_route_parent_timeout_seconds"],
+    ))
+
+
+def route_cli_arguments(args: argparse.Namespace, source: Path, destination: Path) -> list[str]:
+    command = [
+        "autoroute", str(source), "--routed-board", str(destination),
+        "--attempts", str(args.attempts), "--timeout", str(args.route_timeout),
+        "--max-passes", str(args.route_max_passes), "--optimization-threads", "0",
+    ]
+    if args.repair_open_connections:
+        command.extend(["--repair-open-connections", "--recovery-timeout", str(args.recovery_timeout)])
+    return command
 
 
 def verify_refinement(payload: dict, board: Path, source: Path, expected_connections: int) -> None:
@@ -648,18 +835,22 @@ class Demo:
         if installed:
             self.env.pop("PYTHONPATH", None)
 
-    def command(self, name: str, arguments: list[str], *, json_output=True, exit_code=0) -> dict:
+    def command(self, name: str, arguments: list[str], *, json_output=True, exit_code=0,
+                timeout: int | None = None) -> dict:
         command = [sys.executable, "-m", "circuit_weaver", *map(str, arguments)]
-        return self.external(name, command, json_output=json_output, exit_code=exit_code)
+        return self.external(name, command, json_output=json_output, exit_code=exit_code, timeout=timeout)
 
-    def external(self, name: str, command: list[str], *, json_output=False, exit_code=0) -> dict:
+    def external(self, name: str, command: list[str], *, json_output=False, exit_code=0,
+                 timeout: int | None = None) -> dict:
         print(f"[{name}] starting", flush=True)
-        step = {"name": name, "command": command, "passed": False}
+        effective_timeout = self.timeout if timeout is None else timeout
+        step = {"name": name, "command": command, "passed": False,
+                "timeout_seconds": effective_timeout}
         self.steps.append(step)
         started = time.monotonic()
         try:
             process = subprocess.run(command, cwd=self.cwd, env=self.env, capture_output=True,
-                                     text=True, encoding="utf-8", errors="replace", timeout=self.timeout)
+                                     text=True, encoding="utf-8", errors="replace", timeout=effective_timeout)
             step.update(exit_code=process.returncode, seconds=round(time.monotonic() - started, 2))
             (self.output / f"{name}.stdout.log").write_text(process.stdout, encoding="utf-8")
             (self.output / f"{name}.stderr.log").write_text(process.stderr, encoding="utf-8")
@@ -852,6 +1043,82 @@ def load_plane_cleanup_plan_in_runtime(path: Path, *, cwd: Path, env: dict[str, 
     return payload
 
 
+def validation_digest(value) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+
+
+async def collect_mcp_validation_pages(session, spec_json: str) -> tuple[dict, list[dict]]:
+    """Retrieve every finding and provenance ID, then verify the complete report."""
+    transcript = []
+    collected = {}
+    header = None
+    expected_digest = ""
+    descriptors = None
+    header_fields = None
+    for collection, limit in (("findings", 10), ("evidence_ids", 100)):
+        items = []
+        offset = 0
+        while True:
+            arguments = {"spec_json": spec_json, "detail_level": "page", "collection": collection,
+                         "offset": offset, "limit": limit, "expected_report_sha256": expected_digest}
+            response = await session.call_tool("validate_design", arguments)
+            require(not response.isError, f"MCP validation page failed: {response.content}")
+            text = "\n".join(block.text for block in response.content if hasattr(block, "text"))
+            require(len(text.encode("utf-8")) <= 20000, "MCP validation page exceeds the agent-output budget")
+            page = json.loads(text)
+            require(page.get("detail_level") == "page" and page.get("collection") == collection
+                    and page.get("offset") == offset and page.get("limit") == limit,
+                    "MCP validation page does not match the request")
+            fixed_fields = {key: value for key, value in page.items()
+                            if key not in {"collection", "offset", "limit", "items", "next_offset"}}
+            if header is None:
+                expected_digest = page.get("report_sha256")
+                require(isinstance(expected_digest, str) and re.fullmatch(r"[0-9a-f]{64}", expected_digest),
+                        "MCP validation page omits the report digest")
+                descriptors = page.get("collections")
+                require(isinstance(descriptors, dict) and set(descriptors) == {"findings", "evidence_ids"},
+                        "MCP validation page omits collection descriptors")
+                header = page
+                header_fields = fixed_fields
+            require(page.get("report_sha256") == expected_digest and page.get("collections") == descriptors,
+                    "MCP validation report changed between pages")
+            require(fixed_fields == header_fields, "MCP validation report header changed between pages")
+            descriptor = descriptors[collection]
+            total = descriptor.get("total")
+            require(isinstance(total, int) and not isinstance(total, bool) and total >= 0,
+                    "MCP validation collection has an invalid count")
+            chunk = page.get("items")
+            require(isinstance(chunk, list) and len(chunk) <= limit and offset + len(chunk) <= total,
+                    "MCP validation page has an invalid item count")
+            items.extend(chunk)
+            next_offset = offset + len(chunk) if len(items) < total else None
+            require(page.get("next_offset") == next_offset and (next_offset is None or next_offset > offset),
+                    "MCP validation page skipped items or made no progress")
+            transcript.append({"tool": "validate_design", "arguments": {key: value for key, value in arguments.items()
+                                                                          if key != "spec_json"}, "result": page})
+            if next_offset is None:
+                break
+            offset = next_offset
+        require(len(items) == total and validation_digest(items) == descriptor.get("sha256"),
+                "MCP validation collection is incomplete or has a mismatched digest")
+        collected[collection] = items
+    order = header.get("category_order")
+    require(isinstance(order, list) and all(isinstance(name, str) for name in order)
+            and len(set(order)) == len(order), "MCP validation category order is invalid")
+    categories = {name: [] for name in order}
+    for entry in collected["findings"]:
+        require(isinstance(entry, dict) and set(entry) == {"category", "finding"}
+                and entry["category"] in categories and isinstance(entry["finding"], dict),
+                "MCP validation page contains a malformed finding")
+        categories[entry["category"]].append(entry["finding"])
+    paging_fields = {"detail_level", "report_sha256", "category_order", "collection", "offset", "limit",
+                     "items", "next_offset", "collections"}
+    report = {key: value for key, value in header.items() if key not in paging_fields}
+    report.update(detail_level="summary", categories=categories, evidence_ids=collected["evidence_ids"])
+    require(validation_digest(report) == expected_digest, "MCP reconstructed validation report has a mismatched digest")
+    return report, transcript
+
+
 async def mcp_smoke(spec: Path, output: Path, env: dict) -> dict:
     """Exercise the real JSON-RPC stdio server, including error propagation."""
     import yaml
@@ -867,21 +1134,33 @@ async def mcp_smoke(spec: Path, output: Path, env: dict) -> dict:
                 await session.initialize()
                 inventory = await session.list_tools()
                 names = sorted(tool.name for tool in inventory.tools)
-                require(set(names) == {"generate_artifacts", "validate_design", "discover_projects",
-                                       "research_component", "manufacturing_readiness"}, "MCP inventory mismatch")
+                required_tools = {
+                    "generate_artifacts", "validate_design", "discover_projects",
+                    "research_component", "manufacturing_readiness", "runtime_info",
+                    "start_project", "open_project", "plan_workflow", "run_workflow",
+                    "workflow_status", "resume_workflow", "cancel_workflow", "library_access",
+                }
+                require(required_tools <= set(names), "MCP inventory is missing required tools")
                 spec_json = json.dumps(yaml.safe_load(spec.read_text(encoding="utf-8")))
+                validation_tool = next(tool for tool in inventory.tools if tool.name == "validate_design")
+                paged_validation = "page" in validation_tool.inputSchema.get("properties", {}).get(
+                    "detail_level", {}).get("enum", [])
                 for name, arguments in (
                     ("validate_design", {"spec_json": spec_json}),
                     ("generate_artifacts", {"spec_json": spec_json, "output_dir": str(output / "mcp-generated")}),
                     ("discover_projects", {"root_dir": str(output), "depth": 2}),
                 ):
-                    response = await session.call_tool(name, arguments)
-                    require(not response.isError, f"MCP {name} failed: {response.content}")
-                    payload = json.loads("\n".join(b.text for b in response.content if hasattr(b, "text")))
-                    transcript.append({"tool": name, "result": payload})
+                    if name == "validate_design" and paged_validation:
+                        payload, pages = await collect_mcp_validation_pages(session, spec_json)
+                        transcript.extend(pages)
+                    else:
+                        response = await session.call_tool(name, arguments)
+                        require(not response.isError, f"MCP {name} failed: {response.content}")
+                        payload = json.loads("\n".join(b.text for b in response.content if hasattr(b, "text")))
+                        transcript.append({"tool": name, "result": payload})
                     if name in {"validate_design", "generate_artifacts"}:
                         require(payload.get("valid") is True, f"MCP {name} returned invalid design")
-                    if name == "validate_design":
+                    if name == "validate_design" and not paged_validation:
                         require(len(json.dumps(payload).encode("utf-8")) <= 20000,
                                 "MCP validation response exceeds the workflow's tested agent-output budget")
                     if name == "generate_artifacts":
@@ -895,6 +1174,7 @@ async def mcp_smoke(spec: Path, output: Path, env: dict) -> dict:
                 })
                 require(readiness.isError is True, "MCP missing readiness was treated as manufacturing approval")
     result = {"tools": names, "calls": transcript, "invalid_input_is_error": True,
+              "validation_paging_verified": paged_validation,
               "empty_research_is_error": True, "missing_readiness_is_error": True}
     (output / "mcp-transcript.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return result
@@ -917,7 +1197,14 @@ def main() -> int:
                         help="Opt in to native filled ground zones using a strict JSON plane plan")
     parser.add_argument("--plane-cleanup", type=Path,
                         help="Remove redundant plane-covered traces after --ground-plane using a strict JSON plan")
-    parser.add_argument("--route-timeout", type=int, default=180)
+    parser.add_argument("--route-timeout", type=int, default=180,
+                        help="Freerouting budget in seconds (1–3600; default: 180)")
+    parser.add_argument("--route-max-passes", type=int, default=20,
+                        help="Exact Freerouting pass limit (0 means unlimited; default: 20)")
+    parser.add_argument("--repair-open-connections", action="store_true",
+                        help="Opt in to bounded native recovery for open routed connections")
+    parser.add_argument("--recovery-timeout", type=float, default=600,
+                        help="Native recovery budget in seconds when repair is enabled (0 < value <= 1800)")
     parser.add_argument("--clearance", type=float, default=0.127,
                         help="Prototype default clearance in mm (0.127 accommodates the sample USB connector)")
     parser.add_argument("--minimum-drill", type=float,
@@ -928,7 +1215,16 @@ def main() -> int:
                         help="Test this Python's installed package, not checkout src/")
     parser.add_argument("--expected-wheel", type=Path,
                         help="Require the installed package payload to exactly match this wheel")
+    parser.add_argument("--native-contracts", type=Path,
+                        help="Snapshotted channel/path pad-net contracts to check before placement")
+    parser.add_argument("--native-contracts-sha256", help="Expected SHA-256 for --native-contracts")
     args = parser.parse_args()
+    if bool(args.native_contracts) != bool(args.native_contracts_sha256):
+        parser.error("--native-contracts and --native-contracts-sha256 must be provided together")
+    if args.native_contracts is not None and not args.native_contracts.is_file():
+        parser.error("--native-contracts does not exist")
+    if args.native_contracts is not None and digest(args.native_contracts.resolve()) != args.native_contracts_sha256:
+        parser.error("--native-contracts hash does not match --native-contracts-sha256")
     if args.plane_cleanup is not None and args.ground_plane is None:
         parser.error("--plane-cleanup requires --ground-plane in the generated-board workflow")
     for name, value in (("--width", args.width), ("--height", args.height)):
@@ -938,12 +1234,35 @@ def main() -> int:
         parser.error("--expected-wheel requires --installed")
     if args.expected_wheel is not None and not args.expected_wheel.is_file():
         parser.error(f"--expected-wheel does not exist: {args.expected_wheel}")
+    if not 1 <= args.route_timeout <= 3600:
+        parser.error("--route-timeout must be an integer from 1 through 3600 seconds")
+    if not 0 <= args.route_max_passes <= 9999:
+        parser.error("--route-max-passes must be an integer from 0 through 9999")
+    if not math.isfinite(args.recovery_timeout) or not 0 < args.recovery_timeout <= 1800:
+        parser.error("--recovery-timeout must be finite and greater than 0 through 1800 seconds")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
+    contract_snapshot = None
+    if args.native_contracts is not None:
+        contract_snapshot = output / "native-contracts.json"
+        shutil.copy2(args.native_contracts.resolve(), contract_snapshot)
+        require(
+            digest(contract_snapshot) == args.native_contracts_sha256,
+            "Copied native contract snapshot does not match the runner hash",
+        )
     source_spec = args.spec.resolve()
     spec = output / "design.yaml"
-    demo = Demo(output, max(300, args.route_timeout + 120), installed=args.installed)
-    summary = {"status": "FAILED", "spec": str(source_spec), "fabrication_ready": False}
+    budget = route_budget(args)
+    demo_timeout = workflow_command_timeout(args)
+    demo = Demo(output, demo_timeout, installed=args.installed)
+    summary = {
+        "status": "FAILED", "spec": str(source_spec), "fabrication_ready": False,
+        "routing_budget": {
+            **budget,
+            "workflow_command_timeout_seconds": demo_timeout,
+            "route_command_timeout_seconds": route_command_timeout(args),
+        },
+    }
     try:
         revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True, check=True)
         summary["revision"] = revision.stdout.strip()
@@ -1036,10 +1355,19 @@ def main() -> int:
         require(built.get("fabrication_ready") is False, "Prototype board incorrectly claims fabrication readiness")
         summary["prototype_clearance_mm"] = args.clearance
         summary["prototype_minimum_drill_mm"] = args.minimum_drill
-        placement = demo.command("place", ["place-pcb", str(output / "unplaced.kicad_pcb"),
-                                          "-o", str(output / "placed.kicad_pcb"),
-                                          "--iterations", str(args.iterations), "--seed", "7",
-                                          "--design", str(spec), "--tidy-references"])
+        placement, preflight = place_after_native_contracts(
+            demo,
+            output / "unplaced.kicad_pcb",
+            contract_snapshot,
+            args.native_contracts_sha256 if contract_snapshot is not None else None,
+            output,
+            ["place-pcb", str(output / "unplaced.kicad_pcb"),
+             "-o", str(output / "placed.kicad_pcb"),
+             "--iterations", str(args.iterations), "--seed", "7",
+             "--design", str(spec), "--tidy-references"],
+        )
+        if preflight is not None:
+            summary["native_contract_preflight"] = preflight
         require(placement["placement"]["quality"]["review_required"] is False, "Placement constraints were violated")
         summary["layout_review"] = placement["placement"].get("layout_review", {})
         summary["placement_quality"] = placement["placement"]["quality"]
@@ -1052,11 +1380,9 @@ def main() -> int:
         routed_base = output / ("routed-base.kicad_pcb" if any(
             plan is not None for plan in (return_plan, cleanup_plan, ground_plan))
                                 else "routed.kicad_pcb")
-        routing = demo.command("route", [
-            "autoroute", str(output / "placed.kicad_pcb"), "--routed-board", str(routed_base),
-            "--attempts", str(args.attempts), "--timeout", str(args.route_timeout),
-            "--max-passes", "20", "--optimization-threads", "0",
-        ])
+        routing = demo.command("route", route_cli_arguments(
+            args, output / "placed.kicad_pcb", routed_base,
+        ), timeout=route_command_timeout(args))
         verify_routing(routing, routed_base)
         routed = routed_base
         if return_plan is not None:
@@ -1181,7 +1507,7 @@ def main() -> int:
             step = {"name": "mcp", "passed": False}
             demo.steps.append(step)
             started = time.monotonic()
-            result = asyncio.run(asyncio.wait_for(mcp_smoke(spec, output, demo.env), timeout=120))
+            result = asyncio.run(asyncio.wait_for(mcp_smoke(spec, output, demo.env), timeout=300))
             step.update(passed=True, seconds=round(time.monotonic() - started, 2))
             (output / "mcp.stdout.log").write_text(json.dumps(result, indent=2), encoding="utf-8")
         require(digest(source_spec) == original, "Workflow modified the input design")

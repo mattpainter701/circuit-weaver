@@ -27,6 +27,8 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+from ._specctra_canonical import canonicalize_native_dsn
+
 log = logging.getLogger(__name__)
 
 _EFFORT_PASSES = {"fast": 100, "medium": 500, "high": 1000}
@@ -372,6 +374,23 @@ def _validate_dsn_semantics(root: str) -> tuple[dict[str, Any] | None, str | Non
     if not list(_iter_sexpr_blocks(placement, "place")):
         return None, "DSN placement section contains no placed component instances"
 
+    # A DSN placement identity is the placed reference, independent of which
+    # component/image group contains the place record.  Decode using the same
+    # quote-aware tokenizer as the rest of the Specctra parser so quoted and
+    # unquoted spellings of the same reference compare identically.
+    placed_references: set[str] = set()
+    for component_block in _iter_sexpr_blocks(placement, "component"):
+        for place_block in _iter_sexpr_blocks(component_block, "place"):
+            place_tokens = _payload_tokens(_block_payload(place_block, "place"))
+            if not place_tokens:
+                return None, "DSN placement contains a placed component without a reference"
+            reference = _decode_specctra_token(place_tokens[0])
+            if not reference:
+                return None, "DSN placement contains a placed component without a reference"
+            if reference in placed_references:
+                return None, f"DSN placement contains duplicate footprint reference {reference!r}"
+            placed_references.add(reference)
+
     network = network_blocks[0]
     net_blocks = list(_iter_sexpr_blocks(network, "net"))
     if not net_blocks:
@@ -468,6 +487,7 @@ def _validate_specctra_artifact(
     kind: str,
     *,
     source_dsn: str | Path | None = None,
+    allow_partial_nets: bool = False,
 ) -> dict[str, Any]:
     """Validate a DSN or SES artifact before it crosses a workflow boundary."""
     artifact = Path(path)
@@ -536,7 +556,7 @@ def _validate_specctra_artifact(
         # ``network_out``; require only source nets with at least two pins.
         routable_dsn_nets = set(dsn_validation.get("routable_nets", dsn_nets))
         missing_nets = sorted(routable_dsn_nets - set(details["nets"]))
-        if missing_nets:
+        if missing_nets and not allow_partial_nets:
             return {
                 "valid": False,
                 "reason": f"SES is missing net(s) from source DSN: {', '.join(missing_nets)}",
@@ -806,6 +826,78 @@ def _validate_timeout(timeout_seconds: float, label: str) -> str | None:
     return None
 
 
+def _validated_native_edge_clearance(value: Any) -> dict[str, Any] | None:
+    """Validate the native worker's edge-clearance evidence before transport."""
+    if not isinstance(value, dict) or value.get("status") != "ok":
+        return None
+    iu = value.get("value_iu")
+    mm = value.get("value_mm")
+    um = value.get("value_um")
+    source = value.get("source")
+    if (
+        not isinstance(mm, (int, float))
+        or isinstance(mm, bool)
+        or not isinstance(um, (int, float))
+        or isinstance(um, bool)
+    ):
+        return None
+    try:
+        mm_number = float(mm)
+        um_number = float(um)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    if (
+        not isinstance(iu, int)
+        or isinstance(iu, bool)
+        or iu < 0
+        or not math.isfinite(mm_number)
+        or mm_number < 0
+        or not math.isfinite(um_number)
+        or um_number < 0
+        or source != "BOARD_DESIGN_SETTINGS.m_CopperEdgeClearance"
+        or not math.isclose(um_number, mm_number * 1000.0, rel_tol=1e-12, abs_tol=1e-9)
+        or not math.isclose(mm_number, iu / 1_000_000.0, rel_tol=1e-12, abs_tol=1e-9)
+    ):
+        return None
+    return {"status": "ok", "value_iu": iu, "value_mm": mm_number, "value_um": um_number, "source": source}
+
+
+def _freerouting_supports_copper_to_edge_clearance(capability_probe: dict[str, Any] | None) -> bool:
+    """The native edge override is supported by the pinned 2.4.1+ router line."""
+    if not (capability_probe or {}).get("probe_ok"):
+        return False
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)", str((capability_probe or {}).get("version") or ""))
+    return bool(match and tuple(map(int, match.groups())) >= (2, 4, 1))
+
+
+def _inspect_native_edge_clearance(
+    pcb_path: str | Path,
+    *,
+    kicad_python_path: str | Path | None,
+    timeout_seconds: float,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Read the effective edge rule from this same staged native board."""
+    from .kicad_bridge import run_kicad
+
+    try:
+        inspection = run_kicad(
+            "inspect",
+            board=str(Path(pcb_path).resolve()),
+            python_path=kicad_python_path,
+            timeout=min(timeout_seconds, 60),
+        )
+    except Exception as exc:
+        return None, f"Could not inspect native copper-to-edge clearance: {exc}"
+    if not isinstance(inspection, dict) or inspection.get("status") != "ok":
+        return None, "Native board inspection could not establish copper-to-edge clearance"
+    edge = _validated_native_edge_clearance(inspection.get("native_edge_clearance"))
+    if edge is None:
+        details = inspection.get("native_edge_clearance")
+        detail = details.get("message") if isinstance(details, dict) else None
+        return None, "Native copper-to-edge clearance is unavailable or unsupported" + (f": {detail}" if detail else "")
+    return edge, None
+
+
 def _prepare_destination(path: Path, *, overwrite: bool) -> str | None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -867,6 +959,16 @@ def export_dsn(
     routing_clearance_margin_mm: float = 0.0,
 ) -> dict[str, Any]:
     """Export and validate Specctra DSN through native KiCad or a capable CLI."""
+    try:
+        source = Path(pcb_path)
+        if source.suffix.lower() == ".kicad_pcb":
+            # DSN rule classes come from project settings; never export routing
+            # input using silent defaults when only a legacy .pro is available.
+            from .pcb_layout import _require_modern_project_settings
+
+            _require_modern_project_settings(source)
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        return _result_error(str(exc))
     timeout_error = _validate_timeout(timeout_seconds, "Specctra export")
     if timeout_error:
         return _result_error(timeout_error)
@@ -892,6 +994,16 @@ def export_dsn(
     kicad_cli = _find_kicad_cli(kicad_cli_path)
     cli_export = bool(kicad_cli and _kicad_cli_supports_specctra(kicad_cli, timeout_seconds=min(timeout_seconds, 10)))
 
+    native_edge_clearance: dict[str, Any] | None = None
+    if cli_export:
+        native_edge_clearance, edge_error = _inspect_native_edge_clearance(
+            source,
+            kicad_python_path=kicad_python_path,
+            timeout_seconds=timeout_seconds,
+        )
+        if edge_error:
+            return _result_error(edge_error)
+
     staging = _staging_path(destination)
     try:
         if not cli_export:
@@ -910,6 +1022,12 @@ def export_dsn(
                     "Automatic Specctra export requires KiCad's pcbnew Python API. "
                     + result["message"]
                     + ". Alternatively export Specctra DSN in PCB Editor and route that .dsn file."
+                )
+            native_edge_clearance = _validated_native_edge_clearance(result.get("native_edge_clearance"))
+            if native_edge_clearance is None:
+                _remove_staging_file(staging)
+                return _result_error(
+                    "Native Specctra export did not provide a supported copper-to-edge clearance value"
                 )
             result = subprocess.CompletedProcess([], 0, "", "")
         else:
@@ -950,6 +1068,7 @@ def export_dsn(
             "output_path": str(destination),
             "output_kind": "specctra_dsn",
             "artifact": validation,
+            "native_edge_clearance": native_edge_clearance,
         }
         if clearance_guardband is not None:
             result_payload["routing_clearance_guardband"] = clearance_guardband
@@ -1460,6 +1579,35 @@ def _probe_freerouting_capabilities(command: list[str], *, timeout_seconds: floa
     }
 
 
+def _freerouting_v25_or_newer(capability_probe: dict[str, Any] | None) -> bool:
+    match = re.match(r"(\d+)\.(\d+)", str((capability_probe or {}).get("version") or ""))
+    return bool(match and tuple(map(int, match.groups())) >= (2, 5))
+
+
+def _native_fanout_input_eligible(canonicalization: dict[str, Any]) -> bool:
+    """Prove the native DSN is a copper-empty, zone-free two-copper-layer board."""
+    semantic = canonicalization.get("semantic")
+    untouched = semantic.get("untouched_sections") if isinstance(semantic, dict) else None
+    structure = untouched.get("structure") if isinstance(untouched, dict) else None
+    if not isinstance(structure, str) or not _sexpr_is_balanced(structure):
+        return False
+    layers = list(_iter_sexpr_blocks(structure, "layer"))
+    layer_names = [_first_payload_token(layer, "layer") for layer in layers]
+    if len(layers) != 2 or any(not name or not name.casefold().endswith(".cu") for name in layer_names):
+        return False
+    if len({name.casefold() for name in layer_names}) != 2:
+        return False
+    if any(list(_iter_sexpr_blocks(structure, keyword)) for keyword in ("plane", "copper", "zone")):
+        return False
+    wiring = untouched.get("wiring")
+    if wiring is not None:
+        if not isinstance(wiring, str) or not _sexpr_is_balanced(wiring):
+            return False
+        if any(list(_iter_sexpr_blocks(wiring, keyword)) for keyword in ("wire", "via", "arc")):
+            return False
+    return True
+
+
 def _modern_router(capability_probe: dict[str, Any] | None) -> bool:
     match = re.match(r"(\d+)\.(\d+)", str((capability_probe or {}).get("version") or ""))
     return bool(match and tuple(map(int, match.groups())) >= (2, 4))
@@ -1483,6 +1631,168 @@ def _effective_optimization_threads(
     return 1 if attempts > 1 else None
 
 
+_ROUTER_LOG_HEAD_BYTES = 64 * 1024
+_ROUTER_LOG_PARSE_TAIL_BYTES = 4 * 1024 * 1024
+_ROUTER_LOG_DIAGNOSTIC_TAIL_BYTES = 64 * 1024
+
+
+def _router_log_window(path: Path, *, head_bytes: int, tail_bytes: int) -> tuple[str, str]:
+    """Read bounded parser windows and discard an uncertain leading tail fragment."""
+    size = path.stat().st_size
+    with path.open("rb") as stream:
+        if size <= head_bytes + tail_bytes:
+            raw = stream.read(size)
+            split = min(size, head_bytes)
+            # Do not decode a multi-byte code point in two independent windows.
+            while split > 0 and split < size and raw[split] & 0xC0 == 0x80:
+                split -= 1
+            return (
+                raw[:split].decode("utf-8", errors="replace"),
+                raw[split:].decode("utf-8", errors="replace"),
+            )
+
+        head = stream.read(head_bytes)
+        tail_start = size - tail_bytes
+        stream.seek(tail_start - 1)
+        previous_byte = stream.read(1)
+        stream.seek(tail_start)
+        raw_tail = stream.read(tail_bytes)
+        if previous_byte != b"\n":
+            newline = raw_tail.find(b"\n")
+            raw_tail = raw_tail[newline + 1 :] if newline >= 0 else b""
+    return head.decode("utf-8", errors="replace"), raw_tail.decode("utf-8", errors="replace")
+
+
+def _router_log_metadata(path: Path, *, parse_tail_bytes: int) -> dict[str, Any]:
+    """Hash a full on-disk router log without reading it into memory."""
+    try:
+        digest = hashlib.sha256()
+        size = 0
+        with path.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                size += len(chunk)
+                digest.update(chunk)
+    except OSError as exc:
+        return {"path": str(path), "available": False, "error": f"{type(exc).__name__}: {exc}"}
+    return {
+        "path": str(path),
+        "available": True,
+        "sha256": digest.hexdigest(),
+        "bytes": size,
+        "preserved_full_log": True,
+        "parse_head_limit_bytes": _ROUTER_LOG_HEAD_BYTES,
+        "parse_tail_limit_bytes": parse_tail_bytes,
+        "parse_window_truncated": size > _ROUTER_LOG_HEAD_BYTES + parse_tail_bytes,
+        "diagnostic_tail_bytes": min(size, _ROUTER_LOG_DIAGNOSTIC_TAIL_BYTES),
+        "diagnostic_tail_truncated": size > _ROUTER_LOG_DIAGNOSTIC_TAIL_BYTES,
+    }
+
+
+def _router_log_bundle(stdout_path: Path, stderr_path: Path) -> dict[str, Any]:
+    return {
+        "stdout": _router_log_metadata(stdout_path, parse_tail_bytes=_ROUTER_LOG_PARSE_TAIL_BYTES),
+        "stderr": _router_log_metadata(stderr_path, parse_tail_bytes=_ROUTER_LOG_PARSE_TAIL_BYTES),
+        "parse_window": {
+            "head_bytes_per_stream": _ROUTER_LOG_HEAD_BYTES,
+            "tail_bytes_per_stream": _ROUTER_LOG_PARSE_TAIL_BYTES,
+            "diagnostic_tail_bytes_per_stream": _ROUTER_LOG_DIAGNOSTIC_TAIL_BYTES,
+            "statistics_are_fail_closed": True,
+        },
+    }
+
+
+def _preserve_rejected_session(staging: Path, log_dir: Path) -> dict[str, Any]:
+    """Keep an invalid SES beside this attempt's private logs for diagnosis."""
+    target = log_dir / "rejected.ses"
+    try:
+        if not staging.is_file():
+            return {"available": False, "reason": "router did not create an SES"}
+        # log_dir is unique to this attempt. Do not publish the artifact at the
+        # requested output path, even when it is syntactically well-formed.
+        shutil.copyfile(staging, target)
+        digest = hashlib.sha256()
+        size = 0
+        with target.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                size += len(chunk)
+                digest.update(chunk)
+    except OSError as exc:
+        return {"available": False, "reason": f"{type(exc).__name__}: {exc}"}
+    return {
+        "available": True,
+        "path": str(target),
+        "sha256": digest.hexdigest(),
+        "bytes": size,
+        "published": False,
+    }
+
+
+def _read_router_diagnostic(path: Path) -> str:
+    """Return only a bounded UTF-8-safe tail for returned error diagnostics."""
+    size = path.stat().st_size
+    with path.open("rb") as stream:
+        stream.seek(max(0, size - _ROUTER_LOG_DIAGNOSTIC_TAIL_BYTES))
+        return stream.read(_ROUTER_LOG_DIAGNOSTIC_TAIL_BYTES).decode("utf-8", errors="replace")
+
+
+def _run_router_to_logs(
+    command: list[str], *, timeout_seconds: float, cwd: Path, stdout_path: Path, stderr_path: Path
+) -> subprocess.CompletedProcess[bytes]:
+    """Run the router with disk-backed pipes; subprocess.run still owns timeout cleanup."""
+    with stdout_path.open("wb") as stdout_stream, stderr_path.open("wb") as stderr_stream:
+        return subprocess.run(
+            command,
+            stdout=stdout_stream,
+            stderr=stderr_stream,
+            timeout=timeout_seconds,
+            cwd=cwd,
+        )
+
+
+def _partial_route_timeout_budget(
+    host_timeout_seconds: float,
+    *,
+    capability_probe: dict[str, Any] | None,
+    enabled: bool,
+) -> dict[str, Any]:
+    """Describe the cooperative stop budget used only by private partial routing.
+
+    Keep the process-level timeout authoritative. A shorter Freerouting job
+    deadline gives its normal CLI path time to serialize an SES before the
+    host kills the process.
+    """
+    result: dict[str, Any] = {
+        "host_timeout_seconds": host_timeout_seconds,
+        "reserved_export_seconds": 60 if enabled else 0,
+        "internal_job_timeout_seconds": None,
+        "configured": False,
+    }
+    if not enabled:
+        result["reason"] = "private partial-route mode is disabled"
+        return result
+    if not _freerouting_v25_or_newer(capability_probe):
+        result["reason"] = "requires Freerouting 2.5.0 or newer"
+        return result
+    internal_seconds = math.floor(host_timeout_seconds - 60)
+    if internal_seconds <= 0:
+        result["reason"] = "host timeout does not leave a positive whole-second router budget"
+        return result
+    result.update(
+        {
+            "internal_job_timeout_seconds": internal_seconds,
+            "configured": True,
+            "reason": "configured; this records a requested deadline, not a confirmed timeout",
+        }
+    )
+    return result
+
+
+def _format_job_timeout(timeout_seconds: int) -> str:
+    hours, remainder = divmod(timeout_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
 def _route_specctra(
     dsn_path: Path,
     ses_path: Path,
@@ -1499,7 +1809,12 @@ def _route_specctra(
     optimizer_improvement_threshold: float | None,
     seed: int | None,
     capability_probe: dict[str, Any] | None,
+    native_edge_clearance: dict[str, Any] | None = None,
     clearance_baseline: dict[str, Any] | None = None,
+    logs_root: Path | None = None,
+    allow_partial_nets: bool = False,
+    cooperative_partial_timeout: bool = False,
+    native_fanout_profile: bool = False,
 ) -> dict[str, Any]:
     prepare_error = _prepare_destination(ses_path, overwrite=overwrite)
     if prepare_error:
@@ -1519,6 +1834,15 @@ def _route_specctra(
     ]
     if headless:
         routing_command.append("--gui.enabled=false")
+    edge_clearance_argument = None
+    if native_edge_clearance is not None:
+        edge = _validated_native_edge_clearance(native_edge_clearance)
+        if edge is None or not _freerouting_supports_copper_to_edge_clearance(capability_probe):
+            _remove_staging_file(staging)
+            return _result_error("Native copper-to-edge clearance transport is unavailable or unsupported")
+        edge_clearance_um = Decimal(edge["value_iu"]) / Decimal(1000)
+        edge_clearance_argument = f"--router.copper_to_edge_clearance_um={edge_clearance_um:f}"
+        routing_command.append(edge_clearance_argument)
     if _modern_router(capability_probe):
         # Default fine-pitch fanout/necking can introduce copper below the
         # imported class width. Route with the DSN widths and vias instead.
@@ -1526,17 +1850,51 @@ def _route_specctra(
             [
                 "--router.automatic_neckdown=false",
                 "--router.neck_width_um=0",
-                "--router.fanout.enabled=false",
+                f"--router.fanout.enabled={'true' if native_fanout_profile else 'false'}",
             ]
         )
+    v25_or_newer = _freerouting_v25_or_newer(capability_probe)
+    if native_fanout_profile and not v25_or_newer:
+        _remove_staging_file(staging)
+        return _result_error("Bounded native fanout profile requires Freerouting 2.5.0 or newer")
+    if native_fanout_profile:
+        routing_command.extend(
+            [
+                "--router.fanout.max_passes=1",
+                "--router.fanout.max_milliseconds_per_pin=50",
+                "--router.fanout.min_escape_length_mm=1.0",
+                "--router.fanout.max_escape_length_mm=3.0",
+                "--router.fanout.fallback_to_board_vias=false",
+                "--router.fanout.ripup_allowed=false",
+            ]
+        )
+    timeout_budget = _partial_route_timeout_budget(
+        timeout_seconds,
+        capability_probe=capability_probe,
+        enabled=cooperative_partial_timeout,
+    )
+    if timeout_budget["internal_job_timeout_seconds"] is not None:
+        routing_command.append(
+            "--router.job_timeout="
+            + _format_job_timeout(timeout_budget["internal_job_timeout_seconds"])
+        )
     if optimization_threads is not None:
-        routing_command.extend(["-mt", str(optimization_threads)])
+        if _modern_router(capability_probe) and optimization_threads == 0:
+            routing_command.append("--router.optimizer.enabled=false")
+        elif _modern_router(capability_probe):
+            routing_command.append(
+                f"--router.optimizer.max_threads={optimization_threads}"
+            )
+        else:
+            routing_command.extend(["-mt", str(optimization_threads)])
     if optimizer_strategy is not None:
-        routing_command.extend(["-us", optimizer_strategy])
-    if optimizer_hybrid_ratio is not None:
+        strategy = "GLOBAL_OPTIMAL" if v25_or_newer and optimizer_strategy == "global" else optimizer_strategy
+        routing_command.extend(["-us", strategy.upper() if v25_or_newer else strategy])
+    if optimizer_hybrid_ratio is not None and not v25_or_newer:
         routing_command.extend(["-hr", optimizer_hybrid_ratio])
     if optimizer_item_selection is not None:
-        routing_command.extend(["-is", optimizer_item_selection])
+        selection = optimizer_item_selection.upper() if v25_or_newer else optimizer_item_selection
+        routing_command.extend(["-is", selection])
     if optimizer_improvement_threshold is not None:
         if _modern_router(capability_probe):
             routing_command.append(f"--router.optimizer.improvement_threshold={optimizer_improvement_threshold}")
@@ -1545,31 +1903,158 @@ def _route_specctra(
     if seed is not None:
         routing_command.extend(["-random_seed", str(seed)])
     try:
+        stable_logs_root = Path(logs_root) if logs_root is not None else ses_path.parent / ".circuit-weaver-router-logs"
+        stable_logs_root.mkdir(parents=True, exist_ok=True)
+        log_dir = Path(tempfile.mkdtemp(prefix="attempt-", dir=stable_logs_root))
+        stdout_path = log_dir / "stdout.log"
+        stderr_path = log_dir / "stderr.log"
+        stdout_path.touch()
+        stderr_path.touch()
+    except OSError as exc:
+        _remove_staging_file(staging)
+        return _result_error(f"Could not prepare persistent Freerouting logs: {exc}")
+    try:
         with tempfile.TemporaryDirectory(prefix=".cw-router-", dir=ses_path.parent) as user_data:
             routing_command.append(f"--user_data_path={Path(user_data).resolve()}")
-            result = subprocess.run(
+            result = _run_router_to_logs(
                 routing_command,
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-                cwd=user_data,
+                timeout_seconds=timeout_seconds,
+                cwd=Path(user_data),
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
             )
     except subprocess.TimeoutExpired:
         _remove_staging_file(staging)
-        return _result_error(f"Freerouting timed out after {timeout_seconds:.0f} seconds")
+        log_bundle = _router_log_bundle(stdout_path, stderr_path)
+        if not all(log_bundle[name].get("available") for name in ("stdout", "stderr")):
+            return _result_error(
+                f"Freerouting timed out after {timeout_seconds:.0f} seconds; could not verify complete raw logs",
+                router_logs=log_bundle,
+            )
+        try:
+            diagnostic_stdout = _read_router_diagnostic(stdout_path)
+            diagnostic_stderr = _read_router_diagnostic(stderr_path)
+        except OSError as log_error:
+            _remove_staging_file(staging)
+            return _result_error(
+                f"Freerouting timed out after {timeout_seconds:.0f} seconds; "
+                f"could not read bounded diagnostics: {log_error}",
+                router_logs=log_bundle,
+            )
+        return _result_error(
+            f"Freerouting timed out after {timeout_seconds:.0f} seconds",
+            diagnostic_stdout=diagnostic_stdout,
+            diagnostic_stderr=diagnostic_stderr,
+            router_logs=log_bundle,
+        )
     except OSError as exc:
         _remove_staging_file(staging)
-        return _result_error(f"Could not run Freerouting: {exc}")
-    try:
-        if result.returncode != 0:
-            detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
-            return _result_error(f"Freerouting failed: {detail}")
+        log_bundle = _router_log_bundle(stdout_path, stderr_path)
+        return _result_error(
+            f"Could not run Freerouting: {exc}",
+            router_logs=log_bundle,
+        )
 
-        validation = _validate_specctra_artifact(staging, "ses", source_dsn=dsn_path)
-        if not validation["valid"]:
-            return _result_error(f"Freerouting produced an invalid SES: {validation['reason']}", artifact=validation)
-        output_text = f"{result.stdout}\n{result.stderr}"
+    log_bundle = _router_log_bundle(stdout_path, stderr_path)
+    if not all(log_bundle[name].get("available") for name in ("stdout", "stderr")):
+        _remove_staging_file(staging)
+        return _result_error(
+            "Could not verify complete persisted Freerouting logs; refusing route publication",
+            router_logs=log_bundle,
+        )
+    try:
+        stdout_head, stdout_tail = _router_log_window(
+            stdout_path, head_bytes=_ROUTER_LOG_HEAD_BYTES, tail_bytes=_ROUTER_LOG_PARSE_TAIL_BYTES
+        )
+        stderr_head, stderr_tail = _router_log_window(
+            stderr_path, head_bytes=_ROUTER_LOG_HEAD_BYTES, tail_bytes=_ROUTER_LOG_PARSE_TAIL_BYTES
+        )
+    except OSError as log_error:
+        _remove_staging_file(staging)
+        return _result_error(
+            f"Could not read persisted Freerouting logs: {log_error}; refusing route publication",
+            router_logs=log_bundle,
+        )
+    version_text = "\n".join((stdout_head, stderr_head, stdout_tail, stderr_tail))
+    stdout_parse_text = (
+        stdout_tail
+        if log_bundle["stdout"]["parse_window_truncated"]
+        else f"{stdout_head}{stdout_tail}"
+    )
+    stderr_parse_text = (
+        stderr_tail
+        if log_bundle["stderr"]["parse_window_truncated"]
+        else f"{stderr_head}{stderr_tail}"
+    )
+    output_text = f"{stdout_parse_text}\n{stderr_parse_text}"
+    if result.returncode != 0:
+        _remove_staging_file(staging)
+        try:
+            diagnostic_stdout = _read_router_diagnostic(stdout_path)
+            diagnostic_stderr = _read_router_diagnostic(stderr_path)
+        except OSError as log_error:
+            return _result_error(
+                f"Freerouting failed with exit code {result.returncode}; "
+                f"could not read bounded diagnostics: {log_error}",
+                router_logs=log_bundle,
+            )
+        detail = diagnostic_stderr.strip() or diagnostic_stdout.strip() or f"exit code {result.returncode}"
+        return _result_error(
+            f"Freerouting failed: {detail}",
+            diagnostic_stdout=diagnostic_stdout,
+            diagnostic_stderr=diagnostic_stderr,
+            router_logs=log_bundle,
+        )
+    try:
         stats = _parse_routing_stats(output_text)
+        router = {
+            "version": _parse_freerouting_version(version_text) or (capability_probe or {}).get("version"),
+            "logs": log_bundle,
+            "headless": headless,
+            "max_passes": passes,
+            "optimization_threads": optimization_threads,
+            "optimizer_strategy": optimizer_strategy,
+            "optimizer_hybrid_ratio": optimizer_hybrid_ratio,
+            "optimizer_item_selection": optimizer_item_selection,
+            "optimizer_improvement_threshold": optimizer_improvement_threshold,
+            "seed": seed,
+            **(
+                {
+                    "native_edge_clearance": {
+                        "value_iu": native_edge_clearance["value_iu"],
+                        "value_mm": native_edge_clearance["value_mm"],
+                        "value_um": native_edge_clearance["value_um"],
+                        "source": native_edge_clearance["source"],
+                        "transport": "--router.copper_to_edge_clearance_um",
+                        "argv": edge_clearance_argument,
+                    }
+                }
+                if native_edge_clearance is not None
+                else {"native_edge_clearance": {"status": "unavailable_for_raw_dsn"}}
+            ),
+            **({"timeout_budget": timeout_budget} if cooperative_partial_timeout else {}),
+        }
+        validation = _validate_specctra_artifact(
+            staging, "ses", source_dsn=dsn_path, allow_partial_nets=allow_partial_nets,
+        )
+        if not validation["valid"]:
+            rejected_session = _preserve_rejected_session(staging, log_dir)
+            try:
+                diagnostic_stdout = _read_router_diagnostic(stdout_path)
+                diagnostic_stderr = _read_router_diagnostic(stderr_path)
+            except OSError as log_error:
+                diagnostic_stdout = ""
+                diagnostic_stderr = f"Could not read bounded router diagnostics: {log_error}"
+            return _result_error(
+                f"Freerouting produced an invalid SES: {validation['reason']}",
+                artifact=validation,
+                rejected_session=rejected_session,
+                stats=stats,
+                router=router,
+                diagnostic_stdout=diagnostic_stdout,
+                diagnostic_stderr=diagnostic_stderr,
+                router_logs=log_bundle,
+            )
         session_text = staging.read_text(encoding="utf-8")
         stats.update(_measure_session_trace_lengths(session_text))
         # Recent router logs omit trace/via counts. Measure the validated
@@ -1581,23 +2066,14 @@ def _route_specctra(
             if stats["traces"] is None:
                 stats["traces"] = len(list(_iter_sexpr_blocks(routes, "wire")))
             stats["geometry_counts_source"] = "validated_session"
-        router = {
-            "version": _parse_freerouting_version(output_text) or (capability_probe or {}).get("version"),
-            "headless": headless,
-            "max_passes": passes,
-            "optimization_threads": optimization_threads,
-            "optimizer_strategy": optimizer_strategy,
-            "optimizer_hybrid_ratio": optimizer_hybrid_ratio,
-            "optimizer_item_selection": optimizer_item_selection,
-            "optimizer_improvement_threshold": optimizer_improvement_threshold,
-            "seed": seed,
-        }
         if stats["incomplete"] is None:
             return _result_error(
                 "Freerouting did not report final connection completeness; refusing to publish an unverified SES",
                 artifact=validation,
+                rejected_session=_preserve_rejected_session(staging, log_dir),
                 stats=stats,
                 router=router,
+                router_logs=log_bundle,
             )
         clearance_audit = None
         if clearance_baseline is not None:
@@ -1611,8 +2087,10 @@ def _route_specctra(
                 return _result_error(
                     "Could not obtain the final FreeRouting DRC pair table for pre-existing pad overlaps",
                     artifact=validation,
+                    rejected_session=_preserve_rejected_session(staging, log_dir),
                     stats=stats,
                     router=router,
+                    router_logs=log_bundle,
                 )
             clearance_audit = _compare_clearance_reports(
                 clearance_baseline["report"],
@@ -1626,20 +2104,24 @@ def _route_specctra(
                     "FreeRouting clearance violations changed from the qualified fixed-pad baseline: "
                     + str(clearance_audit.get("reason", "unclassified violation")),
                     artifact=validation,
+                    rejected_session=_preserve_rejected_session(staging, log_dir),
                     stats=stats,
                     router=router,
                     clearance_audit=clearance_audit,
+                    router_logs=log_bundle,
                 )
         elif stats["clearance_violations"] is not None and stats["clearance_violations"] > 0:
             return _result_error(
                 f"Freerouting reported {stats['clearance_violations']} clearance violation(s); SES was not published",
                 artifact=validation,
+                rejected_session=_preserve_rejected_session(staging, log_dir),
                 stats=stats,
                 router=router,
+                router_logs=log_bundle,
             )
         publish_error = _publish_staged_file(staging, ses_path, overwrite=overwrite)
         if publish_error:
-            return _result_error(publish_error, stats=stats, router=router)
+            return _result_error(publish_error, stats=stats, router=router, router_logs=log_bundle)
         validation["path"] = str(ses_path)
         clearance_status = (
             "unchanged_preexisting_same_pad_overlaps_requires_native_drc"
@@ -1656,6 +2138,7 @@ def _route_specctra(
             "artifact": validation,
             "stats": stats,
             "router": router,
+            "router_logs": log_bundle,
             **({"clearance_audit": clearance_audit} if clearance_audit is not None else {}),
             "verification": {
                 "ses_semantics": "verified",
@@ -1769,29 +2252,63 @@ def _route_candidates(
     overwrite: bool,
     seed: int | None,
     native_placement_portfolio: bool = False,
+    native_fanout_profile: bool = False,
+    logs_root: Path | None = None,
     **options: Any,
 ) -> dict[str, Any]:
     """Run an isolated portfolio and atomically publish its best valid session."""
+    stable_logs_root = Path(logs_root) if logs_root is not None else ses_path.parent / ".circuit-weaver-router-logs"
     if attempts == 1 and not native_placement_portfolio:
-        return _route_specctra(
+        result = _route_specctra(
             dsn_path,
             ses_path,
             command,
             timeout_seconds=timeout_seconds,
             overwrite=overwrite,
             seed=seed,
+            logs_root=stable_logs_root,
             **options,
         )
+        if options.get("cooperative_partial_timeout"):
+            result["timeout_budget"] = _partial_route_timeout_budget(
+                timeout_seconds,
+                capability_probe=options.get("capability_probe"),
+                enabled=True,
+            )
+        return result
     deadline = time.perf_counter() + timeout_seconds
     attempt_rows: list[dict[str, Any]] = []
     winner: dict[str, Any] | None = None
     winner_path: Path | None = None
     winner_index: int | None = None
     supports_seed = bool((options.get("capability_probe") or {}).get("seed"))
+    use_fanout_profile = bool(
+        native_fanout_profile and native_placement_portfolio and attempts >= 3
+        and options.get("allow_partial_nets")
+        and _freerouting_v25_or_newer(options.get("capability_probe"))
+    )
     base_seed = (0 if seed is None else seed) if supports_seed else None
     try:
         input_snapshot = dsn_path.read_bytes()
         input_hash = hashlib.sha256(input_snapshot).hexdigest()
+        native_dsn_text = None
+        native_dsn_canonicalization = None
+        fanout_input_eligible = False
+        if native_placement_portfolio:
+            native_dsn_text, canonicalization = canonicalize_native_dsn(input_snapshot.decode("utf-8"))
+            fanout_input_eligible = _native_fanout_input_eligible(canonicalization)
+            use_fanout_profile = use_fanout_profile and fanout_input_eligible
+            native_dsn_canonicalization = {
+                "source_sha256": canonicalization["source_sha256"],
+                "canonical_sha256": canonicalization["canonical_sha256"],
+                "canonical_bytes_changed": canonicalization["canonical_bytes_changed"],
+                "canonicalization_idempotent": canonicalization["idempotent"],
+                "root_design_name_preserved": True,
+                "image_alias_count": len(canonicalization["image_alias_map"]),
+                "placement_count": len(canonicalization["semantic"]["placements"]),
+                "net_count": len(canonicalization["semantic"]["net_membership"]),
+                "bounded_fanout_input_eligible": fanout_input_eligible,
+            }
         # Same filesystem as the destination allows atomic final publication.
         # The context also cleans up losing sessions and interrupted attempts.
         with tempfile.TemporaryDirectory(prefix=".cw-routing-", dir=ses_path.parent) as temporary:
@@ -1801,13 +2318,20 @@ def _route_candidates(
                     break
                 path = Path(temporary) / f"candidate-{index + 1}.ses"
                 attempt_options = dict(options)
+                attempt_profile = "bounded_fanout" if use_fanout_profile and index == attempts - 1 else "standard"
+                if attempt_profile == "bounded_fanout":
+                    attempt_options["native_fanout_profile"] = True
                 attempt_seed = base_seed + index if base_seed is not None else None
                 route_dsn = dsn_path
                 placement_order = None
                 candidate_hash = None
                 placement_order_kind = None
                 if native_placement_portfolio:
-                    if index == 0:
+                    if attempt_profile == "bounded_fanout":
+                        # The bounded profile is calibrated against the ascending
+                        # placement variant, so rerun that exact ordering.
+                        placement_order_kind = "ascending"
+                    elif index == 0:
                         placement_order_kind = "ascending"
                     elif index == 1:
                         placement_order_kind = "descending"
@@ -1816,7 +2340,7 @@ def _route_candidates(
                     else:
                         placement_order_kind = "rotated"
                     variant_text, placement_order = _native_placement_variant(
-                        input_snapshot.decode("utf-8"),
+                        native_dsn_text,
                         placement_order_kind,
                         rotation=index - 2,
                     )
@@ -1832,13 +2356,31 @@ def _route_candidates(
                     and attempt_options.get("optimizer_strategy") is None
                     and (not native_placement_portfolio or attempt_options.get("optimization_threads") not in {None, 0})
                 ):
-                    strategy = ("greedy", "global", "hybrid")[index % 3]
-                    attempt_options["optimizer_strategy"] = strategy
-                    attempt_options["optimizer_hybrid_ratio"] = "1:1" if strategy == "hybrid" else None
+                    if _freerouting_v25_or_newer(options.get("capability_probe")):
+                        # v2.5 removed the legacy GREEDY/HYBRID/RANDOM modes. Vary
+                        # only supported item ordering while keeping GLOBAL_OPTIMAL.
+                        attempt_options["optimizer_strategy"] = "global"
+                        if attempt_options.get("optimizer_item_selection") is None:
+                            attempt_options["optimizer_item_selection"] = (
+                                "sequential" if index % 2 == 0 else "prioritized"
+                            )
+                    else:
+                        strategy = ("greedy", "global", "hybrid")[index % 3]
+                        attempt_options["optimizer_strategy"] = strategy
+                        attempt_options["optimizer_hybrid_ratio"] = "1:1" if strategy == "hybrid" else None
                 remaining = deadline - time.perf_counter()
                 if remaining <= 0:
                     break
                 allowance = remaining / (attempts - index)
+                log.info(
+                    "Freerouting portfolio candidate %d/%d started "
+                    "(placement order=%s, optimizer=%s, timeout allowance=%.1fs)",
+                    index + 1,
+                    attempts,
+                    placement_order_kind or "unchanged",
+                    attempt_options.get("optimizer_strategy"),
+                    allowance,
+                )
                 result = _route_specctra(
                     route_dsn,
                     path,
@@ -1846,6 +2388,7 @@ def _route_candidates(
                     timeout_seconds=allowance,
                     overwrite=False,
                     seed=attempt_seed,
+                    logs_root=stable_logs_root,
                     **attempt_options,
                 )
                 row = {
@@ -1854,15 +2397,42 @@ def _route_candidates(
                     "optimizer_strategy": attempt_options.get("optimizer_strategy"),
                     "status": result["status"],
                     "timeout_seconds": allowance,
+                    "routing_profile": attempt_profile,
                 }
+                if options.get("cooperative_partial_timeout"):
+                    row["timeout_budget"] = _partial_route_timeout_budget(
+                        allowance,
+                        capability_probe=options.get("capability_probe"),
+                        enabled=True,
+                    )
                 if placement_order is not None:
                     row["placement_order_strategy"] = placement_order_kind
                     row["placement_order"] = placement_order
                     row["variant_sha256"] = candidate_hash
                 if "stats" in result:
                     row["stats"] = result["stats"]
+                if "router_logs" in result:
+                    row["router_logs"] = result["router_logs"]
+                for key in ("artifact", "rejected_session", "router"):
+                    if key in result:
+                        row[key] = result[key]
                 if "message" in result:
                     row["message"] = result["message"]
+                for key in ("diagnostic_stdout", "diagnostic_stderr"):
+                    if key in result:
+                        row[key] = result[key]
+                measured_incomplete = (
+                    result.get("stats", {}).get("incomplete") if result.get("status") == "ok" else None
+                )
+                log.info(
+                    "Freerouting portfolio candidate %d/%d finished "
+                    "(status=%s, measured incomplete=%s, timeout allowance=%.1fs)",
+                    index + 1,
+                    attempts,
+                    result["status"],
+                    measured_incomplete,
+                    allowance,
+                )
                 attempt_rows.append(row)
                 if hashlib.sha256(dsn_path.read_bytes()).hexdigest() != input_hash:
                     return _result_error(
@@ -1878,6 +2448,9 @@ def _route_candidates(
                 ):
                     winner, winner_path, winner_index = result, path, index + 1
             search = {
+                "routing_profile": (
+                    attempt_rows[winner_index - 1]["routing_profile"] if winner_index else "standard"
+                ),
                 "requested_attempts": attempts,
                 "completed_attempts": len(attempt_rows),
                 "selected_attempt": winner_index,
@@ -1885,13 +2458,29 @@ def _route_candidates(
                 "ranking": ["incomplete", "clearance_unreported", "trace_length_mm", "vias", "traces"],
                 "attempts": attempt_rows,
             }
+            if native_dsn_canonicalization is not None:
+                search["native_dsn_canonicalization"] = native_dsn_canonicalization
+            if options.get("cooperative_partial_timeout"):
+                search["timeout_budget"] = {
+                    "overall_host_timeout_seconds": timeout_seconds,
+                    "reserved_export_seconds_per_attempt": 60,
+                    "internal_job_timeout_policy": (
+                        "floor(each attempt's subprocess timeout allowance minus 60 seconds), "
+                        "only for Freerouting 2.5.0+ and a positive whole-second result"
+                    ),
+                    "per_attempt_internal_job_timeout_seconds": [
+                        row["timeout_budget"]["internal_job_timeout_seconds"]
+                        for row in attempt_rows
+                        if "timeout_budget" in row
+                    ],
+                }
             if winner is None or winner_path is None:
                 return _result_error("No routing attempt produced a verified usable session", search=search)
             error = _publish_staged_file(winner_path, ses_path, overwrite=overwrite)
             if error:
                 return _result_error(error, search=search)
             winner["artifact"]["path"] = str(ses_path)
-            return {**winner, "search": search}
+            return {**winner, "search": search, "routing_profile": search["routing_profile"]}
     except (ValueError, UnicodeDecodeError) as exc:
         return _result_error(f"Cannot prepare native routing-order variant: {exc}", attempts=attempt_rows)
     except OSError as exc:
@@ -1918,6 +2507,11 @@ def autoroute_pcb(
     kicad_cli_path: str | Path | None = None,
     kicad_python_path: str | Path | None = None,
     routed_board_path: str | Path | None = None,
+    repair_open_connections: bool = False,
+    recovery_timeout_seconds: float = 600,
+    max_repair_links: int = 256,
+    _allow_partial_nets: bool = False,
+    _native_fanout_profile: bool = False,
 ) -> dict[str, Any]:
     """Route a real KiCad board or a user-supplied DSN with Freerouting.
 
@@ -1926,6 +2520,26 @@ def autoroute_pcb(
     the session and require native DRC before publishing the routed PCB.
     A non-zero incomplete count returns ``status="partial"``.
     """
+    if not isinstance(repair_open_connections, bool):
+        return _result_error("repair_open_connections must be a boolean")
+    if not isinstance(_native_fanout_profile, bool):
+        return _result_error("_native_fanout_profile must be a boolean")
+    if repair_open_connections:
+        from .autoroute_recovery import autoroute_with_recovery
+
+        return autoroute_with_recovery(
+            pcb_path, output_path, routed_board_path=routed_board_path,
+            recovery_timeout_seconds=recovery_timeout_seconds, max_repair_links=max_repair_links,
+            effort=effort, timeout_seconds=timeout_seconds, max_passes=max_passes,
+            overwrite=overwrite, headless=headless, optimization_threads=optimization_threads,
+            optimizer_strategy=optimizer_strategy, optimizer_hybrid_ratio=optimizer_hybrid_ratio,
+            optimizer_item_selection=optimizer_item_selection,
+            optimizer_improvement_threshold=optimizer_improvement_threshold, seed=seed,
+            attempts=attempts, freerouting_path=freerouting_path,
+            kicad_cli_path=kicad_cli_path, kicad_python_path=kicad_python_path,
+        )
+    if _allow_partial_nets and (routed_board_path is None or Path(pcb_path).suffix.lower() != ".kicad_pcb"):
+        return _result_error("Partial-net recovery requires an isolated native board destination")
     timeout_error = _validate_timeout(timeout_seconds, "Routing")
     if timeout_error:
         return _result_error(timeout_error)
@@ -1975,6 +2589,15 @@ def autoroute_pcb(
         return _result_error("overwrite must be a boolean")
 
     source_suffix = source.suffix.lower()
+    if source_suffix == ".kicad_pcb":
+        try:
+            # Keep DSN-only routing available, but do not route from a native
+            # board whose legacy project rules cannot be carried into DRC.
+            from .pcb_layout import _require_modern_project_settings
+
+            _require_modern_project_settings(source)
+        except (OSError, ValueError) as exc:
+            return _result_error(str(exc))
     source_hashes = {}
     if routed_board_path is not None:
         if source_suffix != ".kicad_pcb":
@@ -2039,6 +2662,27 @@ def autoroute_pcb(
         freerouting_command,
         timeout_seconds=min(timeout_seconds, 10),
     )
+    if source_suffix == ".kicad_pcb" and not _freerouting_supports_copper_to_edge_clearance(capability_probe):
+        return _result_error(
+            "Native-board routing requires a verified Freerouting version with "
+            "--router.copper_to_edge_clearance_um support (2.4.1 or newer).",
+            router=capability_probe,
+        )
+    if _freerouting_v25_or_newer(capability_probe):
+        if optimizer_strategy in {"greedy", "hybrid"}:
+            return _result_error(
+                f"Freerouting {capability_probe['version']} removed optimizer_strategy={optimizer_strategy!r}; "
+                "use 'global' or omit the strategy."
+            )
+        if optimizer_hybrid_ratio is not None:
+            return _result_error(
+                f"Freerouting {capability_probe['version']} removed -hr; omit optimizer_hybrid_ratio."
+            )
+        if optimizer_item_selection == "random":
+            return _result_error(
+                f"Freerouting {capability_probe['version']} removed random optimizer item selection; "
+                "use 'sequential' or 'prioritized'."
+            )
     if seed is not None and (not capability_probe["probe_ok"] or not capability_probe["seed"]):
         return _result_error(
             "The installed Freerouting build does not advertise -random_seed; "
@@ -2048,6 +2692,7 @@ def autoroute_pcb(
 
     start_time = time.perf_counter()
     routing_clearance_guardband = None
+    native_edge_clearance = None
     if source_suffix != ".dsn":
         export_result = export_dsn(
             source,
@@ -2061,6 +2706,13 @@ def autoroute_pcb(
         if export_result["status"] != "ok":
             return {**export_result, "preflight": preflight, "input": input_validation}
         routing_clearance_guardband = export_result.get("routing_clearance_guardband")
+        native_edge_clearance = _validated_native_edge_clearance(export_result.get("native_edge_clearance"))
+        if native_edge_clearance is None:
+            return _result_error(
+                "Native Specctra export did not establish the board's copper-to-edge clearance",
+                preflight=preflight,
+                input=input_validation,
+            )
     clearance_baseline = None
     if source_suffix == ".kicad_pcb" and routed_board_path is not None:
         clearance_baseline = _preexisting_fixed_pad_clearance_baseline(
@@ -2091,8 +2743,18 @@ def autoroute_pcb(
         optimizer_improvement_threshold=optimizer_improvement_threshold,
         seed=seed,
         native_placement_portfolio=source_suffix == ".kicad_pcb",
+        # Width repair must bind the authored project rules to every native
+        # candidate. A standalone board keeps its ordinary portfolio instead.
+        native_fanout_profile=(
+            _native_fanout_profile and source_suffix == ".kicad_pcb"
+            and source.with_suffix(".kicad_pro").is_file()
+        ),
+        logs_root=ses_path.parent / ".circuit-weaver-router-logs",
         capability_probe=capability_probe,
         clearance_baseline=clearance_baseline,
+        native_edge_clearance=native_edge_clearance,
+        **({"allow_partial_nets": True} if _allow_partial_nets else {}),
+        **({"cooperative_partial_timeout": True} if _allow_partial_nets else {}),
     )
 
     elapsed = time.perf_counter() - start_time
@@ -2139,6 +2801,7 @@ def autoroute_pcb(
         "stats": stats,
         "router": route_result["router"],
         "verification": route_result["verification"],
+        **({"routing_profile": route_result["routing_profile"]} if "routing_profile" in route_result else {}),
         "routing_complete": incomplete == 0,
         "fabrication_ready": False,
         "requires_kicad_drc": True,
@@ -2166,7 +2829,25 @@ def autoroute_pcb(
             expected_hashes=source_hashes,
         )
         if imported["status"] != "ok":
-            return {**result, "status": "error", "message": imported["message"], "board_import": imported}
+            verification = dict(result.get("verification", {}))
+            verification["connection_completeness"] = "native_import_rejected"
+            native_drc = imported.get("drc")
+            verification["kicad_drc"] = (
+                "failed"
+                if isinstance(native_drc, dict)
+                and native_drc.get("status") == "ok"
+                and native_drc.get("passed") is False
+                else "not_verified"
+            )
+            return {
+                **result,
+                "status": "error",
+                "message": imported["message"],
+                "routing_complete": False,
+                "requires_kicad_drc": True,
+                "verification": verification,
+                "board_import": imported,
+            }
         return {
             **result,
             **imported,

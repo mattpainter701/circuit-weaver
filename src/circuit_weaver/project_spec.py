@@ -1002,6 +1002,7 @@ def resolve_project_spec(
             "presentation_profile",
             "components_db",
             "power_domains",
+            "operating_cases",
         ):
             continue
 

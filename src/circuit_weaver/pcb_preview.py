@@ -25,6 +25,14 @@ ET.register_namespace("", SVG_NS)
 
 _NATIVE_POLYGON_SCRIPT = r'''
 import json, sys
+# Some Windows board readers need wx initialized even without a visible frame.
+_native_wx_app = None
+if sys.platform == "win32":
+    import wx
+    _native_wx_app = wx.GetApp() or wx.App(False)
+    # Keep warnings in the captured log instead of a modal wx.LogGui dialog.
+    _native_wx_log = wx.LogStderr()
+    wx.Log.SetActiveTarget(_native_wx_log)
 import pcbnew
 
 board = pcbnew.LoadBoard(sys.argv[1])

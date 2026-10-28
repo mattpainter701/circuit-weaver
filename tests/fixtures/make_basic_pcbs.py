@@ -77,7 +77,9 @@ if case == "rc":
         if not project_path.is_file():
             raise RuntimeError(f"KiCad did not create native project settings: {project_path}")
     project = json.loads(project_path.read_text())
-    project["board"]["design_settings"]["rules"].update(min_track_width=0.3, min_clearance=0.25)
+    project["board"]["design_settings"]["rules"].update(
+        min_track_width=0.3, min_clearance=0.25, min_copper_edge_clearance=0.8
+    )
     default_class = next(c for c in project["net_settings"]["classes"] if c["name"] == "Default")
     default_class.update(track_width=0.35, clearance=0.25, via_diameter=0.7, via_drill=0.3)
     project_path.write_text(json.dumps(project))

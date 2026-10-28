@@ -8,6 +8,7 @@ analysis control cards (.tran, .ac, .dc, .op).
 
 from __future__ import annotations
 
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,7 @@ def _normalize_node(net_name: str) -> str:
     SPICE node '0' is ground. Other names are sanitized to alphanumerics/underscores.
     """
     if not net_name:
-        return "0"
+        raise ValueError("A SPICE pin has no connected net; empty pins cannot be treated as ground")
     lower = net_name.lower()
     if lower in ("gnd", "ground", "vss", "0"):
         return "0"
@@ -55,6 +56,13 @@ def _parse_value(value: str) -> str:
     # Strip standalone F or H at end (100F -> 100, but keep SI suffixes like 10k)
     val = re.sub(r"(?i)^([\d.]+)[FH]$", r"\1", val)
 
+    # ngspice interprets a trailing uppercase M as milli, while engineers
+    # commonly write M for mega. Expand it so 1M means one megohm and retain
+    # lowercase m for milli.
+    mega_match = re.fullmatch(r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)M", val)
+    if mega_match:
+        val = f"{mega_match.group(1)}Meg"
+
     # Already numeric (possibly with SPICE suffix like k, M, u, n, p)
     if re.match(r"^[\d.]+[a-zA-Z]?$", val):
         return val
@@ -72,14 +80,22 @@ def _passive_to_spice(comp: ComponentDef) -> str | None:
 
     if prefix not in ("R", "C", "L"):
         return None
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.$-]*", ref):
+        raise ValueError(f"Invalid SPICE reference designator: {ref!r}")
 
     value = _parse_value(comp.value or "0")
+    if not value or any(char.isspace() for char in value) or any(char in value for char in "\r\n;\"'"):
+        raise ValueError(f"Invalid SPICE value for {ref}: {comp.value!r}")
     pin_nets = comp.pin_nets or {}
 
     # Passives have 2 pins: pin 1 and pin 2
-    pins = sorted(pin_nets.keys())
-    if len(pins) < 2:
+    if len(pin_nets) != 2:
         return None
+    pins = sorted(
+        pin_nets.keys(), key=lambda item: (not str(item).isdigit(), int(item) if str(item).isdigit() else str(item))
+    )
+    if any(not pin_nets.get(pin) for pin in pins):
+        raise ValueError(f"{ref} has an unconnected pin; SPICE export cannot infer a ground connection")
 
     node1 = _normalize_node(pin_nets.get(pins[0], ""))
     node2 = _normalize_node(pin_nets.get(pins[1], ""))
@@ -87,25 +103,36 @@ def _passive_to_spice(comp: ComponentDef) -> str | None:
     return f"{ref} {node1} {node2} {value}"
 
 
-def _ic_to_spice_subckt(comp: ComponentDef, model_path: str) -> list[str]:
+def _ic_to_spice_subckt(comp: ComponentDef, model: str | dict[str, Any]) -> list[str]:
     """Generate .subckt instance lines for an IC with a downloaded SPICE model.
 
     Returns list of SPICE lines: [.include directive, instance line].
     """
     ref = comp.source_ref or ""
-    mpn = comp.mpn or "unknown"
     pin_nets = comp.pin_nets or {}
 
-    # Build node list from pin ordering
-    nodes = []
-    for pin_num in sorted(pin_nets.keys()):
-        nodes.append(_normalize_node(pin_nets[pin_num]))
+    if not isinstance(model, dict) or not model.get("path") or not model.get("subckt"):
+        raise ValueError(f"{ref} model needs explicit path and subckt metadata")
+    pin_order = model.get("pin_order")
+    if (
+        not isinstance(pin_order, list)
+        or not pin_order
+        or len(set(map(str, pin_order))) != len(pin_order)
+        or set(map(str, pin_order)) != set(map(str, pin_nets))
+    ):
+        raise ValueError(f"{ref} model needs a pin_order matching its connected pin numbers")
+    subckt_name = str(model["subckt"])
+    model_path = str(model["path"])
+    if not re.fullmatch(r"[A-Za-z0-9_.$-]+", subckt_name) or any(c in model_path for c in "\r\n\"'"):
+        raise ValueError(f"{ref} has unsafe SPICE model metadata")
+    nodes = [
+        _normalize_node(pin_nets[str(pin)]) if str(pin) in pin_nets else _normalize_node(pin_nets[pin])
+        for pin in pin_order
+    ]
 
     node_str = " ".join(nodes)
-    subckt_name = re.sub(r"[^a-zA-Z0-9_]", "_", mpn)
-
     return [
-        f".include {model_path}",
+        f'.include "{model_path}"',
         f"X{ref} {node_str} {subckt_name}",
     ]
 
@@ -123,32 +150,163 @@ def _generate_analysis_cards(
     Returns:
         List of SPICE control lines.
     """
+    if params is not None and not isinstance(params, dict):
+        raise ValueError("analysis_params must be an object")
     params = params or {}
+    if analysis_type not in {"tran", "ac", "dc", "op"}:
+        raise ValueError(f"Unsupported SPICE analysis type: {analysis_type!r}")
+
+    def token(name: str, default: Any) -> str:
+        value = params.get(name, default)
+        text = str(value)
+        if not re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?(?:meg|[tgkmunpf])?", text, re.IGNORECASE):
+            raise ValueError(f"Unsafe or unsupported SPICE analysis parameter {name}: {value!r}")
+        return text
 
     if analysis_type == "tran":
-        step = params.get("step", "1u")
-        stop = params.get("stop", "10m")
-        start = params.get("start", "0")
+        step = token("step", "1u")
+        stop = token("stop", "10m")
+        start = token("start", "0")
         return [f".tran {step} {stop} {start}"]
 
     elif analysis_type == "ac":
         variation = params.get("variation", "dec")
+        if variation not in {"dec", "oct", "lin"}:
+            raise ValueError(f"Unsupported AC variation: {variation!r}")
         points = params.get("points", 100)
-        fstart = params.get("fstart", "1")
-        fstop = params.get("fstop", "10Meg")
+        if isinstance(points, bool) or not isinstance(points, int) or points < 1:
+            raise ValueError("AC points must be a positive integer")
+        fstart = token("fstart", "1")
+        fstop = token("fstop", "10Meg")
         return [f".ac {variation} {points} {fstart} {fstop}"]
 
     elif analysis_type == "dc":
         source = params.get("source", "V1")
-        start = params.get("start", "0")
-        stop = params.get("stop", "5")
-        step = params.get("step", "0.01")
+        if not isinstance(source, str) or not re.fullmatch(r"[VI][A-Za-z0-9_.$-]*", source, re.IGNORECASE):
+            raise ValueError(f"Unsafe DC source reference: {source!r}")
+        start = token("start", "0")
+        stop = token("stop", "5")
+        step = token("step", "0.01")
         return [f".dc {source} {start} {stop} {step}"]
 
     elif analysis_type == "op":
         return [".op"]
 
     return [f".{analysis_type}"]
+
+
+def _format_testbench_sources(sources: list[dict[str, Any]] | None, components: list[ComponentDef]) -> list[str]:
+    """Render explicitly authored voltage/current sources without raw SPICE input."""
+    if sources is not None and not isinstance(sources, list):
+        raise ValueError("simulation sources must be a list")
+
+    known_nodes: dict[str, str] = {}
+    known_original_names: set[str] = set()
+    occupied_refs = {str(comp.source_ref or "").casefold() for comp in components}
+    for comp in components:
+        for net in (comp.pin_nets or {}).values():
+            if not isinstance(net, str) or not net.strip():
+                continue
+            node = _normalize_node(net)
+            key = node.casefold()
+            original = "0" if node == "0" else net
+            if key in known_nodes and known_nodes[key] != original:
+                raise ValueError(
+                    f"Distinct circuit nets {known_nodes[key]!r} and {net!r} normalize to the same SPICE node"
+                )
+            known_nodes[key] = original
+            known_original_names.add(net.casefold())
+
+    if sources is None:
+        return []
+
+    lines: list[str] = []
+    seen_source_refs: set[str] = set()
+    for index, source in enumerate(sources):
+        if not isinstance(source, dict):
+            raise ValueError(f"simulation source {index} must be an object")
+        allowed = {"ref", "type", "positive", "negative", "dc", "ac", "pulse"}
+        if set(source) - allowed or not {"ref", "type", "positive", "negative"}.issubset(source):
+            raise ValueError(
+                f"simulation source {index} requires ref/type/positive/negative and accepts dc/ac or structured pulse"
+            )
+        ref = source["ref"]
+        source_type = source["type"]
+        if not isinstance(ref, str) or not re.fullmatch(r"[VI][A-Za-z0-9_.$-]*", ref, re.IGNORECASE):
+            raise ValueError(f"simulation source {index} has an invalid V/I reference")
+        if (
+            not isinstance(source_type, str)
+            or source_type.upper() not in {"V", "I"}
+            or ref[0].upper() != source_type.upper()
+        ):
+            raise ValueError(f"simulation source {ref!r} type must match its V/I reference prefix")
+        ref_key = ref.casefold()
+        if ref_key in seen_source_refs or ref_key in occupied_refs:
+            raise ValueError(f"duplicate simulation source reference {ref!r}")
+        seen_source_refs.add(ref_key)
+
+        raw_positive, raw_negative = source["positive"], source["negative"]
+        if (
+            not isinstance(raw_positive, str)
+            or not raw_positive.strip()
+            or raw_positive != raw_positive.strip()
+            or not isinstance(raw_negative, str)
+            or not raw_negative.strip()
+            or raw_negative != raw_negative.strip()
+        ):
+            raise ValueError(f"simulation source {ref} requires named positive and negative nets")
+        positive, negative = _normalize_node(raw_positive), _normalize_node(raw_negative)
+        for raw, normalized in ((raw_positive, positive), (raw_negative, negative)):
+            if normalized != "0" and (
+                normalized.casefold() not in known_nodes or raw.casefold() not in known_original_names
+            ):
+                raise ValueError(f"simulation source {ref} references unconnected net {raw!r}")
+        if positive.casefold() == negative.casefold():
+            raise ValueError(f"simulation source {ref} connects a net to itself")
+
+        values = []
+        for field in ("dc", "ac"):
+            value = source.get(field)
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                raise ValueError(f"simulation source {ref} {field} value must be finite numeric")
+            try:
+                number = float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"simulation source {ref} {field} value must be finite numeric") from exc
+            if not math.isfinite(number):
+                raise ValueError(f"simulation source {ref} {field} value must be finite numeric")
+            values.extend([field.upper(), format(number, ".17g")])
+        pulse = source.get("pulse")
+        if pulse is not None:
+            if not isinstance(pulse, dict):
+                raise ValueError(f"simulation source {ref} pulse must be an object")
+            pulse_fields = ("v1", "v2", "delay", "rise", "fall", "width", "period")
+            if set(pulse) != set(pulse_fields):
+                raise ValueError(f"simulation source {ref} pulse requires exactly {', '.join(pulse_fields)}")
+            pulse_values = []
+            for field in pulse_fields:
+                value = pulse[field]
+                if isinstance(value, bool):
+                    raise ValueError(f"simulation source {ref} pulse {field} must be finite numeric")
+                try:
+                    number = float(value)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"simulation source {ref} pulse {field} must be finite numeric") from exc
+                if not math.isfinite(number) or (field not in {"v1", "v2"} and number < 0):
+                    raise ValueError(f"simulation source {ref} pulse {field} is outside its valid range")
+                pulse_values.append(format(number, ".17g"))
+            if float(pulse["period"]) <= 0 or float(pulse["width"]) > float(pulse["period"]):
+                raise ValueError(f"simulation source {ref} pulse period must be positive and width <= period")
+            if values:
+                raise ValueError(f"simulation source {ref} cannot combine pulse with dc/ac values")
+            lines.append(f"{ref} {positive} {negative} PULSE({ ' '.join(pulse_values) })")
+            continue
+        if not values:
+            raise ValueError(f"simulation source {ref} must specify dc and/or ac")
+        lines.append(f"{ref} {positive} {negative} " + " ".join(values))
+    return lines
 
 
 def export_spice_netlist(
@@ -158,7 +316,8 @@ def export_spice_netlist(
     include_dirs: list[str | Path] | None = None,
     analysis_type: str = "tran",
     analysis_params: dict[str, Any] | None = None,
-    model_manifest: dict[str, str] | None = None,
+    sources: list[dict[str, Any]] | None = None,
+    model_manifest: dict[str, str | dict[str, Any]] | None = None,
     title: str = "Circuit Weaver Simulation",
 ) -> Path:
     """Generate a SPICE netlist (.cir) from resolved components.
@@ -193,6 +352,8 @@ def export_spice_netlist(
         ref = comp.source_ref or ""
         if not ref:
             continue
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.$-]*", ref):
+            raise ValueError(f"Invalid SPICE reference designator: {ref!r}")
 
         # Try as passive first
         passive_line = _passive_to_spice(comp)
@@ -203,16 +364,33 @@ def export_spice_netlist(
         # Try as IC with SPICE model
         mpn = comp.mpn or ""
         if mpn and mpn in model_manifest:
-            model_path = model_manifest[mpn]
+            model = model_manifest[mpn]
+            if (
+                not isinstance(model, dict)
+                or not model.get("path")
+                or not model.get("subckt")
+                or not model.get("pin_order")
+            ):
+                skipped.append(f"* Skipped {ref} ({mpn}) - model lacks explicit subckt/pin_order contract")
+                continue
+            model_path = model.get("path", "") if isinstance(model, dict) else model
             if model_path not in included_models:
-                ic_lines = _ic_to_spice_subckt(comp, model_path)
+                ic_lines = _ic_to_spice_subckt(comp, model)
                 subckt_lines.extend(ic_lines)
                 included_models.add(model_path)
             else:
-                # Model already included, just add instance
-                pin_nets = comp.pin_nets or {}
-                nodes = " ".join(_normalize_node(pin_nets[p]) for p in sorted(pin_nets.keys()))
-                subckt_name = re.sub(r"[^a-zA-Z0-9_]", "_", mpn)
+                # Reuse only an explicit model contract; never guess pin order or subcircuit name.
+                if not isinstance(model, dict) or not model.get("subckt") or not model.get("pin_order"):
+                    raise ValueError(f"{ref} model needs explicit path, subckt, and pin_order metadata")
+                pin_order = list(map(str, model["pin_order"]))
+                if len(set(pin_order)) != len(pin_order) or set(pin_order) != set(
+                    map(str, (comp.pin_nets or {}).keys())
+                ):
+                    raise ValueError(f"{ref} model pin_order does not match connected pins")
+                if not re.fullmatch(r"[A-Za-z0-9_.$-]+", str(model["subckt"])):
+                    raise ValueError(f"{ref} has unsafe SPICE subcircuit metadata")
+                nodes = " ".join(_normalize_node((comp.pin_nets or {})[p]) for p in pin_order)
+                subckt_name = str(model["subckt"])
                 subckt_lines.append(f"X{ref} {nodes} {subckt_name}")
         else:
             skipped.append(f"* Skipped {ref} ({mpn or 'no MPN'}) - no SPICE model")
@@ -228,6 +406,12 @@ def export_spice_netlist(
         lines.extend(passive_lines)
         lines.append("")
 
+    source_lines = _format_testbench_sources(sources, components)
+    if source_lines:
+        lines.append("* --- Explicit testbench sources ---")
+        lines.extend(source_lines)
+        lines.append("")
+
     if skipped:
         lines.append("* --- Components without SPICE models ---")
         lines.extend(skipped)
@@ -240,6 +424,7 @@ def export_spice_netlist(
 
     # Control section
     lines.append(".control")
+    lines.append("set filetype=ascii")
     lines.append("run")
     lines.append("write results.raw")
     lines.append(".endc")

@@ -1,6 +1,6 @@
 # API Reference
 
-Public Python API for Circuit Weaver. All functions are in `circuit_weaver.dispatcher`.
+Public Python API for Circuit Weaver. Design operations are in `circuit_weaver.dispatcher`; durable project lifecycle operations are in `circuit_weaver.project_workflow`.
 
 ```python
 from circuit_weaver.dispatcher import (
@@ -13,7 +13,16 @@ from circuit_weaver.dispatcher import (
 )
 from circuit_weaver.design_import import analyze_design, import_design
 from circuit_weaver.project_state import get_project_state_summary, resume_project
+from circuit_weaver.project_workflow import (
+    start_project, open_project, plan_workflow, run_workflow,
+    workflow_status, resume_workflow, cancel_workflow,
+)
+from circuit_weaver.runtime_info import runtime_info
 ```
+
+For lifecycle arguments, checkpoint semantics and runnable examples, see
+[Project lifecycle workflows](project-workflows.md). `resume_workflow` executes
+the saved plan; `resume_project` remains the legacy non-executing summary.
 
 ---
 
@@ -480,6 +489,21 @@ result = fetch_spice_models(spec, output_dir="./project", include_s_params=False
 ```
 
 Downloads SPICE models from TI, ADI, Microchip, ON Semi using known URL patterns. Graceful degradation when not found.
+
+## Local Library Access Audit
+
+```python
+from circuit_weaver.library_access import audit_library_access
+
+report = audit_library_access("ADF4351", project_root="./rf-project")
+```
+
+The read-only report separates local KiCad symbols, footprints, and 3D models
+from curated component/topology support and project SPICE bindings. Exact
+symbol matches may include a resolved symbol-to-footprint-to-model asset chain;
+this establishes local asset identity only, not electrical correctness or RF
+qualification. Results are bounded, provenance-labelled, and do not download
+or modify files.
 
 ---
 

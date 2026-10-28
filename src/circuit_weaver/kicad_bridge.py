@@ -11,6 +11,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .kicad_project_context import inspect_project_footprint_context, stage_project_footprint_context
+
 
 def find_kicad_python(explicit: str | Path | None = None) -> str | None:
     candidates = [explicit, os.getenv("CIRCUIT_WEAVER_KICAD_PYTHON"), os.getenv("KICAD_PYTHON")]
@@ -28,7 +30,7 @@ def find_kicad_python(explicit: str | Path | None = None) -> str | None:
         try:
             probe = subprocess.run(
                 [executable, "-c", "import pcbnew; print('CW_PCBNEW_READY')"],
-                capture_output=True, text=True, timeout=10,
+                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10,
             )
         except (OSError, subprocess.TimeoutExpired):
             continue
@@ -54,11 +56,16 @@ def run_kicad(
                 settings = source.with_suffix(suffix)
                 if settings.is_file():
                     shutil.copy2(settings, board_copy.with_suffix(suffix))
+            # Preserve only explicitly declared, bounded project-local libraries.
+            context_before = inspect_project_footprint_context(source.parent)
+            stage_project_footprint_context(source.parent, Path(folder))
             process = subprocess.run(
                 [executable, str(Path(__file__).with_name("_kicad_worker.py"))],
                 input=json.dumps({"operation": operation, **request, "board": str(board_copy)}),
                 capture_output=True, text=True, timeout=timeout,
             )
+            if inspect_project_footprint_context(source.parent) != context_before:
+                return {"status": "error", "message": "Project footprint context changed during KiCad operation"}
         for line in reversed(process.stdout.splitlines()):
             if line.startswith("CW_KICAD_RESULT="):
                 result = json.loads(line.partition("=")[2])
