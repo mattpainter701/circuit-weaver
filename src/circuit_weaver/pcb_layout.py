@@ -670,14 +670,91 @@ def place_pcb(
         return {"status": "error", "message": str(exc)}
 
 
+def _thermal_only_violations(drc: Any, board: Path) -> list[dict[str, Any]] | None:
+    """Select only fresh, complete native thermal errors; never waive other faults."""
+    raw = getattr(drc, "raw_report", None)
+    if (getattr(drc, "status", None) != "ok" or not isinstance(raw, dict)
+            or getattr(drc, "board_sha256", None) != _hash(board)
+            or not isinstance(raw.get("unconnected_items"), list) or raw["unconnected_items"]
+            or not isinstance(raw.get("schematic_parity"), list) or raw["schematic_parity"]):
+        return None
+    violations = raw.get("violations")
+    if not isinstance(violations, list):
+        return None
+    thermal = []
+    for row in violations:
+        if not isinstance(row, dict):
+            return None
+        if row.get("type") == "lib_footprint_issues" and row.get("severity") == "warning":
+            continue
+        if row.get("type") != "starved_thermal" or row.get("severity") != "error":
+            return None
+        items = row.get("items")
+        if (not isinstance(items, list) or len(items) != 2
+                or any(not isinstance(item, dict) or not isinstance(item.get("uuid"), str)
+                       or not item["uuid"].strip() for item in items)):
+            return None
+        thermal.append(row)
+    blockers = [finding for finding in getattr(drc, "findings", []) if finding.severity == "blocker"]
+    if (not thermal or len(thermal) > 16 or len(blockers) != len(thermal)
+            or getattr(drc, "blocker_count", None) != len(thermal)
+            or any(finding.rule_id != "CW-DRC-787" for finding in blockers)):
+        return None
+    return thermal
+
+
+def _verified_plane_stitching(result: dict[str, Any]) -> bool:
+    report = result.get("plane_stitching")
+    fill = result.get("zone_refill")
+    flags = ("source_identity_preserved", "original_footprints_and_text_preserved",
+             "original_board_geometry_preserved", "existing_copper_preserved", "saved_added_vias_verified")
+    if (not isinstance(report, dict) or report.get("status") != "candidate_only_requires_full_drc"
+            or report.get("net") != "GND" or type(report.get("added_vias")) is not int
+            or not 0 < report["added_vias"] <= 16 or any(report.get(key) is not True for key in flags)
+            or not isinstance(fill, dict) or fill.get("status") != "verified"
+            or any(fill.get(key) is not True for key in (
+                "saved_fill_geometry_verified", "zone_definitions_preserved", "copper_stackup_preserved"))
+            or fill.get("unconnected_ground_pads") != []
+            or not isinstance(fill.get("unconnected_pads_by_net"), dict)
+            or fill["unconnected_pads_by_net"].get("GND") != []):
+        return False
+    rows, connections = fill.get("rows"), fill.get("connected_copper")
+    if (not isinstance(rows, list) or len(rows) < 2 or not isinstance(connections, list)
+            or len(connections) != len(rows)
+            or any(not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"]
+                   or row.get("net") != "GND" or type(row.get("island_count")) is not int
+                   or row["island_count"] != 0 or isinstance(row.get("area_mm2"), bool)
+                   or not isinstance(row.get("area_mm2"), (int, float))
+                   or not math.isfinite(row["area_mm2"]) or row["area_mm2"] <= 0 for row in rows)
+            or any(not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"]
+                   or type(row.get("connected_copper_count")) is not int
+                   or row["connected_copper_count"] < 1 for row in connections)):
+        return False
+    return (len({row["id"] for row in rows}) == len(rows)
+            and {row["id"] for row in rows} == {row.get("id") for row in connections})
+
+
+def _clean_plane_repair_drc(drc: Any) -> bool:
+    """A repair may retain library warnings but may not introduce a physical fault."""
+    raw = getattr(drc, "raw_report", None)
+    return (getattr(drc, "passed", False) is True and isinstance(raw, dict)
+            and raw.get("unconnected_items") == [] and raw.get("schematic_parity") == []
+            and isinstance(raw.get("violations"), list)
+            and all(isinstance(row, dict) and row.get("type") == "lib_footprint_issues"
+                    and row.get("severity") == "warning" for row in raw["violations"]))
+
+
 def import_routing_session(
     board_path: str | Path, session_path: str | Path, output_path: str | Path, *,
     overwrite: bool = False, kicad_python_path: str | Path | None = None,
     expected_hashes: dict[Path, str | None] | None = None,
+    repair_plane_thermals: bool = False,
 ) -> dict[str, Any]:
     """Import routes into a separate PCB and publish only after native KiCad DRC."""
     source, session, destination = Path(board_path).resolve(), Path(session_path).resolve(), Path(output_path).resolve()
     try:
+        if not isinstance(repair_plane_thermals, bool):
+            raise ValueError("repair_plane_thermals must be a boolean")
         if destination.suffix.lower() != ".kicad_pcb":
             raise ValueError("Routed board output must be a .kicad_pcb file")
         if source == destination:
@@ -704,13 +781,52 @@ def import_routing_session(
                 return {"status": "error", "message": "Imported routing lacks verified fresh zone fills"}
             _restore_settings(source, staged, snapshots)
             drc = run_drc(staged, evidence_ledger=EvidenceLedger(), project_context=source.parent)
+            stitching = {"status": "not_needed", "used": False} if repair_plane_thermals else None
+            if repair_plane_thermals and not drc.passed:
+                violations = _thermal_only_violations(drc, staged)
+                _check_snapshots(snapshots)
+                if violations is not None:
+                    repaired = Path(folder) / "plane-thermal-repaired.kicad_pcb"
+                    changed = run_kicad(
+                        "repair_plane_thermals", board=str(staged), output=str(repaired),
+                        violations=violations, expected_board_sha256=drc.board_sha256,
+                        python_path=kicad_python_path,
+                    )
+                    _check_snapshots(snapshots)
+                    if (changed.get("status") != "ok" or not repaired.is_file()
+                            or not _verified_plane_stitching(changed)):
+                        return {"status": "error", "message": "Ground-plane thermal repair was not verified; "
+                                "board was not published", "drc": drc.to_dict(), "plane_stitching": changed}
+                    _restore_settings(source, repaired, snapshots)
+                    final_drc = run_drc(repaired, evidence_ledger=EvidenceLedger(), project_context=source.parent)
+                    _check_snapshots(snapshots)
+                    if final_drc.board_sha256 != _hash(repaired):
+                        raise ValueError("Thermal repair DRC does not match the saved candidate bytes")
+                    accepted = _clean_plane_repair_drc(final_drc)
+                    stitching = {"status": "verified" if accepted else "rejected", "used": True,
+                                 "before_drc": drc.to_dict(), "native": changed["plane_stitching"]}
+                    if not accepted:
+                        return {"status": "error", "message": "Ground-plane thermal repair did not produce a "
+                                "clean native DRC report; board was not published", "drc": final_drc.to_dict(),
+                                "plane_stitching": stitching}
+                    drc = final_drc
+                    if drc.passed:
+                        staged = repaired
+                        zone_refill = changed["zone_refill"]
             if not drc.passed:
                 return {"status": "error", "message": "Imported routing failed KiCad DRC; board was not published",
-                        "drc": drc.to_dict()}
+                        "drc": drc.to_dict(), **({"plane_stitching": stitching} if stitching is not None else {})}
+            if drc.board_sha256 != _hash(staged):
+                raise ValueError("Final import DRC does not match the saved board bytes")
             _publish(staged, destination, snapshots, overwrite)
         return {"status": "ok", "output_path": str(destination), "output_kind": "routed_kicad_board",
                 "drc": {**drc.to_dict(), "board": str(destination)},
                 **({"zone_refill": zone_refill} if zone_refill is not None else {}),
+                **({"plane_stitching": stitching} if stitching is not None else {}),
+                **({"session_scope": "input_routing_session_before_native_plane_stitching",
+                    "session_includes_plane_stitching": False} if stitching and stitching.get("used") else {}),
+                **({"session_scope": "input_routing_session_before_native_import_and_fill"}
+                   if stitching and not stitching.get("used") else {}),
                 "routing_complete": True, "fabrication_ready": False}
     except (OSError, ValueError) as exc:
         return {"status": "error", "message": str(exc)}

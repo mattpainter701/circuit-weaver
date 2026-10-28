@@ -474,9 +474,15 @@ def _normalize_options(options: dict[str, Any] | None) -> dict[str, Any]:
             normalized["ground_plane"] = _validate_plan(normalized["ground_plane"])
         except (TypeError, ValueError) as exc:
             raise WorkflowError("invalid_options", str(exc)) from exc
-    for key in ("route_repair_open_connections", "ground_plane_after_route"):
+    for key in ("route_repair_open_connections", "ground_plane_after_route", "ground_plane_repair_thermals"):
         if key in normalized and not isinstance(normalized[key], bool):
             raise WorkflowError("invalid_options", f"{key} must be a boolean")
+    if normalized.get("ground_plane_repair_thermals") and (
+        "ground_plane" not in normalized or not normalized.get("ground_plane_after_route")
+        or normalized.get("copper_layers") != 4
+    ):
+        raise WorkflowError("invalid_options", "ground_plane_repair_thermals requires an authored ground_plane, "
+                            "ground_plane_after_route=true, and copper_layers=4")
     if "route_recovery_timeout" in normalized:
         value = normalized["route_recovery_timeout"]
         if (isinstance(value, bool) or not isinstance(value, (int, float))
@@ -943,11 +949,14 @@ def _execute_stage(
                 routed_board = attempt / "verified-plane-routed.kicad_pcb"
                 imported_planes = import_routing_session(
                     with_planes, out, routed_board, kicad_python_path=options.get("kicad_python_path"),
+                    **({"repair_plane_thermals": True} if options.get("ground_plane_repair_thermals") else {}),
                 )
                 _require_ok(imported_planes, "ground_plane")
                 result = {**result, **imported_planes,
                           "artifact": {"valid": True, "kind": "kicad_pcb", "path": str(routed_board),
                                        "sha256": imported_planes["drc"]["board_sha256"]}}
+                if result.get("plane_stitching", {}).get("used"):
+                    result["session_scope"] = "complete_global_router_session_before_native_plane_stitching"
             extras = [(out, root / out.name)]
             publish_hashes = None
             if any(key in options for key in ("route_contracts", "ground_plane", "copper_layers")):
@@ -972,6 +981,11 @@ def _execute_stage(
                     "board_sha256": publish_hashes[routed_board], "routing_complete": True,
                     "electrical_or_manufacturing_approval": False,
                 }
+                if "plane_stitching" in result:
+                    plane_report["thermal_repair"] = result["plane_stitching"]
+                    plane_report["session_scope"] = result["session_scope"]
+                    if result["plane_stitching"].get("used"):
+                        plane_report["session_includes_plane_stitching"] = False
                 report.write_text(json.dumps(plane_report, indent=2) + "\n", encoding="utf-8")
                 result["ground_plane"] = plane_report
                 extras.append((report, root / report.name))

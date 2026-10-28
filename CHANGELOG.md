@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Add opt-in thermal repair for deferred four-layer GND planes: join nearby
+  local fill components to another plane with bounded, rule-sized stitching
+  vias. Preserve existing copper, placement, labels and rules, and publish only
+  after saved fill/connectivity checks and fresh full native DRC pass.
 - Retain native diagnostics from direct workflow operations, including deferred
   ground-plane import failures, while keeping public errors concise.
 - Preserve native repair coordinates to the nearest internal unit, avoiding

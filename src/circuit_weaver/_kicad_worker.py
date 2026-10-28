@@ -7,6 +7,7 @@ import json
 import math
 import sys
 from collections import Counter
+from pathlib import Path
 
 _SILK_CLEARANCE_MM = 0.2
 _SILK_EDGE_MARGIN_MM = 0.4
@@ -1505,6 +1506,7 @@ def execute(request):
     cleanup = None
     plane_cleanup = None
     ground_plane = None
+    plane_stitching = None
     cleanup_removed_items = []
     plane_cleanup_removed_items = []
     original_copper = None
@@ -1535,6 +1537,32 @@ def execute(request):
             zone_refill = _refill_imported_zones(
                 board, pcbnew, original_zone_definitions, original_copper_stack,
             )
+    elif operation == "repair_plane_thermals":
+        from _native_plane_stitch import repair as repair_plane_thermals
+
+        expected = request.get("expected_board_sha256")
+        if (not isinstance(expected, str) or len(expected) != 64
+                or hashlib.sha256(Path(request["board"]).read_bytes()).hexdigest() != expected):
+            raise ValueError("Plane thermal DRC does not match the loaded board bytes")
+        original_copper = _copper_state(board)
+        original_layout = _fixed_layout_state(board)
+        original_board_geometry = _ground_plane_source_geometry_state(board, pcbnew)
+        original_zone_definitions = _zone_definition_state(board, pcbnew)
+        original_copper_stack = _native_stack_state(board, pcbnew)
+        plane_stitching = repair_plane_thermals(board, pcbnew, request.get("violations"))
+        if (not isinstance(plane_stitching, dict)
+                or plane_stitching.get("status") != "candidate_only_requires_full_drc"
+                or type(plane_stitching.get("added_vias")) is not int
+                or not 0 < plane_stitching["added_vias"] <= 16
+                or plane_stitching.get("net") != "GND"):
+            raise ValueError("Native plane stitching did not report bounded GND via candidates")
+        if (original_copper - _copper_state(board)
+                or original_layout != _fixed_layout_state(board)
+                or original_board_geometry != _ground_plane_source_geometry_state(board, pcbnew)):
+            raise ValueError("Plane stitching changed original copper, footprints or source geometry")
+        zone_refill = _refill_imported_zones(
+            board, pcbnew, original_zone_definitions, original_copper_stack,
+        )
     elif operation == "refine_returns":
         from _native_return_paths import refine
 
@@ -1746,6 +1774,25 @@ def execute(request):
         raise ValueError("Saved board failed pad/net identity verification")
     if zone_refill is not None:
         zone_refill = _verify_saved_imported_zones(reloaded, pcbnew, zone_refill)
+    if plane_stitching is not None:
+        saved_copper = _copper_state(reloaded)
+        if (original_copper - saved_copper or _identity(reloaded) != identity
+                or original_layout != _fixed_layout_state(reloaded)
+                or original_board_geometry != _ground_plane_source_geometry_state(reloaded, pcbnew)
+                or _copper_state(board) != saved_copper):
+            raise ValueError("Saved plane stitching changed original copper, identity or source geometry")
+        additions = [json.loads(raw) for raw, count in (saved_copper - original_copper).items()
+                     for _ in range(count)]
+        if (len(additions) != plane_stitching["added_vias"]
+                or any(row["type"] != "PCB_VIA" or row["net"] != "GND" or row["locked"]
+                       for row in additions)):
+            raise ValueError("Saved plane stitching added copper outside its verified GND via report")
+        plane_stitching.update({"source_identity_preserved": True,
+                               "original_footprints_and_text_preserved": True,
+                               "original_board_geometry_preserved": True,
+                               "existing_copper_preserved": True,
+                               "saved_added_vias_verified": True,
+                               "native_added_copper": additions})
     if refinement is not None and (original_copper - _copper_state(reloaded)
                                    or original_layout != _fixed_layout_state(reloaded)):
         raise ValueError("Saved return refinement failed original geometry preservation")
@@ -1808,6 +1855,8 @@ def execute(request):
     result = {"status": "ok", "version": pcbnew.Version(), **_inspect(reloaded, pcbnew)}
     if zone_refill is not None:
         result["zone_refill"] = zone_refill
+    if plane_stitching is not None:
+        result["plane_stitching"] = plane_stitching
     if tidy_summary is not None:
         result["silkscreen"] = _reference_conflict_report(
             reloaded, pcbnew, tidy_summary["moved_count"],

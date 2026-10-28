@@ -424,6 +424,32 @@ Deferral makes all copper layers available during routing; the workflow then
 prepares the authored plane definitions on its original input, imports the full
 session, refills and independently verifies the saved plane geometry/connectivity.
 Existing source zones are not removed. The normal defaults remain unchanged.
+
+For four-layer GND planes whose thermal connections are obstructed by signal
+routing, explicitly set `ground_plane_repair_thermals: true` in the same options.
+This option requires `copper_layers: 4`, an authored `ground_plane` plan and
+`ground_plane_after_route: true`. CLI, Python and MCP use the same saved option
+and checkpoint hash. The Python session-import helper also accepts
+`repair_plane_thermals=True`.
+
+Repair runs only when fresh native DRC identifies thermal-connection errors
+alone, with no open nets or other physical faults. It searches for outside-pad
+GND stitching vias joining nearby non-dominant filled components to a dominant
+same-net plane on another layer. The initial implementation requires rectangular
+four-layer boards, multiple filled GND planes, an unambiguous dominant polygon,
+and no other copper zones or keepouts. Search, via count, dimensions, clearances,
+holes and silk are bounded; the via count cannot exceed the distinct error-pad
+count or 16. Existing tracks, vias, component geometry, labels and authored rules
+must survive unchanged. The worker refills and reloads the board, and final full
+native DRC must pass before publication. Unsupported geometry or a failed search
+leaves the candidate private. This is opt-in CAD repair and supplies no current,
+thermal, RF, fabrication or hardware qualification.
+The final PCB is authoritative. When stitching runs, the unchanged router SES
+predates those native via additions; the result and durable `ground-plane.json`
+record `session_includes_plane_stitching: false`, the session scope and the repair
+details. Reproducing the final board requires the saved workflow options as well
+as the router session. A clean board records repair as `not_needed`.
+
 The parent reserves both router and recovery budgets plus bounded native
 postprocessing time. This supplies an automated recovery path, not a guarantee
 that every circuit fits the search bounds or meets electrical/impedance targets.
