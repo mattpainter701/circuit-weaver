@@ -85,7 +85,7 @@ def test_unseen_cases_share_pinned_recovery_profile_and_retain_private_diagnosti
     assert step["env"]["CIRCUIT_WEAVER_FREEROUTING"] == "/tmp/freerouting-2.5.0.jar"
     for required in (
         "--require-clean", "--installed", '--expected-wheel "$wheel"',
-        "--route-timeout 1800", "--route-max-passes 20", "--attempts 1",
+        "--route-timeout 1800", "--route-max-passes 20", "--attempts 3",
         "--repair-open-connections", "--recovery-timeout 1800", "--timeout 7200",
         "f6f51bb02245e8e717f9359bd260cc9c5c0b1bc0acc8b7cb2cd5b8ffeb5de3c7",
         "sha256sum --check",

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Stage each native dangling-track cleanup pass in its own private project
+  directory so repeated passes preserve footprint libraries without collisions.
 - Carry KiCad's project-backed copper-to-edge minimum into native-board
   autorouting and radius-aware repair checks. Reject unsupported custom edge
   constraints before routing, preserve authored rules and outlines, and retain
@@ -26,8 +28,9 @@
   import finds only open connections. Reject mixed or ambiguous failures, rerun
   native checks before repair, and report native import failures as incomplete.
 
-- Run all unseen scale cases through one pinned, bounded routing-recovery
-  profile, retaining strict native DRC, path and model-coverage gates. Preserve
+- Run all unseen scale cases through one pinned, bounded three-order routing
+  portfolio and recovery profile, retaining the shared route budget and strict
+  native DRC, path and model-coverage gates. Preserve
   private routing diagnostics in CI artifacts for failed-candidate review.
 - Retain rejected router sessions privately with hashes, available router
   statistics and validation failures, while leaving requested outputs untouched.

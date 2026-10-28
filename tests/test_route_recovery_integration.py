@@ -1,13 +1,18 @@
 """Adversarial publication contracts for opt-in native routing recovery."""
 
+import hashlib
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
+from circuit_weaver import autoroute_recovery
 from circuit_weaver.autoroute import _validate_specctra_artifact
 from circuit_weaver.autoroute_recovery import autoroute_with_recovery
+from circuit_weaver.drc_runner import DrcResult
+from circuit_weaver.validator import ValidationIssue
 
 
 @pytest.fixture
@@ -466,6 +471,97 @@ def test_ambiguous_initial_import_error_never_enters_recovery(recovery, mutate):
     accept.assert_not_called()
     assert not dest.exists()
     assert not ses.exists()
+
+
+def test_dangling_cleanup_uses_fresh_local_library_stage_for_each_pass(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    library = project / "libraries" / "Local.pretty"
+    library.mkdir(parents=True)
+    (library / "Part.kicad_mod").write_text("(footprint test)\n", encoding="utf-8")
+    (project / "fp-lib-table").write_text(
+        '(fp_lib_table (lib (name "Local") (type "KiCad") '
+        '(uri "${KIPRJMOD}/libraries/Local.pretty")))\n',
+        encoding="utf-8",
+    )
+    source = project / "source.kicad_pcb"
+    source.write_bytes(b"immutable authored board")
+    source.with_suffix(".kicad_pro").write_text("{}\n", encoding="utf-8")
+    partial = tmp_path / "partial.kicad_pcb"
+    partial.write_bytes(b"router partial")
+    work = tmp_path / "work"
+    work.mkdir()
+    source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    warning_sequence = iter(("stub-1", "stub-2", None))
+
+    def drc(board, **_kwargs):
+        warning_id = next(warning_sequence)
+        violations = [] if warning_id is None else [{
+            "type": "track_dangling",
+            "severity": "warning",
+            "items": [{"uuid": warning_id, "pos": {"x": 10.0, "y": 0.0}}],
+        }]
+        findings = [
+            ValidationIssue(
+                "CW-DRC-002", message=f"open {index}", severity="blocker",
+                detection_confidence="verified", rule_id="CW-DRC-002",
+            )
+            for index in range(2)
+        ]
+        if warning_id is not None:
+            findings.append(ValidationIssue(
+                "CW-DRC-841", level="warning", message="Track has unconnected end",
+                severity="major", detection_confidence="verified", rule_id="CW-DRC-841",
+            ))
+        raw = {
+            "violations": violations,
+            "unconnected_items": [{"items": [{"uuid": f"open-{index}"}]} for index in range(2)],
+            "schematic_parity": [],
+        }
+        return DrcResult(
+            "ok", str(board), hashlib.sha256(Path(board).read_bytes()).hexdigest(),
+            findings=tuple(findings), raw_report=raw,
+        )
+
+    staged_parents = []
+
+    def cleanup(_operation, **kwargs):
+        output = Path(kwargs["output"])
+        staged_parents.append(output.parent)
+        assert (output.parent / "fp-lib-table").read_bytes() == (project / "fp-lib-table").read_bytes()
+        assert (output.parent / "libraries" / "Local.pretty" / "Part.kicad_mod").is_file()
+        output.write_bytes(b"candidate " + str(len(staged_parents)).encode())
+        uuid = kwargs["warning_rows"][0]["items"][0]["uuid"]
+        return {
+            "status": "ok",
+            "router_dangling_cleanup": {
+                "status": "candidate_only_requires_fresh_drc",
+                "removed_tracks": [{"uuid": uuid}],
+                "source_copper_exact_subset_preserved": True,
+                "saved_removed_tracks_verified": True,
+            },
+        }
+
+    monkeypatch.setattr("circuit_weaver.drc_runner.run_drc", drc)
+    monkeypatch.setattr("circuit_weaver.kicad_bridge.run_kicad", cleanup)
+    result, final_drc, summary = autoroute_recovery._clean_router_dangling_tracks(
+        source,
+        partial,
+        work=work,
+        python=None,
+        deadline=time.monotonic() + 60,
+        source_snapshots={source: source_hash},
+    )
+
+    assert result.name == "partial-cleaned-02.kicad_pcb"
+    assert staged_parents == [
+        work / "native-dangling-cleanup" / "step-01",
+        work / "native-dangling-cleanup" / "step-02",
+    ]
+    assert len(set(staged_parents)) == 2
+    assert all((parent / "fp-lib-table").is_file() for parent in staged_parents)
+    assert final_drc.blocker_count == 2
+    assert summary["removed_track_count"] == 2
+    assert source.read_bytes() == b"immutable authored board"
 
 
 def test_validated_initial_ses_hash_must_stay_stable_through_quarantine_import(recovery):

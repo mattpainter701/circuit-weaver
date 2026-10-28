@@ -167,7 +167,12 @@ def _clean_router_dangling_tracks(
             )
 
         index = len(steps) + 1
-        candidate = root / f"partial-cleaned-{index:02d}.kicad_pcb"
+        # Each staged candidate needs a fresh parent: _prepare_settings copies
+        # the project fp-lib-table and local libraries beside the board, and
+        # this cleanup may need several sequential passes.
+        step_root = root / f"step-{index:02d}"
+        step_root.mkdir()
+        candidate = step_root / f"partial-cleaned-{index:02d}.kicad_pcb"
         staged_settings = _prepare_settings(source, candidate)
         _check_snapshots(source_snapshots)
         cleanup = run_kicad(
