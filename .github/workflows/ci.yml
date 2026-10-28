@@ -336,6 +336,8 @@ jobs:
     container:
       image: ghcr.io/kicad/kicad:10.0.6-full@sha256:e36e29b5f4a638a1a7238eba3d2fcbc8e061ffed1e99a8f39cb722706c94a58e
       options: --user 0
+    env:
+      JAVA_TOOL_OPTIONS: -Xms32m -Xmx384m -XX:+UseSerialGC -XX:ActiveProcessorCount=1
     strategy:
       fail-fast: false
       max-parallel: 1

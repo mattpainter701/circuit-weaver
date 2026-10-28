@@ -78,6 +78,10 @@ def test_design_validation_runs_once_per_pr_revision_and_cancels_superseded_work
 def test_unseen_cases_share_pinned_recovery_profile_and_retain_private_diagnostics():
     jobs = _workflow("ci.yml")["jobs"]
     job = jobs["unseen-scale-validation"]
+    assert job["env"]["JAVA_TOOL_OPTIONS"] == (
+        "-Xms32m -Xmx384m -XX:+UseSerialGC -XX:ActiveProcessorCount=1"
+    )
+    assert job["strategy"]["max-parallel"] == "1"
     assert job["strategy"]["matrix"]["case"] == [
         "distributed_facility_gateway", "serial_relay_output_card", "multichannel_analog_setpoint_card",
     ]

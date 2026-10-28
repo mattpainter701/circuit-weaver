@@ -48,3 +48,23 @@ flag any exceeding 20% of usable area for review unless an authored keepout or
 functional reserve explains it. This is a proposed review threshold to test
 across the corpus, not an electrical acceptance rule or a demand for uniform
 density. Functional grouping and authored mechanical constraints take priority.
+
+## Planned phase-8 showcase handoff
+
+After the relevant phase acceptance gates pass, publish a reproducible showcase
+of the measured workflows:
+
+- [ ] Update the README with circuit-directory start/open/resume examples and
+  links to accepted sample workflows and their actual assembled-board previews.
+- [ ] Update the editable workflow and architecture diagrams to show the shared
+  skill, CLI, Python and MCP runner, checkpoints and native acceptance gates.
+- [ ] Curate small, medium and larger sample circuits with checked-in source,
+  library/model provenance, exact commands and evidence from a fresh full run.
+  Publish the exact four-layer DAC fixture before presenting it as a runnable
+  public sample.
+- [ ] Verify documentation links and commands from a fresh installation, and
+  distinguish CAD acceptance from electrical, RF, timing, thermal, manufacturing
+  and hardware qualification. Keep incomplete phase results visible.
+
+Draft artwork or local-only source bundles do not close this handoff. Final
+examples must correspond to the published source and tested release revision.
