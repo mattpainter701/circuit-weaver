@@ -42,6 +42,7 @@ def _drc(path: Path, opens: int, *, status="ok", other_blocker=False, unknown=Fa
 
 
 def _wire_files(tmp_path, monkeypatch):
+    tmp_path.mkdir(parents=True, exist_ok=True)
     source = tmp_path / "input.kicad_pcb"
     source.write_bytes(b"partial board")
     destination = tmp_path / "recovered.kicad_pcb"
@@ -66,6 +67,17 @@ def _worker_report():
         "added_tracks": 1,
         "added_vias": 0,
         "expanded_states": 12,
+    }
+
+
+def _bidirectional_worker_report(grid_step_mm=0.5):
+    return {
+        **_worker_report(),
+        "search_mode": "bidirectional",
+        "search_direction": "bidirectional",
+        "requested_grid_step_mm": grid_step_mm,
+        "search_grid_step_mm": grid_step_mm,
+        "search_state_budget": 150000,
     }
 
 
@@ -308,3 +320,226 @@ def test_recovery_timeout_finalizes_partial_evidence_without_publishing(tmp_path
     assert history["source_sha256"] == result["source_sha256"] == hashlib.sha256(source_bytes).hexdigest()
     assert history["links_repaired"] == 1
     assert len(history["history"]) == 1
+
+
+def test_standard_success_never_invokes_bidirectional_fallback(tmp_path, monkeypatch):
+    source, destination = _wire_files(tmp_path, monkeypatch)
+    counts = iter((1, 0, 0))
+    requests = []
+
+    def worker(_operation, **kwargs):
+        requests.append(kwargs)
+        Path(kwargs["output"]).write_bytes(Path(kwargs["board"]).read_bytes() + b" routed")
+        return {"status": "ok", "route_repair": _worker_report()}
+
+    monkeypatch.setattr("circuit_weaver.routing_recovery.run_drc", lambda path, **_: _drc(Path(path), next(counts)))
+    monkeypatch.setattr("circuit_weaver.routing_recovery.run_kicad", worker)
+    result = recover_routing(source, destination)
+
+    assert result["status"] == "ok"
+    assert result["search_modes_tried"] == ["standard"]
+    assert result["search_profiles_tried"] == [{"mode": "standard", "grid_step_mm": None}]
+    assert len(requests) == 1
+    assert not {"search_mode", "grid_step_mm", "max_expanded_states"} & requests[0].keys()
+    assert result["history"][0]["search_mode"] == "standard"
+
+
+def test_stalled_standard_sweep_switches_once_and_stays_bidirectional_after_progress(tmp_path, monkeypatch):
+    source, destination = _wire_files(tmp_path, monkeypatch)
+    drc_counts = iter((2, 1, 0, 0))
+    calls = []
+
+    def drc(path, **_):
+        return _drc(Path(path), next(drc_counts))
+
+    def worker(_operation, **kwargs):
+        mode = kwargs.get("search_mode", "standard")
+        calls.append((mode, kwargs["pair_index"], {k: kwargs[k] for k in ("grid_step_mm", "max_expanded_states")
+                                                     if k in kwargs}))
+        if mode == "standard":
+            return {"status": "error", "message": "default profile found no path"}
+        Path(kwargs["output"]).write_bytes(Path(kwargs["board"]).read_bytes() + b" routed")
+        return {"status": "ok", "route_repair": _bidirectional_worker_report()}
+
+    monkeypatch.setattr("circuit_weaver.routing_recovery.run_drc", drc)
+    monkeypatch.setattr("circuit_weaver.routing_recovery.run_kicad", worker)
+    result = recover_routing(source, destination, max_links=2, max_pair_attempts=3)
+
+    assert result["status"] == "ok"
+    assert [row[0] for row in calls] == ["standard", "standard", "bidirectional", "bidirectional"]
+    assert [row[1] for row in calls] == [0, 1, 1, 0]
+    assert calls[2][2] == {"grid_step_mm": 0.5, "max_expanded_states": 150000}
+    assert calls[3][2] == {"grid_step_mm": 0.5, "max_expanded_states": 150000}
+    assert result["search_modes_tried"] == ["standard", "bidirectional"]
+    assert result["search_profiles_tried"] == [
+        {"mode": "standard", "grid_step_mm": None},
+        {"mode": "bidirectional", "grid_step_mm": 0.5},
+    ]
+    assert [row["search_mode"] for row in result["history"]] == [
+        "standard", "standard", "bidirectional", "bidirectional"
+    ]
+
+
+def test_no_progress_in_fallback_stops_without_oscillation(tmp_path, monkeypatch):
+    source, destination = _wire_files(tmp_path, monkeypatch)
+    calls = []
+    monkeypatch.setattr("circuit_weaver.routing_recovery.run_drc", lambda path, **_: _drc(Path(path), 2))
+
+    def worker(_operation, **kwargs):
+        calls.append(kwargs.get("search_mode", "standard"))
+        return {"status": "error", "message": "no route"}
+
+    monkeypatch.setattr("circuit_weaver.routing_recovery.run_kicad", worker)
+    result = recover_routing(source, destination, max_links=2, max_pair_attempts=4)
+
+    assert result["status"] == "partial"
+    assert calls == [
+        "standard", "standard",
+        "bidirectional", "bidirectional",
+        "bidirectional", "bidirectional",
+        "bidirectional", "bidirectional",
+    ]
+    assert result["search_modes_tried"] == ["standard", "bidirectional"]
+    assert result["search_profiles_tried"] == [
+        {"mode": "standard", "grid_step_mm": None},
+        {"mode": "bidirectional", "grid_step_mm": 0.5},
+        {"mode": "bidirectional", "grid_step_mm": 0.25},
+        {"mode": "bidirectional", "grid_step_mm": 0.125},
+    ]
+    assert result["attempts"] == 8
+
+
+def test_fallback_candidate_requires_native_bidirectional_acknowledgment(tmp_path, monkeypatch):
+    source, destination = _wire_files(tmp_path, monkeypatch)
+    calls = []
+    monkeypatch.setattr("circuit_weaver.routing_recovery.run_drc", lambda path, **_: _drc(Path(path), 1))
+
+    def worker(_operation, **kwargs):
+        mode = kwargs.get("search_mode", "standard")
+        calls.append(mode)
+        if mode == "standard":
+            return {"status": "error", "message": "no route"}
+        Path(kwargs["output"]).write_bytes(b"unacknowledged candidate")
+        report = _bidirectional_worker_report()
+        report.pop("search_mode")
+        return {"status": "ok", "route_repair": report}
+
+    monkeypatch.setattr("circuit_weaver.routing_recovery.run_kicad", worker)
+    result = recover_routing(source, destination, max_links=1, max_pair_attempts=2)
+
+    assert result["status"] == "partial"
+    assert calls == ["standard", "bidirectional"]
+    assert result["attempts"] == 2
+    assert result["links_repaired"] == 0
+    assert not destination.exists()
+
+
+def test_fine_bidirectional_profile_starts_only_after_coarse_full_sweep(tmp_path, monkeypatch):
+    source, destination = _wire_files(tmp_path, monkeypatch)
+    drc_counts = iter((2, 1, 0, 0))
+    calls = []
+
+    def drc(path, **_):
+        return _drc(Path(path), next(drc_counts))
+
+    def worker(_operation, **kwargs):
+        mode = kwargs.get("search_mode", "standard")
+        grid = kwargs.get("grid_step_mm")
+        pair_index = kwargs["pair_index"]
+        calls.append((mode, grid, pair_index))
+        if mode == "standard" or grid == 0.5:
+            return {"status": "error", "message": "profile did not find a route"}
+        Path(kwargs["output"]).write_bytes(Path(kwargs["board"]).read_bytes() + b" fine routed")
+        return {"status": "ok", "route_repair": _bidirectional_worker_report(0.25)}
+
+    monkeypatch.setattr("circuit_weaver.routing_recovery.run_drc", drc)
+    monkeypatch.setattr("circuit_weaver.routing_recovery.run_kicad", worker)
+    result = recover_routing(source, destination, max_links=2, max_pair_attempts=4)
+
+    assert result["status"] == "ok"
+    assert calls == [
+        ("standard", None, 0), ("standard", None, 1),
+        ("bidirectional", 0.5, 1), ("bidirectional", 0.5, 0),
+        ("bidirectional", 0.25, 1), ("bidirectional", 0.25, 0),
+    ]
+    assert result["search_modes_tried"] == ["standard", "bidirectional"]
+    assert result["search_profiles_tried"] == [
+        {"mode": "standard", "grid_step_mm": None},
+        {"mode": "bidirectional", "grid_step_mm": 0.5},
+        {"mode": "bidirectional", "grid_step_mm": 0.25},
+    ]
+    assert [entry["search_profile_grid_mm"] for entry in result["history"]] == [
+        None, None, 0.5, 0.5, 0.25, 0.25,
+    ]
+
+
+def test_finest_bidirectional_profile_starts_after_coarse_and_fine_sweeps_stall(tmp_path, monkeypatch):
+    source, destination = _wire_files(tmp_path, monkeypatch)
+    drc_counts = iter((1, 0, 0))
+    calls = []
+
+    def drc(path, **_):
+        return _drc(Path(path), next(drc_counts))
+
+    def worker(_operation, **kwargs):
+        mode = kwargs.get("search_mode", "standard")
+        grid = kwargs.get("grid_step_mm")
+        calls.append((mode, grid, kwargs.get("max_expanded_states")))
+        if mode == "standard" or grid in {0.5, 0.25}:
+            return {"status": "error", "message": "profile did not find a route"}
+        Path(kwargs["output"]).write_bytes(Path(kwargs["board"]).read_bytes() + b" finest routed")
+        return {"status": "ok", "route_repair": _bidirectional_worker_report(0.125)}
+
+    monkeypatch.setattr("circuit_weaver.routing_recovery.run_drc", drc)
+    monkeypatch.setattr("circuit_weaver.routing_recovery.run_kicad", worker)
+    result = recover_routing(source, destination, max_links=2, max_pair_attempts=4)
+
+    assert result["status"] == "ok"
+    assert calls == [
+        ("standard", None, None),
+        ("bidirectional", 0.5, 150000),
+        ("bidirectional", 0.25, 150000),
+        ("bidirectional", 0.125, 150000),
+    ]
+    assert result["search_profiles_tried"] == [
+        {"mode": "standard", "grid_step_mm": None},
+        {"mode": "bidirectional", "grid_step_mm": 0.5},
+        {"mode": "bidirectional", "grid_step_mm": 0.25},
+        {"mode": "bidirectional", "grid_step_mm": 0.125},
+    ]
+    assert result["history"][-1]["accepted"] is True
+    assert result["history"][-1]["native_report"]["requested_grid_step_mm"] == 0.125
+    assert result["history"][-1]["native_report"]["search_grid_step_mm"] == 0.125
+    assert result["history"][-1]["native_report"]["search_state_budget"] == 150000
+
+
+def test_fallback_shares_attempt_cap_and_does_not_reset_deadline(tmp_path, monkeypatch):
+    source, destination = _wire_files(tmp_path, monkeypatch)
+    calls = []
+    monkeypatch.setattr("circuit_weaver.routing_recovery.run_drc", lambda path, **_: _drc(Path(path), 1))
+
+    def worker(_operation, **kwargs):
+        calls.append(kwargs.get("search_mode", "standard"))
+        return {"status": "error", "message": "no route"}
+
+    monkeypatch.setattr("circuit_weaver.routing_recovery.run_kicad", worker)
+    capped = recover_routing(source, destination, max_links=1, max_pair_attempts=1)
+    assert capped["status"] == "partial"
+    assert capped["attempts"] == 1
+    assert calls == ["standard"]
+
+    source2, destination2 = _wire_files(tmp_path / "deadline", monkeypatch)
+    clock = [10.0]
+    monkeypatch.setattr("circuit_weaver.routing_recovery.time.monotonic", lambda: clock[0])
+
+    def exhaust_deadline(_operation, **kwargs):
+        calls.append(kwargs.get("search_mode", "standard"))
+        clock[0] = 12.0
+        return {"status": "error", "message": "no route"}
+
+    monkeypatch.setattr("circuit_weaver.routing_recovery.run_kicad", exhaust_deadline)
+    timed = recover_routing(source2, destination2, timeout_seconds=1, max_links=2, max_pair_attempts=2)
+    assert timed["status"] == "partial"
+    assert timed["attempts"] == 1
+    assert timed["search_modes_tried"] == ["standard"]
+    assert calls[-1] == "standard"

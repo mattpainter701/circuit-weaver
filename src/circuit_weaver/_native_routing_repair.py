@@ -202,6 +202,129 @@ def _astar_search(start, goal, layer_count, target_layers, origins, bounds, step
     return path, expanded
 
 
+def _bidirectional_astar_search(start, goal, layer_count, target_layers, origins, bounds, step, max_expanded_states,
+                                  clear_segment, can_change_layer):
+    """Meet two A* fronts on one start-anchored lattice under a shared cap.
+
+    Reverse roots are the floor/ceil lattice points nearest the physical goal
+    that have a legal straight connector to it. Both directions use the same
+    native segment and layer-change predicates and the same movement costs.
+    This is a feasibility candidate search; first-meeting termination does not
+    claim globally minimum path length.
+    """
+    def coordinate(node):
+        return start[0] + node[0] * step, start[1] + node[1] * step
+
+    forward_distance = {node: 0.0 for node in origins}
+    reverse_distance = {}
+    forward_previous = {}
+    reverse_next = {}
+    forward_queue, reverse_queue = [], []
+    sequence = 0
+    for node in sorted(origins):
+        point = coordinate(node)
+        heapq.heappush(forward_queue, (math.dist(point, goal), 0.0, sequence, node))
+        sequence += 1
+
+    xratio = (goal[0] - start[0]) / step
+    yratio = (goal[1] - start[1]) / step
+    xindices = sorted({math.floor(xratio), math.ceil(xratio)})
+    yindices = sorted({math.floor(yratio), math.ceil(yratio)})
+    for layer in sorted(target_layers):
+        for ix in xindices:
+            for iy in yindices:
+                node = (ix, iy, layer)
+                point = coordinate(node)
+                if (not (bounds[0] <= point[0] <= bounds[2] and bounds[1] <= point[1] <= bounds[3])
+                        or not clear_segment(point, goal, layer)):
+                    continue
+                connector_cost = math.dist(point, goal)
+                if connector_cost + 1e-9 >= reverse_distance.get(node, float("inf")):
+                    continue
+                reverse_distance[node] = connector_cost
+                heapq.heappush(reverse_queue,
+                               (connector_cost + math.dist(point, start), connector_cost, sequence, node))
+                sequence += 1
+    if not reverse_queue:
+        return None, 0
+
+    directions = [(x, y) for x in (-1, 0, 1) for y in (-1, 0, 1) if x or y]
+    expanded = 0
+    meeting = None
+
+    def reconstruct(node):
+        left = [node]
+        while left[-1] not in origins:
+            left.append(forward_previous[left[-1]])
+        left.reverse()
+        right = []
+        cursor = node
+        while cursor in reverse_next:
+            cursor = reverse_next[cursor]
+            right.append(cursor)
+        return left + right
+
+    def pop_live(queue, distances):
+        while queue:
+            priority, queued_distance, _, node = heapq.heappop(queue)
+            if queued_distance <= distances.get(node, float("inf")) + 1e-9:
+                return priority, queued_distance, node
+        return None
+
+    while forward_queue and reverse_queue and expanded < max_expanded_states:
+        # Compare each side's current f score; sequence numbers keep ties stable.
+        fscore = forward_queue[0][0]
+        rscore = reverse_queue[0][0]
+        forward_turn = fscore <= rscore
+        queue = forward_queue if forward_turn else reverse_queue
+        distances = forward_distance if forward_turn else reverse_distance
+        current = pop_live(queue, distances)
+        if current is None:
+            if forward_turn:
+                forward_queue.clear()
+            else:
+                reverse_queue.clear()
+            continue
+        _, current_distance, node = current
+        expanded += 1
+        other = reverse_distance if forward_turn else forward_distance
+        if node in other:
+            meeting = node
+            break
+        point = coordinate(node)
+        neighbors = []
+        for dx, dy in directions:
+            candidate = (node[0] + dx, node[1] + dy, node[2])
+            target = coordinate(candidate)
+            if (bounds[0] <= target[0] <= bounds[2] and bounds[1] <= target[1] <= bounds[3]
+                    and clear_segment(point, target, node[2])):
+                neighbors.append((candidate, math.hypot(dx, dy) * step))
+        if can_change_layer(point):
+            neighbors.extend(((node[0], node[1], layer), 4.0)
+                             for layer in range(layer_count) if layer != node[2])
+        for candidate, cost in neighbors:
+            score = current_distance + cost
+            if score + 1e-9 >= distances.get(candidate, float("inf")):
+                continue
+            distances[candidate] = score
+            if forward_turn:
+                forward_previous[candidate] = node
+                heuristic = math.dist(coordinate(candidate), goal)
+            else:
+                reverse_next[candidate] = node
+                heuristic = math.dist(coordinate(candidate), start)
+            heapq.heappush(queue, (score + heuristic, score, sequence, candidate))
+            sequence += 1
+            if candidate in other:
+                meeting = candidate
+                break
+        if meeting is not None:
+            break
+    if meeting is None:
+        return None, expanded
+    return reconstruct(meeting), expanded
+
+
 def _search_with_fallback(start, goal, layer_count, target_layers, origins, bounds, grid_step_mm,
                           max_expanded_states, clear_segment, can_change_layer):
     """Search long spans on a coarse grid first, sharing one hard state budget."""
@@ -308,7 +431,8 @@ def _class_rules(board, pcbnew, net_name):
     return width, diameter, drill, clearance
 
 
-def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=150000, grid_step_mm=0.25):
+def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=150000,
+               grid_step_mm=0.25, search_mode="standard"):
     """Add one bounded A* candidate for a fresh DRC explicit UUID pair."""
     import _kicad_worker as worker
     try:
@@ -318,6 +442,8 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
 
     if list(board.Zones()):
         raise ValueError("same-net repair requires a board without zones")
+    if not isinstance(search_mode, str) or search_mode not in {"standard", "bidirectional"}:
+        raise ValueError("repair search mode is invalid")
     if isinstance(pair_index, bool) or not isinstance(pair_index, int) or pair_index < 0:
         raise ValueError("pair_index must be a nonnegative integer")
     if (
@@ -567,12 +693,20 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
     origins = {(0, 0, i) for i, layer_id in enumerate(stack) if first.IsOnLayer(layer_id)}
     if not origins or not any(last.IsOnLayer(layer_id) for layer_id in stack):
         raise ValueError("endpoints do not occupy supported copper layers")
-    path, step, expanded, search_origin, search_goal, reverse = _search_with_fallback(
-        start, goal, len(stack),
-        {i for i, layer_id in enumerate(stack) if last.IsOnLayer(layer_id)},
-        origins, bounds, grid_step_mm, max_expanded_states,
-        lambda a, b, layer: clear_segment(a, b, stack[layer]), can_change_layer,
-    )
+    target_layers = {i for i, layer_id in enumerate(stack) if last.IsOnLayer(layer_id)}
+    if search_mode == "bidirectional":
+        path, expanded = _bidirectional_astar_search(
+            start, goal, len(stack), target_layers, origins, bounds,
+            grid_step_mm, max_expanded_states,
+            lambda a, b, layer: clear_segment(a, b, stack[layer]), can_change_layer,
+        )
+        step, search_origin, search_goal, reverse = float(grid_step_mm), start, goal, False
+    else:
+        path, step, expanded, search_origin, search_goal, reverse = _search_with_fallback(
+            start, goal, len(stack), target_layers,
+            origins, bounds, grid_step_mm, max_expanded_states,
+            lambda a, b, layer: clear_segment(a, b, stack[layer]), can_change_layer,
+        )
     if path is None:
         raise RuntimeError(f"no collision-free repair within {expanded} native search states")
     points = _physical_search_points(path, step, search_origin, search_goal, reverse, stack)
@@ -613,9 +747,12 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
         "added_tracks": added_tracks,
         "added_vias": added_vias,
         "expanded_states": expanded,
+        "search_mode": search_mode,
         "requested_grid_step_mm": float(grid_step_mm),
         "search_grid_step_mm": step,
-        "search_direction": "reverse" if reverse else "forward",
+        "search_direction": (
+            "bidirectional" if search_mode == "bidirectional" else ("reverse" if reverse else "forward")
+        ),
         "search_state_budget": max_expanded_states,
         "resolved_track_width_mm": width,
         "resolved_via_diameter_mm": diameter,

@@ -18,10 +18,13 @@ class _RepairDispatched(Exception):
 @pytest.mark.parametrize(
     ("request_fields", "expected"),
     [
-        ({}, {"pair_index": 0, "max_expanded_states": 150_000, "grid_step_mm": 0.25}),
+        ({}, {"pair_index": 0, "max_expanded_states": 150_000, "grid_step_mm": 0.25,
+              "search_mode": "standard"}),
         (
-            {"pair_index": 7, "max_expanded_states": 1, "grid_step_mm": 1.0},
-            {"pair_index": 7, "max_expanded_states": 1, "grid_step_mm": 1.0},
+            {"pair_index": 7, "max_expanded_states": 1, "grid_step_mm": 1.0,
+             "search_mode": "bidirectional"},
+            {"pair_index": 7, "max_expanded_states": 1, "grid_step_mm": 1.0,
+             "search_mode": "bidirectional"},
         ),
     ],
     ids=("backward-compatible-defaults", "explicit-bounded-profile"),
@@ -81,4 +84,13 @@ def test_forwarded_search_bounds_are_rejected_before_native_mutation(
             {"unconnected_items": []},
             max_expanded_states=max_expanded_states,
             grid_step_mm=grid_step_mm,
+        )
+
+
+@pytest.mark.parametrize("search_mode", [None, True, [], "unknown"])
+def test_unknown_search_mode_is_rejected_before_native_mutation(monkeypatch, search_mode):
+    monkeypatch.setitem(sys.modules, "_kicad_worker", SimpleNamespace())
+    with pytest.raises(ValueError, match="repair search mode is invalid"):
+        repair.repair_one(
+            SimpleNamespace(Zones=lambda: []), SimpleNamespace(), {}, search_mode=search_mode,
         )

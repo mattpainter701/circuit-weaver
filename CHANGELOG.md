@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Request all native track errors and identify KiCad's per-error-code diagnostic
+  limits. Expose potentially incomplete reports to Python/CLI/MCP callers and
+  reject them as complete recovery or acceptance evidence.
+- Add a bidirectional native search after ordinary routing recovery stalls.
+  Keep the existing search profiles and shared recovery deadline/attempt caps;
+  accept fallback copper only after acknowledged search limits, preserved source
+  state, and a fresh full native DRC with fewer open connections.
 - Apply explicit search-grid and state-budget settings in native same-net repair
   requests, and report the requested grid alongside the grid used by a candidate.
   This lets automation verify its search limits before accepting native results.

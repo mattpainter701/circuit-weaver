@@ -1811,6 +1811,7 @@ def execute(request):
             pair_index=request.get("pair_index", 0),
             max_expanded_states=request.get("max_expanded_states", 150000),
             grid_step_mm=request.get("grid_step_mm", 0.25),
+            search_mode=request.get("search_mode", "standard"),
         )
         if (_identity(board) != identity or original_layout != _fixed_layout_state(board)
                 or original_board_geometry != _ground_plane_source_geometry_state(board, pcbnew)):

@@ -190,6 +190,16 @@ def recover_routing(
     remaining_open: int | None = None
     attempts = 0
     links = 0
+    search_mode = "standard"
+    search_modes_tried = [search_mode]
+    search_profiles = [
+        ("standard", None),
+        ("bidirectional", 0.5),
+        ("bidirectional", 0.25),
+        ("bidirectional", 0.125),
+    ]
+    search_profile_index = 0
+    search_profiles_tried = [{"mode": search_mode, "grid_step_mm": None}]
     try:
         if (
             isinstance(timeout_seconds, bool)
@@ -254,9 +264,25 @@ def recover_routing(
             remaining_open = initial_open
             failed_pairs: set[tuple[str, str, str]] = set()
             attempt_budget = max_links * max_pair_attempts
+
+            def write_history(status: str, **extra: Any) -> None:
+                _write_json(
+                    evidence_root / "history.json",
+                    {
+                        "status": status,
+                        "history": history,
+                        "source_sha256": original_hash,
+                        "search_modes_tried": list(search_modes_tried),
+                        "search_profiles_tried": list(search_profiles_tried),
+                        **extra,
+                    },
+                )
+
             _write_json(
                 evidence_root / "history.json",
-                {"status": "running", "history": history, "source_sha256": original_hash},
+                {"status": "running", "history": history, "source_sha256": original_hash,
+                 "search_modes_tried": list(search_modes_tried),
+                 "search_profiles_tried": list(search_profiles_tried)},
             )
             while before.blocker_count:
                 if links >= max_links or attempts >= attempt_budget:
@@ -269,7 +295,10 @@ def recover_routing(
                 # to crowd out untouched pairs.
                 pair_order = sorted(
                     range(len(ordered_pairs)),
-                    key=lambda index: (_pair_key(ordered_pairs[index]) in failed_pairs, index),
+                    key=lambda index: (
+                        _pair_key(ordered_pairs[index]) in failed_pairs,
+                        -index if search_mode == "bidirectional" else index,
+                    ),
                 )
                 for pair_index in pair_order:
                     if attempts >= attempt_budget:
@@ -280,15 +309,23 @@ def recover_routing(
                     candidate = attempt_dir / "candidate.kicad_pcb"
                     step_snapshots = _prepare_settings(current, candidate, project_context=source.parent)
                     _check_snapshots(snapshots)
-                    response = run_kicad(
-                        "repair_open",
-                        board=str(current),
-                        output=str(candidate),
-                        drc_report=before.raw_report,
-                        pair_index=pair_index,
-                        timeout=_remaining(deadline),
-                        python_path=kicad_python_path,
-                    )
+                    request = {
+                        "board": str(current),
+                        "output": str(candidate),
+                        "drc_report": before.raw_report,
+                        "pair_index": pair_index,
+                        "timeout": _remaining(deadline),
+                        "python_path": kicad_python_path,
+                    }
+                    if search_mode == "bidirectional":
+                        request.update(
+                            {
+                                "search_mode": "bidirectional",
+                                "grid_step_mm": search_profiles[search_profile_index][1],
+                                "max_expanded_states": 150000,
+                            }
+                        )
+                    response = run_kicad("repair_open", **request)
                     if candidate.is_file():
                         _restore_settings(current, candidate, step_snapshots)
                     else:
@@ -296,6 +333,8 @@ def recover_routing(
                     _check_snapshots(snapshots)
                     entry = {
                         "attempt": attempts,
+                        "search_mode": search_mode,
+                        "search_profile_grid_mm": search_profiles[search_profile_index][1],
                         "pair_index": pair_index,
                         "pair_key": list(_pair_key(ordered_pairs[pair_index])),
                         "before_sha256": _sha256(current),
@@ -336,6 +375,35 @@ def recover_routing(
                         and numeric_fields_ok
                         and candidate.is_file()
                     )
+                    if search_mode == "bidirectional":
+                        requested_step = report.get("requested_grid_step_mm") if isinstance(report, dict) else None
+                        actual_step = report.get("search_grid_step_mm") if isinstance(report, dict) else None
+                        state_budget = report.get("search_state_budget") if isinstance(report, dict) else None
+                        expanded_states = report.get("expanded_states") if isinstance(report, dict) else None
+                        report_ok = report_ok and (
+                            report.get("search_mode") == "bidirectional"
+                            and report.get("search_direction") == "bidirectional"
+                            and isinstance(requested_step, (int, float))
+                            and not isinstance(requested_step, bool)
+                            and math.isfinite(requested_step)
+                            and math.isclose(
+                                requested_step, search_profiles[search_profile_index][1],
+                                rel_tol=0.0, abs_tol=1e-12,
+                            )
+                            and isinstance(actual_step, (int, float))
+                            and not isinstance(actual_step, bool)
+                            and math.isfinite(actual_step)
+                            and math.isclose(
+                                actual_step, search_profiles[search_profile_index][1],
+                                rel_tol=0.0, abs_tol=1e-12,
+                            )
+                            and isinstance(state_budget, int)
+                            and not isinstance(state_budget, bool)
+                            and state_budget == 150000
+                            and isinstance(expanded_states, int)
+                            and not isinstance(expanded_states, bool)
+                            and 0 < expanded_states <= 150000
+                        )
                     if report_ok:
                         after = run_drc(
                             candidate,
@@ -390,7 +458,9 @@ def recover_routing(
                         accepted_this_round = True
                         _write_json(
                             evidence_root / "history.json",
-                            {"status": "running", "history": history, "source_sha256": original_hash},
+                            {"status": "running", "history": history, "source_sha256": original_hash,
+                             "search_modes_tried": list(search_modes_tried),
+                             "search_profiles_tried": list(search_profiles_tried)},
                         )
                         break
                     entry["accepted"] = False
@@ -414,9 +484,31 @@ def recover_routing(
                     history.append(entry)
                     _write_json(
                         evidence_root / "history.json",
-                        {"status": "running", "history": history, "source_sha256": original_hash},
+                        {"status": "running", "history": history, "source_sha256": original_hash,
+                         "search_modes_tried": list(search_modes_tried),
+                         "search_profiles_tried": list(search_profiles_tried)},
                     )
                 if not accepted_this_round:
+                    if (search_profile_index + 1 < len(search_profiles)
+                            and attempts < attempt_budget and links < max_links
+                            and time.monotonic() < deadline):
+                        # Advance only after a complete no-progress sweep. All
+                        # profiles share the original caps and never oscillate.
+                        search_profile_index += 1
+                        search_mode = search_profiles[search_profile_index][0]
+                        if search_mode not in search_modes_tried:
+                            search_modes_tried.append(search_mode)
+                        search_profiles_tried.append(
+                            {"mode": search_mode,
+                             "grid_step_mm": search_profiles[search_profile_index][1]}
+                        )
+                        failed_pairs.clear()
+                        write_history(
+                            "running",
+                            profile_transition_after_attempt=attempts,
+                            active_profile=search_profiles_tried[-1],
+                        )
+                        continue
                     break
             _check_snapshots(snapshots)
             _write_json(
@@ -424,6 +516,8 @@ def recover_routing(
                 {
                     "status": "routing_complete_pending_final_drc" if before.blocker_count == 0 else "partial",
                     "history": history,
+                    "search_modes_tried": list(search_modes_tried),
+                    "search_profiles_tried": list(search_profiles_tried),
                     "source_sha256": original_hash,
                     "remaining_open_count": _open_count(before),
                 },
@@ -438,6 +532,8 @@ def recover_routing(
                     "links_repaired": links,
                     "attempts": attempts,
                     "history": history,
+                    "search_modes_tried": list(search_modes_tried),
+                    "search_profiles_tried": list(search_profiles_tried),
                     "partial_board": str(evidence_root / "partial-progress.kicad_pcb") if evidence_root else None,
                     "evidence_dir": str(evidence_root),
                     "fabrication_ready": False,
@@ -477,6 +573,8 @@ def recover_routing(
                 {
                     "status": "completed",
                     "history": history,
+                    "search_modes_tried": list(search_modes_tried),
+                    "search_profiles_tried": list(search_profiles_tried),
                     "source_sha256": original_hash,
                     "board_sha256": _sha256(destination),
                     "final_drc": final_drc.to_dict(),
@@ -494,6 +592,8 @@ def recover_routing(
             "links_repaired": links,
             "attempts": attempts,
             "history": history,
+            "search_modes_tried": list(search_modes_tried),
+            "search_profiles_tried": list(search_profiles_tried),
             "drc": {**final_drc.to_dict(), "board": str(destination)},
             "fabrication_ready": False,
             "evidence_dir": str(evidence_root),
@@ -515,6 +615,8 @@ def recover_routing(
                         "status": "error",
                         "message": str(exc),
                         "history": history,
+                        "search_modes_tried": list(search_modes_tried),
+                        "search_profiles_tried": list(search_profiles_tried),
                         "source_sha256": original_hash,
                         "initial_open_count": initial_open,
                         "remaining_open_count": remaining_open,
@@ -536,6 +638,8 @@ def recover_routing(
             "links_repaired": links,
             "attempts": attempts,
             "history": history,
+            "search_modes_tried": list(search_modes_tried),
+            "search_profiles_tried": list(search_profiles_tried),
             "partial_board": str(partial_path) if partial_exists else None,
             "partial_board_sha256": partial_hash,
             "evidence_dir": str(evidence_root) if evidence_root is not None and evidence_root.exists() else None,

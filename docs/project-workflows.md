@@ -541,6 +541,30 @@ private repair candidates. The shared recovery runner requires a fresh full
 native DRC and preserved source state before accepting each candidate, and
 publishes a board only after all open connections are closed.
 
+Recovery first runs the existing forward/reverse search profiles. After a full
+sweep makes no progress, it can switch to `search_mode="bidirectional"` on a
+0.5 mm grid, followed by 0.25 mm and 0.125 mm grids if each preceding sweep stalls.
+Bidirectional sweeps prioritize longer untouched connections. Both fronts
+share one start-anchored lattice; goal-side roots need
+an exact legal connection to the physical endpoint. First meeting produces a
+feasible candidate and does not establish the shortest route. The fallback
+remains on its current grid after accepted links and moves only toward the next
+profile after a complete no-progress sweep. Every
+request retains the 150,000-state ceiling and consumes the original shared
+recovery deadline and attempt allowance. Recovery verifies the worker's mode,
+requested and actual grid, and state limit before running full native DRC.
+Attempt evidence records the search mode and profile, and results record the
+modes and grid profiles tried.
+
+Native DRC requests all track errors. KiCad 8/9/10 also impose separate limits
+of 199 reported findings per error code, with 499 for clearance and unconnected
+items. Reaching a limit does not establish the total number of faults. Such
+results retain the findings and successful tool status, but report
+`diagnostics_complete=false`, `native_error_limits_reached`, and
+`native_diagnostics_may_be_truncated=true`. They cannot pass acceptance or serve
+as a complete recovery inventory. A clean report below these limits retains
+the ordinary acceptance checks.
+
 Native recovery treats non-plated mounting holes as drill geometry across every
 enabled copper layer, including circular and slotted holes. Tracks and via copper
 must respect the board's copper-to-hole clearance; candidate via drills must also

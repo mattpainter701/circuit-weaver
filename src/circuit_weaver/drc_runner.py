@@ -9,8 +9,9 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,8 @@ class DrcResult:
     raw_report: Mapping[str, Any] | None = None
     failure_reason: str = ""
     library_context: Mapping[str, Any] | None = None
+    diagnostics_complete: bool = True
+    native_error_limits_reached: Mapping[str, int] = field(default_factory=dict)
 
     @property
     def blocker_count(self) -> int:
@@ -46,7 +49,7 @@ class DrcResult:
 
     @property
     def passed(self) -> bool:
-        return self.status == "ok" and self.blocker_count == 0
+        return self.status == "ok" and self.blocker_count == 0 and self.diagnostics_complete
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -59,6 +62,9 @@ class DrcResult:
             "passed": self.passed,
             "failure_reason": self.failure_reason,
             "library_context": _public_library_context(self.library_context),
+            "diagnostics_complete": self.diagnostics_complete,
+            "native_diagnostics_may_be_truncated": not self.diagnostics_complete,
+            "native_error_limits_reached": dict(self.native_error_limits_reached),
             "findings": [finding.to_dict() for finding in self.findings],
         }
 
@@ -78,6 +84,10 @@ _KNOWN_RULE_NUMBERS = {
     "lib_footprint_issues": 12,
     "schematic_parity": 13,
 }
+
+_NATIVE_DRC_ERROR_LIMIT = 199
+_NATIVE_DRC_EXTENDED_ERROR_LIMIT = 499
+_NATIVE_DRC_EXTENDED_ERROR_TYPES = {"clearance", "unconnected_items"}
 
 
 def _kicad_cli_path() -> Path | None:
@@ -149,6 +159,20 @@ def _raw_findings(raw: Mapping[str, Any]) -> list[dict[str, Any]]:
             row.setdefault("type", fallback_type)
             rows.append(row)
     return rows
+
+
+def _native_error_limits_reached(raw: Mapping[str, Any]) -> dict[str, int]:
+    counts = Counter(str(row.get("type") or "unknown").strip().lower() for row in _raw_findings(raw))
+    reached: dict[str, int] = {}
+    for error_type, count in counts.items():
+        limit = (
+            _NATIVE_DRC_EXTENDED_ERROR_LIMIT
+            if error_type in _NATIVE_DRC_EXTENDED_ERROR_TYPES
+            else _NATIVE_DRC_ERROR_LIMIT
+        )
+        if count >= limit:
+            reached[error_type] = limit
+    return reached
 
 
 def _object_refs(row: Mapping[str, Any]) -> tuple[str, str]:
@@ -300,7 +324,17 @@ def run_drc(
             if installed_context.get("status") == "staged":
                 run_env[str(installed_context["footprint_env"])] = str(installed_context["effective_root"])
             process = subprocess.run(
-                [str(cli), "pcb", "drc", "--format", "json", "--output", str(report_path), str(staged_board)],
+                [
+                    str(cli),
+                    "pcb",
+                    "drc",
+                    "--format",
+                    "json",
+                    "--all-track-errors",
+                    "--output",
+                    str(report_path),
+                    str(staged_board),
+                ],
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
@@ -391,12 +425,26 @@ def run_drc(
                 failure_reason="kicad-cli version output did not match the selected executable",
                 library_context=_public_library_context(installed_context),
             )
+        native_error_limits_reached = _native_error_limits_reached(raw)
+        diagnostics_complete = not native_error_limits_reached
+        raw["native_diagnostics_may_be_truncated"] = not diagnostics_complete
+        raw["native_error_limits_reached"] = dict(native_error_limits_reached)
         observed_count = len(_raw_findings(raw))
+        cap_detail = ", ".join(
+            f"{error_type} ({limit})" for error_type, limit in sorted(native_error_limits_reached.items())
+        )
+        diagnostics_failure_reason = (
+            f"Native DRC diagnostic limit reached; findings may be omitted: {cap_detail}"
+            if native_error_limits_reached
+            else ""
+        )
         claim = json.dumps(
             {
                 "board_sha256": board_hash,
                 "kicad_version": tool_version,
                 "observed_findings": observed_count,
+                "diagnostics_complete": diagnostics_complete,
+                "native_error_limits_reached": native_error_limits_reached,
                 "library_context_status": installed_context.get("status", "unavailable"),
                 "stock_table_sha256": installed_context.get("sha256", ""),
                 "generated_table_sha256": installed_context.get("generated_table_sha256", ""),
@@ -439,7 +487,10 @@ def run_drc(
             evidence_id=evidence_id,
             findings=findings,
             raw_report=raw,
+            failure_reason=diagnostics_failure_reason,
             library_context=_public_library_context(installed_context),
+            diagnostics_complete=diagnostics_complete,
+            native_error_limits_reached=native_error_limits_reached,
         )
     except subprocess.TimeoutExpired:
         return DrcResult(
