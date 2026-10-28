@@ -89,6 +89,44 @@ def test_native_point_rounding_avoids_reproduced_one_iu_truncation():
     )
 
 
+@pytest.mark.parametrize("width_iu,edge_iu,expected", [
+    (200_000, 500_000, 600_000),
+    (600_000, 500_000, 800_000),
+    (200_001, 500_000, 600_001),
+    (0, 0, 0),
+])
+def test_edge_search_margin_adds_edge_clearance_to_copper_radius(width_iu, edge_iu, expected):
+    assert repair._edge_margin_iu(width_iu, edge_iu) == expected
+
+
+@pytest.mark.parametrize("width_iu,edge_iu", [(True, 1), (-1, 1), (1, -1), (1.5, 1)])
+def test_edge_search_margin_rejects_invalid_native_constraints(width_iu, edge_iu):
+    with pytest.raises(ValueError, match="native IU integer"):
+        repair._edge_margin_iu(width_iu, edge_iu)
+
+
+def test_segment_edge_check_uses_track_and_via_specific_margin():
+    outline = (0, 0, 10_000_000, 10_000_000)
+    track_margin = repair._edge_margin_iu(200_000, 500_000)
+    via_margin = repair._edge_margin_iu(600_000, 500_000)
+
+    assert repair._segment_inside_edge_margin((600_000, 600_000), (9_400_000, 600_000), outline, track_margin)
+    assert not repair._segment_inside_edge_margin((599_999, 600_000), (9_400_000, 600_000), outline, track_margin)
+    assert repair._segment_inside_edge_margin((800_000, 800_000), (9_200_000, 800_000), outline, via_margin)
+    assert not repair._segment_inside_edge_margin((799_999, 800_000), (9_200_000, 800_000), outline, via_margin)
+
+
+def test_track_search_can_use_wire_only_strip_outside_via_margin():
+    outline = (0, 0, 10_000_000, 10_000_000)
+    track_margin = repair._edge_margin_iu(200_000, 500_000)
+    via_margin = repair._edge_margin_iu(600_000, 500_000)
+
+    assert track_margin == 600_000
+    assert via_margin == 800_000
+    assert repair._segment_inside_edge_margin((600_000, 1_000_000), (2_000_000, 1_000_000), outline, track_margin)
+    assert not repair._segment_inside_edge_margin((600_000, 1_000_000), (2_000_000, 1_000_000), outline, via_margin)
+
+
 class _Pad:
     def __init__(self, name="SIG", code=1, class_name="Default", uuid="pad-1"):
         self.name = name
@@ -123,6 +161,7 @@ class _Board:
             m_ViasMinSize=500_000,
             m_MinThroughDrill=300_000,
             m_MinClearance=100_000,
+            m_CopperEdgeClearance=500_000,
         )
 
 
@@ -130,6 +169,10 @@ class _Pcbnew:
     @staticmethod
     def ToMM(value):
         return value / 1_000_000
+
+    @staticmethod
+    def FromMM(value):
+        return int(round(value * 1_000_000))
 
 
 def _write_project(tmp_path, classes):
@@ -206,6 +249,24 @@ class _RouteBoard:
         return [SimpleNamespace(Pads=lambda: self.items)]
 
 
+class _RulesRouteBoard(_RouteBoard):
+    def __init__(self, path, items):
+        super().__init__(items)
+        self.path = str(path)
+
+    def GetFileName(self):
+        return self.path
+
+    def GetDesignSettings(self):
+        return SimpleNamespace(
+            m_TrackMinWidth=200_000,
+            m_ViasMinSize=500_000,
+            m_MinThroughDrill=300_000,
+            m_MinClearance=100_000,
+            m_CopperEdgeClearance=500_000,
+        )
+
+
 def _drc_pair(first, second, *, nets=None):
     entries = [
         {"uuid": first.m_Uuid.AsString(), "pos": {"x": 0, "y": 0}},
@@ -250,6 +311,19 @@ def test_repair_rejects_actual_cross_net_pair(monkeypatch):
 
     with pytest.raises(ValueError, match="same positive native net"):
         repair.repair_one(board, _Pcbnew, _drc_pair(first, second))
+
+
+def test_native_repair_rejects_unsupported_custom_edge_rule_before_geometry(monkeypatch, tmp_path):
+    _install_worker_stub(monkeypatch)
+    first, second = _Pad(uuid="pad-1"), _Pad(uuid="pad-2")
+    path = _write_project(tmp_path, [_class_row()])
+    path.with_suffix(".kicad_dru").write_text(
+        '(rule "edge" (constraint edge_clearance (min 0.8mm)))\n', encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="custom KiCad edge_clearance rules"):
+        repair.repair_one(_RulesRouteBoard(path, [first, second]), _Pcbnew,
+                          _drc_pair(first, second))
 
 
 def test_missing_report_net_is_accepted_after_native_uuid_and_net_validation(monkeypatch):

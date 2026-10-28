@@ -486,6 +486,12 @@ def _rectangular_outline_bounds_iu(edges, pcbnew):
 
 
 def _inspect(board, pcbnew, include_route_geometry=False):
+    try:
+        from _native_board_rules import native_edge_clearance_metadata
+    except ImportError:  # package-level inspection tests; worker execution uses sibling import
+        from ._native_board_rules import native_edge_clearance_metadata
+
+    edge_clearance = native_edge_clearance_metadata(board, pcbnew)
     footprints = []
     tracks, vias = [], []
     copper_layer_ids, copper_layer_inventory_complete = _native_copper_layer_inventory(board, pcbnew)
@@ -710,6 +716,7 @@ def _inspect(board, pcbnew, include_route_geometry=False):
             "copper_layer_inventory_complete": copper_stack_complete,
             "pad_connectivity_inventory_complete": pad_connectivity_inventory_complete,
             "rectangular_outline": outline_bounds is not None,
+            "native_edge_clearance": edge_clearance,
             "bounds": dict(zip(("x", "y", "width", "height"), (pcbnew.ToMM(value) for value in bounds)))}
     if include_route_geometry:
         zone_nets = []
@@ -1519,9 +1526,16 @@ def execute(request):
         return {"status": "ok", **_inspect(board, pcbnew,
                                              include_route_geometry=bool(request.get("include_route_geometry")))}
     if operation == "export_dsn":
+        try:
+            from _native_board_rules import native_edge_clearance
+        except ImportError:  # package-level unit tests
+            from ._native_board_rules import native_edge_clearance
+
+        edge_clearance = native_edge_clearance(board, pcbnew)
         if not pcbnew.ExportSpecctraDSN(board, request["output"]):
             raise ValueError("KiCad Specctra export failed; check the board outline and netlist")
-        return {"status": "ok", "version": pcbnew.Version()}
+        return {"status": "ok", "version": pcbnew.Version(),
+                "native_edge_clearance": {"status": "ok", **edge_clearance}}
     if operation == "import_ses":
         placements = {f.GetReference(): (f.GetPosition().x, f.GetPosition().y, f.GetOrientationDegrees(), f.GetLayer())
                       for f in board.GetFootprints()}

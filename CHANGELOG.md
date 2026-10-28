@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Carry KiCad's project-backed copper-to-edge minimum into native-board
+  autorouting and radius-aware repair checks. Reject unsupported custom edge
+  constraints before routing, preserve authored rules and outlines, and retain
+  fresh full native DRC as the publication gate.
 - Search long native repairs from both endpoint grids on a coarse lattice,
   sharing the existing state cap with fine-grid fallbacks and preserving short
   connection behavior, native collision checks and final DRC requirements.

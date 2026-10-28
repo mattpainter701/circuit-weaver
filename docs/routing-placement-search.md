@@ -340,3 +340,13 @@ Native-board autorouting adds a 0.01 mm clearance margin to generic DSN rules,
 preserving typed exceptions, to accommodate observed export/router/import
 geometry differences. The result reports the applied margin. This does not change native board/project rules or
 caller-provided DSN files; the imported board must still pass native DRC.
+
+Native-board routing also reads the matching KiCad project's copper-to-edge
+minimum and supplies it separately to the supported FreeRouting CLI. KiCad's
+DSN export does not carry that minimum reliably. The routing result records the
+native value and its transport; the board outline and authored rules stay
+unchanged. Native repair checks include the track or via radius in its edge
+distance. Custom `.kicad_dru` `edge_clearance` constraints currently block
+automatic routing because a single board-wide setting cannot represent their
+conditional rules. Read-only inspection remains available. Standalone DSN
+inputs have no native project context from which to recover a missing rule.

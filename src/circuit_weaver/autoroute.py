@@ -826,6 +826,78 @@ def _validate_timeout(timeout_seconds: float, label: str) -> str | None:
     return None
 
 
+def _validated_native_edge_clearance(value: Any) -> dict[str, Any] | None:
+    """Validate the native worker's edge-clearance evidence before transport."""
+    if not isinstance(value, dict) or value.get("status") != "ok":
+        return None
+    iu = value.get("value_iu")
+    mm = value.get("value_mm")
+    um = value.get("value_um")
+    source = value.get("source")
+    if (
+        not isinstance(mm, (int, float))
+        or isinstance(mm, bool)
+        or not isinstance(um, (int, float))
+        or isinstance(um, bool)
+    ):
+        return None
+    try:
+        mm_number = float(mm)
+        um_number = float(um)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    if (
+        not isinstance(iu, int)
+        or isinstance(iu, bool)
+        or iu < 0
+        or not math.isfinite(mm_number)
+        or mm_number < 0
+        or not math.isfinite(um_number)
+        or um_number < 0
+        or source != "BOARD_DESIGN_SETTINGS.m_CopperEdgeClearance"
+        or not math.isclose(um_number, mm_number * 1000.0, rel_tol=1e-12, abs_tol=1e-9)
+        or not math.isclose(mm_number, iu / 1_000_000.0, rel_tol=1e-12, abs_tol=1e-9)
+    ):
+        return None
+    return {"status": "ok", "value_iu": iu, "value_mm": mm_number, "value_um": um_number, "source": source}
+
+
+def _freerouting_supports_copper_to_edge_clearance(capability_probe: dict[str, Any] | None) -> bool:
+    """The native edge override is supported by the pinned 2.4.1+ router line."""
+    if not (capability_probe or {}).get("probe_ok"):
+        return False
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)", str((capability_probe or {}).get("version") or ""))
+    return bool(match and tuple(map(int, match.groups())) >= (2, 4, 1))
+
+
+def _inspect_native_edge_clearance(
+    pcb_path: str | Path,
+    *,
+    kicad_python_path: str | Path | None,
+    timeout_seconds: float,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Read the effective edge rule from this same staged native board."""
+    from .kicad_bridge import run_kicad
+
+    try:
+        inspection = run_kicad(
+            "inspect",
+            board=str(Path(pcb_path).resolve()),
+            python_path=kicad_python_path,
+            timeout=min(timeout_seconds, 60),
+        )
+    except Exception as exc:
+        return None, f"Could not inspect native copper-to-edge clearance: {exc}"
+    if not isinstance(inspection, dict) or inspection.get("status") != "ok":
+        return None, "Native board inspection could not establish copper-to-edge clearance"
+    edge = _validated_native_edge_clearance(inspection.get("native_edge_clearance"))
+    if edge is None:
+        details = inspection.get("native_edge_clearance")
+        detail = details.get("message") if isinstance(details, dict) else None
+        return None, "Native copper-to-edge clearance is unavailable or unsupported" + (f": {detail}" if detail else "")
+    return edge, None
+
+
 def _prepare_destination(path: Path, *, overwrite: bool) -> str | None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -922,6 +994,16 @@ def export_dsn(
     kicad_cli = _find_kicad_cli(kicad_cli_path)
     cli_export = bool(kicad_cli and _kicad_cli_supports_specctra(kicad_cli, timeout_seconds=min(timeout_seconds, 10)))
 
+    native_edge_clearance: dict[str, Any] | None = None
+    if cli_export:
+        native_edge_clearance, edge_error = _inspect_native_edge_clearance(
+            source,
+            kicad_python_path=kicad_python_path,
+            timeout_seconds=timeout_seconds,
+        )
+        if edge_error:
+            return _result_error(edge_error)
+
     staging = _staging_path(destination)
     try:
         if not cli_export:
@@ -940,6 +1022,12 @@ def export_dsn(
                     "Automatic Specctra export requires KiCad's pcbnew Python API. "
                     + result["message"]
                     + ". Alternatively export Specctra DSN in PCB Editor and route that .dsn file."
+                )
+            native_edge_clearance = _validated_native_edge_clearance(result.get("native_edge_clearance"))
+            if native_edge_clearance is None:
+                _remove_staging_file(staging)
+                return _result_error(
+                    "Native Specctra export did not provide a supported copper-to-edge clearance value"
                 )
             result = subprocess.CompletedProcess([], 0, "", "")
         else:
@@ -980,6 +1068,7 @@ def export_dsn(
             "output_path": str(destination),
             "output_kind": "specctra_dsn",
             "artifact": validation,
+            "native_edge_clearance": native_edge_clearance,
         }
         if clearance_guardband is not None:
             result_payload["routing_clearance_guardband"] = clearance_guardband
@@ -1696,6 +1785,7 @@ def _route_specctra(
     optimizer_improvement_threshold: float | None,
     seed: int | None,
     capability_probe: dict[str, Any] | None,
+    native_edge_clearance: dict[str, Any] | None = None,
     clearance_baseline: dict[str, Any] | None = None,
     logs_root: Path | None = None,
     allow_partial_nets: bool = False,
@@ -1719,6 +1809,15 @@ def _route_specctra(
     ]
     if headless:
         routing_command.append("--gui.enabled=false")
+    edge_clearance_argument = None
+    if native_edge_clearance is not None:
+        edge = _validated_native_edge_clearance(native_edge_clearance)
+        if edge is None or not _freerouting_supports_copper_to_edge_clearance(capability_probe):
+            _remove_staging_file(staging)
+            return _result_error("Native copper-to-edge clearance transport is unavailable or unsupported")
+        edge_clearance_um = Decimal(edge["value_iu"]) / Decimal(1000)
+        edge_clearance_argument = f"--router.copper_to_edge_clearance_um={edge_clearance_um:f}"
+        routing_command.append(edge_clearance_argument)
     if _modern_router(capability_probe):
         # Default fine-pitch fanout/necking can introduce copper below the
         # imported class width. Route with the DSN widths and vias instead.
@@ -1880,6 +1979,20 @@ def _route_specctra(
             "optimizer_item_selection": optimizer_item_selection,
             "optimizer_improvement_threshold": optimizer_improvement_threshold,
             "seed": seed,
+            **(
+                {
+                    "native_edge_clearance": {
+                        "value_iu": native_edge_clearance["value_iu"],
+                        "value_mm": native_edge_clearance["value_mm"],
+                        "value_um": native_edge_clearance["value_um"],
+                        "source": native_edge_clearance["source"],
+                        "transport": "--router.copper_to_edge_clearance_um",
+                        "argv": edge_clearance_argument,
+                    }
+                }
+                if native_edge_clearance is not None
+                else {"native_edge_clearance": {"status": "unavailable_for_raw_dsn"}}
+            ),
             **({"timeout_budget": timeout_budget} if cooperative_partial_timeout else {}),
         }
         validation = _validate_specctra_artifact(
@@ -2486,6 +2599,12 @@ def autoroute_pcb(
         freerouting_command,
         timeout_seconds=min(timeout_seconds, 10),
     )
+    if source_suffix == ".kicad_pcb" and not _freerouting_supports_copper_to_edge_clearance(capability_probe):
+        return _result_error(
+            "Native-board routing requires a verified Freerouting version with "
+            "--router.copper_to_edge_clearance_um support (2.4.1 or newer).",
+            router=capability_probe,
+        )
     if _freerouting_v25_or_newer(capability_probe):
         if optimizer_strategy in {"greedy", "hybrid"}:
             return _result_error(
@@ -2510,6 +2629,7 @@ def autoroute_pcb(
 
     start_time = time.perf_counter()
     routing_clearance_guardband = None
+    native_edge_clearance = None
     if source_suffix != ".dsn":
         export_result = export_dsn(
             source,
@@ -2523,6 +2643,13 @@ def autoroute_pcb(
         if export_result["status"] != "ok":
             return {**export_result, "preflight": preflight, "input": input_validation}
         routing_clearance_guardband = export_result.get("routing_clearance_guardband")
+        native_edge_clearance = _validated_native_edge_clearance(export_result.get("native_edge_clearance"))
+        if native_edge_clearance is None:
+            return _result_error(
+                "Native Specctra export did not establish the board's copper-to-edge clearance",
+                preflight=preflight,
+                input=input_validation,
+            )
     clearance_baseline = None
     if source_suffix == ".kicad_pcb" and routed_board_path is not None:
         clearance_baseline = _preexisting_fixed_pad_clearance_baseline(
@@ -2556,6 +2683,7 @@ def autoroute_pcb(
         logs_root=ses_path.parent / ".circuit-weaver-router-logs",
         capability_probe=capability_probe,
         clearance_baseline=clearance_baseline,
+        native_edge_clearance=native_edge_clearance,
         **({"allow_partial_nets": True} if _allow_partial_nets else {}),
         **({"cooperative_partial_timeout": True} if _allow_partial_nets else {}),
     )

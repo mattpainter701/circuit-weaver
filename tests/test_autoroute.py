@@ -20,6 +20,7 @@ from circuit_weaver.autoroute import (
     _find_freerouting_command,
     _find_freerouting_jar,
     _find_kicad_cli,
+    _freerouting_supports_copper_to_edge_clearance,
     _iter_sexpr_block_spans,
     _kicad_cli_supports_specctra,
     _measure_session_trace_lengths,
@@ -32,6 +33,7 @@ from circuit_weaver.autoroute import (
     _same_native_pad_clearance_pairs,
     _specctra_physical_pad_index,
     _validate_specctra_artifact,
+    _validated_native_edge_clearance,
     autoroute_pcb,
     export_dsn,
     preflight_pcb,
@@ -62,6 +64,20 @@ def _adapt_legacy_router_mocks_to_disk_backed_streams(monkeypatch):
         return result
 
     monkeypatch.setattr(autoroute_module, "_run_router_to_logs", run)
+    monkeypatch.setattr(
+        autoroute_module,
+        "_inspect_native_edge_clearance",
+        lambda *_args, **_kwargs: (
+            {
+                "status": "ok",
+                "value_iu": 500000,
+                "value_mm": 0.5,
+                "value_um": 500.0,
+                "source": "BOARD_DESIGN_SETTINGS.m_CopperEdgeClearance",
+            },
+            None,
+        ),
+    )
 
 
 @pytest.mark.parametrize(
@@ -775,6 +791,74 @@ class TestCommandDiscovery:
         assert result == {"probe_ok": True, "version": "2.2.4", "seed": True, "reason": ""}
 
 
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [("2.4.0", False), ("2.4.1", True), ("2.5.0", True), (None, False)],
+)
+def test_native_edge_clearance_transport_requires_verified_supported_router(version, expected):
+    assert _freerouting_supports_copper_to_edge_clearance(
+        {"probe_ok": version is not None, "version": version}
+    ) is expected
+
+
+def test_native_edge_clearance_metadata_is_strictly_validated():
+    valid = {
+        "status": "ok",
+        "value_iu": 500000,
+        "value_mm": 0.5,
+        "value_um": 500.0,
+        "source": "BOARD_DESIGN_SETTINGS.m_CopperEdgeClearance",
+    }
+    assert _validated_native_edge_clearance(valid) == valid
+    for invalid in (
+        {**valid, "status": "unsupported"},
+        {**valid, "value_iu": True},
+        {**valid, "value_um": float("nan")},
+        {**valid, "value_um": 499.0},
+        {**valid, "source": "default"},
+    ):
+        assert _validated_native_edge_clearance(invalid) is None
+
+
+@pytest.mark.parametrize(
+    ("edge_iu", "edge_mm", "edge_um", "expected_argument"),
+    [(500000, 0.5, 500.0, "500"), (5000001, 5.000001, 5000.001, "5000.001")],
+)
+def test_route_transports_native_edge_clearance_to_freerouting(
+    tmp_path, edge_iu, edge_mm, edge_um, expected_argument,
+):
+    dsn = _write_dsn(tmp_path)
+    edge = {
+        "status": "ok",
+        "value_iu": edge_iu,
+        "value_mm": edge_mm,
+        "value_um": edge_um,
+        "source": "BOARD_DESIGN_SETTINGS.m_CopperEdgeClearance",
+    }
+    with mock.patch(
+        "subprocess.run", side_effect=_fake_freerouting_success(_routing_output(incomplete=0))
+    ) as run:
+        result = _route_specctra(
+            dsn, tmp_path / "edge.ses", ["freerouting"], passes=1,
+            timeout_seconds=30, overwrite=False, headless=True, optimization_threads=0,
+            optimizer_strategy=None, optimizer_hybrid_ratio=None,
+            optimizer_item_selection=None, optimizer_improvement_threshold=None, seed=None,
+            capability_probe={"probe_ok": True, "version": "2.4.1", "seed": False},
+            native_edge_clearance=edge,
+        )
+    assert result["status"] == "ok"
+    command = run.call_args.args[0]
+    assert f"--router.copper_to_edge_clearance_um={expected_argument}" in command
+    assert result["router"]["native_edge_clearance"] == {
+        "value_iu": edge_iu,
+        "value_mm": edge_mm,
+        "value_um": edge_um,
+        "source": "BOARD_DESIGN_SETTINGS.m_CopperEdgeClearance",
+        "transport": "--router.copper_to_edge_clearance_um",
+        "argv": f"--router.copper_to_edge_clearance_um={expected_argument}",
+    }
+
+
 class TestExportDsn:
     def test_preview_is_rejected_before_cli_discovery(self, tmp_path):
         preview = tmp_path / "board_placement_preview.kicad_pcb"
@@ -825,6 +909,7 @@ class TestExportDsn:
         assert result["status"] == "ok"
         assert destination.read_text(encoding="utf-8") == VALID_DSN
         assert result["artifact"]["path"] == str(destination)
+        assert result["native_edge_clearance"]["value_um"] == 500.0
         assert not list(tmp_path.glob(".*.cw-stage-*.dsn"))
 
     def test_failed_export_preserves_existing_destination(self, tmp_path):
@@ -858,6 +943,20 @@ class TestExportDsn:
         assert result["status"] == "error"
         assert "invalid DSN" in result["message"]
         assert not (tmp_path / "bad.dsn").exists()
+
+
+    def test_cli_export_fails_closed_when_native_edge_rule_is_unavailable(self, tmp_path):
+        board = _write_routable_board(tmp_path)
+        with mock.patch(
+            "circuit_weaver.autoroute._inspect_native_edge_clearance",
+            return_value=(None, "Native copper-to-edge clearance is unsupported"),
+        ), mock.patch("circuit_weaver.autoroute._find_kicad_cli", return_value="kicad-cli"), mock.patch(
+            "circuit_weaver.autoroute._kicad_cli_supports_specctra", return_value=True
+        ), mock.patch("subprocess.run") as run:
+            result = export_dsn(board, tmp_path / "unsupported.dsn")
+        assert result["status"] == "error"
+        assert "copper-to-edge" in result["message"]
+        run.assert_not_called()
 
 
 class TestAutoroute:
@@ -944,10 +1043,14 @@ class TestAutoroute:
     def test_real_pcb_requires_supported_dsn_export_and_never_uses_direct_mode(self, tmp_path):
         board = _write_routable_board(tmp_path)
         with mock.patch("circuit_weaver.autoroute._find_freerouting_command", return_value=["freerouting"]):
-            with mock.patch("circuit_weaver.autoroute._find_kicad_cli", return_value="kicad-cli"):
-                with mock.patch("circuit_weaver.autoroute._kicad_cli_supports_specctra", return_value=False):
-                    with mock.patch("subprocess.run") as run:
-                        result = autoroute_pcb(board)
+            with mock.patch(
+                "circuit_weaver.autoroute._probe_freerouting_capabilities",
+                return_value={"probe_ok": True, "version": "2.4.1", "seed": False},
+            ):
+                with mock.patch("circuit_weaver.autoroute._find_kicad_cli", return_value="kicad-cli"):
+                    with mock.patch("circuit_weaver.autoroute._kicad_cli_supports_specctra", return_value=False):
+                        with mock.patch("subprocess.run") as run:
+                            result = autoroute_pcb(board)
 
         assert result["status"] == "error"
         assert "pcbnew" in result["message"]
@@ -960,12 +1063,12 @@ class TestAutoroute:
         def fake_run(command, **_kwargs):
             calls.append(command)
             if "-help" in command:
-                return mock.Mock(returncode=0, stdout="Freerouting v2.2.4", stderr="")
+                return mock.Mock(returncode=0, stdout="Freerouting v2.4.1", stderr="")
             if command[0] == "kicad-cli":
                 Path(command[command.index("-o") + 1]).write_text(VALID_DSN, encoding="utf-8")
                 return mock.Mock(returncode=0, stdout="", stderr="")
             Path(command[command.index("-do") + 1]).write_text(VALID_SES, encoding="utf-8")
-            return mock.Mock(returncode=0, stdout=_routing_output(), stderr="")
+            return mock.Mock(returncode=0, stdout=_routing_output(version="2.4.1"), stderr="")
 
         with mock.patch("circuit_weaver.autoroute._find_freerouting_command", return_value=["freerouting"]):
             with mock.patch("circuit_weaver.autoroute._find_kicad_cli", return_value="kicad-cli"):
@@ -985,6 +1088,7 @@ class TestAutoroute:
         assert result["search"]["attempts"][0]["placement_order"] == ["R1"]
         assert any("specctra" in command for command in calls)
         assert any("-de" in command and "-do" in command for command in calls)
+        assert any("--router.copper_to_edge_clearance_um=500" in command for command in calls)
 
     @pytest.mark.parametrize("newline", ["\n", "\r\n"])
     @pytest.mark.parametrize(
@@ -1192,7 +1296,13 @@ class TestAutoroute:
         monkeypatch.setattr(autoroute_module, "_probe_freerouting_capabilities", lambda *_args, **_kwargs: {
             "probe_ok": True, "version": "2.4.1", "seed": False,
         })
-        monkeypatch.setattr(autoroute_module, "export_dsn", lambda *_args, **_kwargs: {"status": "ok"})
+        monkeypatch.setattr(autoroute_module, "export_dsn", lambda *_args, **_kwargs: {
+            "status": "ok",
+            "native_edge_clearance": {
+                "status": "ok", "value_iu": 500000, "value_mm": 0.5, "value_um": 500.0,
+                "source": "BOARD_DESIGN_SETTINGS.m_CopperEdgeClearance",
+            },
+        })
         monkeypatch.setattr(
             autoroute_module, "_preexisting_fixed_pad_clearance_baseline", lambda *_args, **_kwargs: None,
         )

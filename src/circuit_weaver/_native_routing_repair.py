@@ -38,6 +38,23 @@ def _native_point_vector(pcbnew, point):
     return pcbnew.VECTOR2I(int(round(point[0] * scale)), int(round(point[1] * scale)))
 
 
+def _edge_margin_iu(copper_width_iu, edge_clearance_iu):
+    """Minimum centerline/center offset from a straight board edge, in native IU."""
+    for name, value in (("copper width", copper_width_iu), ("edge clearance", edge_clearance_iu)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{name} must be a nonnegative native IU integer")
+    return edge_clearance_iu + (copper_width_iu + 1) // 2
+
+
+def _segment_inside_edge_margin(start, end, outline, margin_iu):
+    """Check copper geometry against an axis-aligned rectangular board edge."""
+    x0, y0, x1, y1 = outline
+    sx, sy = start
+    ex, ey = end
+    return (min(sx, ex) >= x0 + margin_iu and max(sx, ex) <= x1 - margin_iu
+            and min(sy, ey) >= y0 + margin_iu and max(sy, ey) <= y1 - margin_iu)
+
+
 def _astar_search(start, goal, layer_count, target_layers, origins, bounds, step, max_expanded_states,
                   clear_segment, can_change_layer):
     """Search lattice states and return a route path plus real expansion count."""
@@ -199,6 +216,10 @@ def _class_rules(board, pcbnew, net_name):
 def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=150000, grid_step_mm=0.25):
     """Add one bounded A* candidate for a fresh DRC explicit UUID pair."""
     import _kicad_worker as worker
+    try:
+        from _native_board_rules import native_edge_clearance
+    except ImportError:  # package-level pure tests; KiCad worker uses same-folder import
+        from ._native_board_rules import native_edge_clearance
 
     if list(board.Zones()):
         raise ValueError("same-net repair requires a board without zones")
@@ -254,6 +275,7 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
         raise ValueError("repair pair must belong to the same positive native net")
     net_name = str(first.GetNetname())
     width, diameter, drill, clearance = _class_rules(board, pcbnew, net_name)
+    edge = native_edge_clearance(board, pcbnew)
 
     def point(p):
         return pcbnew.ToMM(p.x), pcbnew.ToMM(p.y)
@@ -275,7 +297,12 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
     bounds_iu = worker._rectangular_outline_bounds_iu(edges, pcbnew)
     if bounds_iu is None:
         raise ValueError("repair supports only a verified rectangular board outline")
-    margin = pcbnew.FromMM(max(width, diameter) / 2 + clearance)
+    edge_iu = edge["value_iu"]
+    track_width_iu = int(pcbnew.FromMM(width))
+    track_edge_margin_iu = _edge_margin_iu(track_width_iu, edge_iu)
+    # Search bounds only constrain the track lattice. Candidate vias are
+    # checked individually in clear_segment using their larger radius.
+    margin = track_edge_margin_iu
     x0, y0, w, h = bounds_iu
     bounds = (
         pcbnew.ToMM(x0 + margin),
@@ -332,12 +359,17 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
         return found
 
     def clear_segment(a, b, layer, copper_width=width, avoid_pads=False):
-        query.SetStart(vec(a))
-        query.SetEnd(vec(b))
-        query.SetWidth(pcbnew.FromMM(copper_width))
+        start_iu, end_iu = vec(a), vec(b)
+        segment_width_iu = int(pcbnew.FromMM(copper_width))
+        edge_margin_iu = _edge_margin_iu(segment_width_iu, edge_iu)
+        if not _segment_inside_edge_margin(start_iu, end_iu, (x0, y0, x0 + w, y0 + h), edge_margin_iu):
+            return False
+        query.SetStart(start_iu)
+        query.SetEnd(end_iu)
+        query.SetWidth(segment_width_iu)
         query.SetLayer(layer)
         if a == b and copper_width == diameter:
-            via_query.SetPosition(vec(a))
+            via_query.SetPosition(start_iu)
             shape = via_query.GetEffectiveShape(layer)
         else:
             shape = query.GetEffectiveShape()
@@ -452,4 +484,5 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
         "resolved_via_diameter_mm": diameter,
         "resolved_via_drill_mm": drill,
         "resolved_clearance_mm": clearance,
+        "native_edge_clearance": {"status": "ok", **edge},
     }

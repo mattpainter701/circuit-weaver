@@ -164,7 +164,7 @@ class _PCBNew:
         return value / 1_000_000
 
 
-def test_inspect_reports_board_stack_and_keeps_pad_layer_inventory(monkeypatch):
+def test_inspect_reports_board_stack_and_keeps_pad_layer_inventory(monkeypatch, tmp_path):
     monkeypatch.setattr(worker, "_field_visible", lambda _: False)
     monkeypatch.setattr(worker, "_placement_envelope", lambda *_: (0, 0, 100_000, 100_000))
     monkeypatch.setattr(worker, "_opposite_courtyard_state", lambda *_: (True, False))
@@ -172,7 +172,14 @@ def test_inspect_reports_board_stack_and_keeps_pad_layer_inventory(monkeypatch):
     monkeypatch.setattr(worker, "_native_roundrect_radius_ratio", lambda *_: None)
     monkeypatch.setattr(worker, "_native_surface_shape_known", lambda *_: True)
 
-    result = worker._inspect(_Board(), _PCBNew)
+    board = _Board()
+    board_path = tmp_path / "inspection.kicad_pcb"
+    board.GetFileName = lambda: str(board_path)
+    board.GetDesignSettings = lambda: SimpleNamespace(m_CopperEdgeClearance=500_000)
+    board_path.with_suffix(".kicad_dru").write_text(
+        '(rule "custom edge" (constraint edge_clearance (min 0.8mm)))\n', encoding="utf-8"
+    )
+    result = worker._inspect(board, _PCBNew)
 
     assert result["copper_layer_inventory_complete"] is True
     assert result["copper_layer_count"] == 4
@@ -182,3 +189,4 @@ def test_inspect_reports_board_stack_and_keeps_pad_layer_inventory(monkeypatch):
         {"id": 6, "name": "In2.Cu"}, {"id": 31, "name": "B.Cu"},
     ]
     assert result["footprints"][0]["pads"][0]["copper_layers"] == [0]
+    assert result["native_edge_clearance"]["status"] == "unsupported"
