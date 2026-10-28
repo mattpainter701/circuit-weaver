@@ -209,3 +209,22 @@ def test_corrected_packages_match_native_pad_numbers_and_declare_real_models(foo
         for match in re.finditer(r'\(pad\s+(?:"([^"]+)"|([^\s]+))', footprint_text)
         if (match.group(1) or match.group(2)).strip('"')
     }
+
+
+def test_ap2112k_sot23_5_has_input_on_pin_1_and_output_on_pin_5():
+    """Diodes DS39724 SOT-23-5 (K) pinout: 1 VIN, 2 GND, 3 EN, 4 NC, 5 VOUT.
+
+    The entry once had IN and OUT swapped, which wired the 5 V input rail to
+    the regulator output in every sample that used it.
+    """
+    data = get_ic_data("AP2112K-3.3")
+    pins = {pin["number"]: (pin["name"], pin["type"]) for pin in data["pins"]}
+    assert pins["1"] == ("IN", "power_in")
+    assert pins["5"] == ("OUT", "power_out")
+    assert (data["pin_vin"], data["pin_out"], data["pin_gnd"], data["pin_en"]) == ("1", "5", "2", "3")
+
+    sample = Path(__file__).parents[1] / "samples" / "oled_display_module" / "oled_display_module.yaml"
+    components, _ = resolve_project_spec(_parse_yaml(sample), use_kicad=False)
+    regulator = next(component for component in components if component.mpn == "AP2112K-3.3")
+    assert regulator.power_pins["1"] == "VBUS_5V"
+    assert regulator.power_pins["5"] == "VDD_3P3"

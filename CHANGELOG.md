@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Corrected part data
+
+- Correct the AP2112K-3.3 SOT-23-5 pin map: pin 1 is VIN and pin 5 is VOUT (Diodes DS39724). The swapped entry wired the input rail to the regulator output in the OLED, RF front-end, USB-UART and Zigbee samples. Their checked-in generated artifacts predate this fix and need regenerating.
+
 ## [0.37.0] - 2026-10-20
 
 ### Physical sample inventory and workflow scale

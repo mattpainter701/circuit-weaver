@@ -88,6 +88,7 @@
     "topology": "ldo",
     "description": "600mA LDO 3.3V Fixed Low-Noise",
     "footprint": "Package_TO_SOT_SMD:SOT-23-5",
+    "datasheet_url": "https://www.diodes.com/assets/Datasheets/AP2112.pdf",
     "vout_fixed": 3.3,
     "adjustable": false,
     "iout_max": 0.6,
@@ -98,9 +99,9 @@
     "pins": [
       {
         "number": "1",
-        "name": "OUT",
-        "type": "power_out",
-        "side": "R"
+        "name": "IN",
+        "type": "power_in",
+        "side": "L"
       },
       {
         "number": "2",
@@ -122,14 +123,14 @@
       },
       {
         "number": "5",
-        "name": "IN",
-        "type": "power_in",
-        "side": "L"
+        "name": "OUT",
+        "type": "power_out",
+        "side": "R"
       }
     ],
-    "pin_vin": "5",
+    "pin_vin": "1",
     "pin_gnd": "2",
-    "pin_out": "1",
+    "pin_out": "5",
     "pin_en": "3"
   },
   "MCP1700-3302E": {
