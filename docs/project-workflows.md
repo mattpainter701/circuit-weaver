@@ -494,6 +494,12 @@ otherwise it remains a separate selected directory. The conventional `output/`
 directory continues to resolve to its parent project. This behavior applies
 outside Git checkouts as well as inside them.
 
+For endpoint pairs spanning more than 256 requested grid steps, native recovery
+first tries a 0.5 mm lattice when the requested grid is finer. This pass uses at
+most one quarter of the shared search-state budget. Unspent states remain
+available to the requested grid and its fine fallback. Track widths, clearances,
+via rules, exact native collision checks and the final full DRC gate are unchanged.
+
 The frozen 438-part DAC completes this eight-pass, post-route-plane recipe from
 its zero-copper placement in the isolated installed runtime. It needs no native
 repair on that run; all native DRC, 110-path, 144-leg, 72-return and assembly gates

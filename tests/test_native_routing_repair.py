@@ -357,3 +357,127 @@ def test_collinear_collapse_preserves_turns_and_layer_transitions():
         ((0.0, 0.0), 0), ((0.5, 0.0), 0), ((0.5, 0.25), 0),
         ((0.5, 0.25), 1), ((0.5, 0.5), 1),
     ]
+
+
+def test_long_span_coarse_pass_is_quarter_capped_and_finer_passes_share_actual_remainder(monkeypatch):
+    calls = []
+
+    def bounded_search(_start, _goal, _layer_count, _target_layers, _origins, _bounds,
+                       step, budget, _clear, _change):
+        calls.append((step, budget))
+        used = {0.5: 20, 0.25: 10, 0.125: budget}[step]
+        return None, used
+
+    monkeypatch.setattr(repair, "_astar_search", bounded_search)
+    path, step, expanded = repair._search_with_fallback(
+        (0.0, 0.0), (100.0, 0.0), 2, {1}, {(0, 0, 1)},
+        (0.0, 0.0, 100.0, 1.0), 0.25, 100, lambda *_args: True, lambda _point: False,
+    )
+
+    assert path is None and step is None
+    assert calls == [(0.5, 25), (0.25, 40), (0.125, 70)]
+    assert expanded == 100
+
+
+def test_long_span_coarse_pass_can_return_candidate_within_quarter_budget(monkeypatch):
+    calls = []
+
+    def coarse_success(_start, _goal, _layer_count, _target_layers, _origins, _bounds,
+                       step, budget, _clear, _change):
+        calls.append((step, budget))
+        return [(0, 0, 1)], 12
+
+    monkeypatch.setattr(repair, "_astar_search", coarse_success)
+    path, step, expanded = repair._search_with_fallback(
+        (0.0, 0.0), (100.0, 0.0), 2, {1}, {(0, 0, 1)},
+        (0.0, 0.0, 100.0, 1.0), 0.25, 100, lambda *_args: True, lambda _point: False,
+    )
+
+    assert path == [(0, 0, 1)]
+    assert step == 0.5
+    assert expanded == 12
+    assert calls == [(0.5, 25)]
+
+
+def _segment_hits_rect(a, b, rect):
+    xmin, ymin, xmax, ymax = rect
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    t0, t1 = 0.0, 1.0
+    for p, q in ((-dx, a[0] - xmin), (dx, xmax - a[0]),
+                  (-dy, a[1] - ymin), (dy, ymax - a[1])):
+        if p == 0:
+            if q < 0:
+                return False
+            continue
+        t = q / p
+        if p < 0:
+            if t > t1:
+                return False
+            t0 = max(t0, t)
+        else:
+            if t < t0:
+                return False
+            t1 = min(t1, t)
+    return t0 <= t1
+
+
+def _long_route_maze():
+    height, xmax = 100.0, 115.8
+    bounds = (0.0, 0.0, xmax, height)
+    rectangles = []
+    x, index = 3.0, 0
+    while x < xmax - 1.0:
+        center = height / 2 + (-3.5 if index % 2 == 0 else 3.5)
+        lo, hi = center - 2.0, center + 2.0
+        rectangles.extend(((x - 0.1, -0.1, x + 0.6, lo + 0.1),
+                           (x - 0.1, hi - 0.1, x + 0.6, height + 0.1)))
+        x += 3.0
+        index += 1
+    start, goal = (0.5, 50.0), (115.3, 50.0)
+
+    def clear(a, b, _layer):
+        return (bounds[0] <= a[0] <= bounds[2] and bounds[1] <= a[1] <= bounds[3]
+                and bounds[0] <= b[0] <= bounds[2] and bounds[1] <= b[1] <= bounds[3]
+                and not any(_segment_hits_rect(a, b, rect) for rect in rectangles))
+
+    return start, goal, bounds, clear
+
+
+def test_long_route_maze_uses_coarse_pass_under_total_budget():
+    import math
+
+    start, goal, bounds, clear = _long_route_maze()
+    fine_path, fine_step, fine_used = repair._search_with_fallback(
+        start, goal, 1, {0}, {(0, 0, 0)}, bounds, 0.25, 150_000, clear, lambda _point: False,
+    )
+    assert fine_path is not None
+    assert fine_step == 0.5
+    assert 0 < fine_used < 37_500
+    coordinates = [(start[0] + node[0] * fine_step, start[1] + node[1] * fine_step)
+                   for node in fine_path]
+    assert all(clear(a, b, 0) for a, b in zip(coordinates, coordinates[1:]))
+    assert clear(coordinates[-1], goal, 0)
+    length = sum(math.dist(a, b) for a, b in zip(coordinates, coordinates[1:])) + math.dist(coordinates[-1], goal)
+    assert length > math.dist(start, goal) + 50.0
+
+
+def test_long_span_coarse_trap_falls_back_to_requested_fine_grid():
+    start, goal = (0.5, 0.0), (65.5, 0.0)
+    bounds = (0.0, 0.0, 66.0, 0.25)
+    blocker = (30.0, -0.1, 35.0, 0.2)
+
+    def clear(a, b, _layer):
+        return (bounds[0] <= a[0] <= bounds[2] and bounds[1] <= a[1] <= bounds[3]
+                and bounds[0] <= b[0] <= bounds[2] and bounds[1] <= b[1] <= bounds[3]
+                and not _segment_hits_rect(a, b, blocker))
+
+    path, step, expanded = repair._search_with_fallback(
+        start, goal, 1, {0}, {(0, 0, 0)}, bounds, 0.25, 1000, clear, lambda _point: False,
+    )
+
+    assert path is not None
+    assert step == 0.25
+    assert 0 < expanded <= 1000
+    points = [(start[0] + node[0] * step, start[1] + node[1] * step) for node in path]
+    assert all(clear(a, b, 0) for a, b in zip(points, points[1:]))
+    assert clear(points[-1], goal, 0)

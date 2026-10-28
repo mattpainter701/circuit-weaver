@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Add a bounded coarse first pass for long native routing repairs, retaining
+  fine-grid fallbacks, the shared search-state cap and native collision checks.
+
 - Keep an unclaimed child directory separate from unrelated circuits above its
   nearest workflow state, including projects used outside a Git checkout.
 

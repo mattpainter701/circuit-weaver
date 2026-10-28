@@ -92,17 +92,23 @@ def _astar_search(start, goal, layer_count, target_layers, origins, bounds, step
 
 def _search_with_fallback(start, goal, layer_count, target_layers, origins, bounds, grid_step_mm,
                           max_expanded_states, clear_segment, can_change_layer):
-    """Try the requested grid then 0.125 mm, sharing one hard state budget."""
-    steps = [float(grid_step_mm)]
-    if grid_step_mm > 0.125:
+    """Search long spans on a coarse grid first, sharing one hard state budget."""
+    requested_step = float(grid_step_mm)
+    long_span_coarse = requested_step < 0.5 and math.dist(start, goal) > 256 * requested_step
+    steps = ([0.5, requested_step] if long_span_coarse else [requested_step])
+    if requested_step > 0.125:
         steps.append(0.125)
     remaining = max_expanded_states
     expanded = 0
     for attempt, step in enumerate(steps):
         if remaining <= 0:
             break
-        # Reserve half of the cap for the finer fallback if the coarse grid is trapped.
-        budget = remaining if attempt == len(steps) - 1 else max(1, remaining // 2)
+        if long_span_coarse and attempt == 0:
+            # Keep this exploratory pass bounded to one quarter of the total cap.
+            budget = max(1, max_expanded_states // 4)
+        else:
+            # Reserve half of the actual unspent budget for the next finer pass.
+            budget = remaining if attempt == len(steps) - 1 else max(1, remaining // 2)
         path, used = _astar_search(
             start, goal, layer_count, target_layers, origins, bounds, step, budget,
             clear_segment, can_change_layer,
@@ -434,6 +440,8 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
         "added_tracks": added_tracks,
         "added_vias": added_vias,
         "expanded_states": expanded,
+        "search_grid_step_mm": step,
+        "search_state_budget": max_expanded_states,
         "resolved_track_width_mm": width,
         "resolved_via_diameter_mm": diameter,
         "resolved_via_drill_mm": drill,
