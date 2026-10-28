@@ -115,7 +115,10 @@
     "pin_scl": "16",
     "pin_int": "3",
     "pin_rst": "4",
-    "pin_32k": "1"
+    "pin_32k": "1",
+    "supply_ratings": [
+      {"pins": ["2", "14"], "kind": "supply", "v_min": 2.3, "v_max": 5.5, "v_abs_max": 6.0, "confidence": "verified", "source": "Maxim DS3231 Extremely Accurate I2C-Integrated RTC/TCXO/Crystal, 19-5170 Rev 10 (3/15): 19-5170 Rev 10 Recommended Operating Conditions (Supply Voltage VCC 2.3-5.5 V typ 3.3; VBAT 2.3-5.5 V typ 3.0); Absolute Maximum Ratings ('Voltage Range on Any Pin Relative to Ground -0.3V to +6.0V'); Pin Description (VCC = 2, VBAT = 14)", "note": "VCC or VBAT may be tied to GND when unused."}
+    ]
   },
   "PCF8523": {
     "topology": "rtc",
@@ -932,7 +935,10 @@
     "pin_en": "3",
     "pin_boot": "27",
     "pin_txd": "37",
-    "pin_rxd": "36"
+    "pin_rxd": "36",
+    "supply_ratings": [
+      {"pins": ["2"], "kind": "supply", "v_min": 3.0, "v_max": 3.6, "v_abs_max": 3.6, "confidence": "verified", "source": "Espressif ESP32-S3-WROOM-1 & ESP32-S3-WROOM-1U Datasheet v1.1 (2022-07-22) (https://www.espressif.com/documentation/esp32-s3-wroom-1_wroom-1u_datasheet_en.pdf): ESP32-S3-WROOM-1/1U Datasheet v1.1 sec. 4.2 Table 9 Recommended Operating Conditions (VDD33 min 3.0, typ 3.3, max 3.6 V); sec. 4.1 Table 8 Absolute Maximum Ratings (VDD33 -0.3 to 3.6 V); sec. 3.2 Table 3 Pin Definitions (pin 2 = 3V3, type P, 'Power supply')"}
+    ]
   },
   "nRF52840-MODULE": {
     "topology": "wireless_module",
@@ -1282,6 +1288,9 @@
       "12",
       "11",
       "10"
+    ],
+    "supply_ratings": [
+      {"pins": ["9"], "kind": "supply", "v_abs_max": 50.0, "confidence": "corroborated", "source": "TI ULN200x, ULQ200x High-Voltage, High-Current Darlington Transistor Arrays (https://www.ti.com/lit/ds/symlink/uln2003a.pdf): TI ULN200x Absolute Maximum Ratings (collector-emitter voltage 50 V; clamp diode reverse voltage 50 V; all voltages w.r.t. emitter/substrate terminal E)", "note": "COM is the clamp-diode common, not a supply; tie it to the load supply for inductive loads."}
     ]
   },
   "DISCRETE_NPN": {
@@ -1424,7 +1433,14 @@
     "pin_hin": "10",
     "pin_lin": "12",
     "pin_sd": "11",
-    "cbst": 1e-07
+    "cbst": 1e-07,
+    "supply_ratings": [
+      {"pins": ["2"], "kind": "floating", "confidence": "corroborated", "source": "Infineon IR2110(S)/IR2113(S) 500V/600V High and Low Side Driver datasheet (https://www.infineon.com/assets/row/public/documents/24/49/infineon-ir2110-datasheet-en.pdf): IR2110 Lead Definitions (COM = low-side return); Recommended Operating Conditions (VSS logic supply offset -5 to +5 V relative to COM)"},
+      {"pins": ["3"], "kind": "supply", "v_min": 10.0, "v_max": 20.0, "v_abs_max": 25.0, "confidence": "corroborated", "source": "Infineon IR2110(S)/IR2113(S) 500V/600V High and Low Side Driver datasheet (https://www.infineon.com/assets/row/public/documents/24/49/infineon-ir2110-datasheet-en.pdf): IR2110 Absolute Maximum Ratings (VCC low side fixed supply voltage -0.3 to 25 V); Recommended Operating Conditions (VCC 10 to 20 V)"},
+      {"pins": ["5"], "kind": "floating", "confidence": "corroborated", "source": "Infineon IR2110(S)/IR2113(S) 500V/600V High and Low Side Driver datasheet (https://www.infineon.com/assets/row/public/documents/24/49/infineon-ir2110-datasheet-en.pdf): IR2110 Absolute Maximum Ratings (VS high side floating supply offset voltage VB-25 to VB+0.3 V); Recommended Operating Conditions (VS Note 1 to 500 V; Note 1: logic operational for VS of -4 V to +500 V)", "note": "High-side offset; may swing up to 500 V above COM."},
+      {"pins": ["6"], "kind": "floating", "confidence": "corroborated", "source": "Infineon IR2110(S)/IR2113(S) 500V/600V High and Low Side Driver datasheet (https://www.infineon.com/assets/row/public/documents/24/49/infineon-ir2110-datasheet-en.pdf): IR2110 Recommended Operating Conditions (VB high side floating supply absolute voltage VS+10 to VS+20 V); Absolute Maximum Ratings (VB -0.3 to 525 V vs COM)", "note": "VB is referenced to VS: VB - VS must be 10-20 V."},
+      {"pins": ["9"], "kind": "supply", "v_min": 3.0, "v_max": 20.0, "v_abs_max": 25.0, "confidence": "corroborated", "source": "Infineon IR2110(S)/IR2113(S) 500V/600V High and Low Side Driver datasheet (https://www.infineon.com/assets/row/public/documents/24/49/infineon-ir2110-datasheet-en.pdf): IR2110 Absolute Maximum Ratings (VDD logic supply voltage -0.3 to VSS+25 V); Recommended Operating Conditions (VDD VSS+3 to VSS+20 V)", "note": "Referenced to VSS (pin 13), which the repo currently marks NC."}
+    ]
   },
   "UCC27524": {
     "topology": "gate_driver",
@@ -1735,7 +1751,10 @@
     "pin_sout": "27",
     "pin_dcprg": "19",
     "pin_vprg": "22",
-    "pin_xerr": "28"
+    "pin_xerr": "28",
+    "supply_ratings": [
+      {"pins": ["21"], "kind": "supply", "v_min": 3.0, "v_max": 5.5, "v_abs_max": 6.0, "confidence": "single_source", "source": "TI TLC5940 16-Channel LED Driver w/EEprom DOT Correction & Grayscale PWM Control (SLVS515D) (https://www.ti.com/lit/ds/symlink/tlc5940.pdf): SLVS515 Absolute Maximum Ratings (VCC -0.3 to 6 V); VCC 3 V to 5.5 V operating range (TI product page / datasheet features; the ROC table row itself was not seen in excerpts)"}
+    ]
   },
   "TPS2113ADRBR": {
     "topology": "power_mux",
@@ -1953,6 +1972,9 @@
     "no_connect_pins": [],
     "extra_gnd_pins": [
       "9"
+    ],
+    "supply_ratings": [
+      {"pins": ["3"], "kind": "supply", "v_min": 2.5, "v_max": 4.5, "v_abs_max": 6.0, "confidence": "corroborated", "source": "Analog Devices MAX17048/MAX17049 3uA 1-Cell/2-Cell Fuel Gauge with ModelGauge (19-6171 Rev 7) (https://www.analog.com/media/en/technical-documentation/data-sheets/max17048-max17049.pdf): MAX17048/MAX17049 (19-6171) Absolute Maximum Ratings (CELL to GND -0.3 to +12 V; All Other Pins to GND -0.3 to +6 V); Electrical Characteristics (Supply Voltage VDD, Note 2: 2.5 to 4.5 V)"}
     ]
   },
   "BQ27441-G1A": {
@@ -2973,6 +2995,9 @@
     "boot_straps": {},
     "data_buses": [
       "UART"
+    ],
+    "supply_ratings": [
+      {"pins": ["16"], "kind": "supply", "v_min": 2.9, "v_max": 5.3, "v_abs_max": 6.0, "confidence": "verified", "source": "WCH CH340 Datasheet (I), Version 3B (English): CH340DS1 V3B sec. 6.2 Electrical characteristics (5V) (VCC 4.0-5.3 V typ 5, 'V3 only connect to an external capacitor, does not connect to VCC'); sec. 6.3 Electrical characteristics (3.3V) (VCC 2.9-3.6 V typ 3.3 for CH340G/T/R, 'V3 connects to VCC'); sec. 6.1 Absolute maximum ratings (VCC -0.5 to 6.0 V); sec. 4 Pin definitions; sec. 5 Functions", "note": "3.3 V operation: VCC 2.9-3.6 V with V3 (pin 4) tied to VCC. 5 V operation: VCC 4.0-5.3 V with 0.1 uF on V3."}
     ]
   },
   "USB2514B": {

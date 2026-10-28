@@ -1,8 +1,8 @@
 # Electrical benchmark scorecard
 
-Fixtures: 42
+Fixtures: 46
 Validated suppressions: 0 (marked findings remain scored)
-Supported rules: 18; explicit unsupported rules: 15
+Supported rules: 19; explicit unsupported rules: 16
 Supported aggregate: precision 1.000, recall 1.000 (gate >=0.95 / >=0.90) - PASS
 
 | Rule | Domain | Status |
@@ -38,5 +38,7 @@ Supported aggregate: precision 1.000, recall 1.000 (gate >=0.95 / >=0.90) - PASS
 | CW-PWR-011 | power | unsupported: no complete labelled executable population |
 | CW-PWR-012 | power | unsupported: no complete labelled executable population |
 | CW-PWR-013 | power | unsupported: no complete labelled executable population |
+| CW-PWR-014 | power | unsupported: no complete labelled executable population |
+| CW-PWR-015 | power | scored |
 | CW-SPI-001 | spi | scored |
 | CW-UART-001 | uart | scored |

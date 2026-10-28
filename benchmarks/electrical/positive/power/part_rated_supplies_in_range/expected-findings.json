@@ -1,0 +1,10 @@
+{
+  "schema_version": "circuit-weaver-electrical-benchmark/v1",
+  "fixture_id": "power-part-rated-supplies-in-range",
+  "domain": "power",
+  "polarity": "positive",
+  "authoring_source": "generator_authored",
+  "provenance": {"source_type": "hand-authored-generator-case", "source_ref": "AP62300 VIN 4.2-18 V; TLV755P VIN 1.45-5.5 V; BME280 VDD 1.71-3.6 V", "license": "CC0-1.0"},
+  "expected_findings": [],
+  "expected_absent_rule_ids": ["CW-PWR-001", "CW-PWR-002", "CW-PWR-014", "CW-PWR-015"]
+}

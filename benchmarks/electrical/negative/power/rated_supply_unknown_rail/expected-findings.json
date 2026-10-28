@@ -1,0 +1,10 @@
+{
+  "schema_version": "circuit-weaver-electrical-benchmark/v1",
+  "fixture_id": "power-rated-supply-unknown-rail",
+  "domain": "power",
+  "polarity": "negative",
+  "authoring_source": "independent_reference",
+  "provenance": {"source_type": "hand-authored-reference", "source_ref": "Fail-closed supply-rating review: an unstated rail voltage must be reported", "license": "CC0-1.0"},
+  "expected_findings": [{"rule_id": "CW-PWR-015", "expectation": "detected", "rationale": "VCC_AUX has no declared voltage and no voltage in its name, so the BME280 rating cannot be compared."}],
+  "expected_absent_rule_ids": ["CW-PWR-001", "CW-PWR-002", "CW-PWR-014"]
+}

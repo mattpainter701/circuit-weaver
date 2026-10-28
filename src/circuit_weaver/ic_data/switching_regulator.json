@@ -67,7 +67,10 @@
     "pin_bst": "6",
     "r_fbb_default": 100000.0,
     "enable_default": "floating",
-    "enable_default_provenance": "Diodes DS41958 Rev. 4, pages 3-4: floating EN enables automatic startup; EN absolute maximum is 8 V. https://www.diodes.com/datasheet/download/AP62300.pdf"
+    "enable_default_provenance": "Diodes DS41958 Rev. 4, pages 3-4: floating EN enables automatic startup; EN absolute maximum is 8 V. https://www.diodes.com/datasheet/download/AP62300.pdf",
+    "supply_ratings": [
+      {"pins": ["3"], "kind": "supply", "v_min": 4.2, "v_max": 18.0, "v_abs_max": 20.0, "confidence": "corroborated", "source": "Diodes Inc AP62300/AP62301/AP62300T datasheet DS41958 (Rev 2/3/4 copies) (https://www.diodes.com/assets/Datasheets/AP62300_AP62301_AP62300T.pdf): DS41958 Recommended Operating Conditions (VIN 4.2 to 18.0 V); Absolute Maximum Ratings (VIN -0.3 to +20.0 V DC, -0.3 to +22.0 V for 400 ms)"}
+    ]
   },
   "TPS62088": {
     "topology": "buck",

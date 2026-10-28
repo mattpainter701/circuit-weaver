@@ -323,6 +323,7 @@ def _normalize_block(raw: dict[str, Any], *, default_section: str, index: int) -
             "power_reqs",
             "power_pin_defs",
             "dropout_voltage",
+            "supply_ratings",
             "feedback_vref",
             "feedback_vref_voltage",
             "feedback_vref_provenance",

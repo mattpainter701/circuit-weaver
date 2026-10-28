@@ -90,6 +90,8 @@ _EXTRA_CONTRACT_RULES: dict[str, str] = {
     "CW-PWR-004": "power-source-contention",
     "CW-PWR-005": "power-regulator-dropout",
     "CW-PWR-007": "power-sequencing",
+    "CW-PWR-014": "supply-rating-missing",
+    "CW-PWR-015": "supply-voltage-unknown",
     "CW-ID-001": "identity-selected-mismatch",
     "CW-ID-002": "identity-incomplete-map",
     "CW-ID-003": "identity-unapproved-conflict",

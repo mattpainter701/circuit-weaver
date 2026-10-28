@@ -1,12 +1,57 @@
 {
   "schema_version": 1,
   "corpus_schema_version": "circuit-weaver-electrical-benchmark/v1",
-  "fixture_count": 42,
+  "fixture_count": 46,
   "regression_budget": {
     "precision": 0.0,
     "recall": 0.0
   },
   "rules": {
+    "CW-ERC-001": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "unsupported": 0
+    },
+    "CW-I2C-001": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "unsupported": 0
+    },
+    "CW-ID-001": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "unsupported": 0
+    },
+    "CW-ID-002": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "unsupported": 0
+    },
+    "CW-ID-003": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "unsupported": 0
+    },
+    "CW-ID-004": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "unsupported": 0
+    },
+    "CW-PSV-001": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "unsupported": 0
+    },
+    "CW-PSV-002": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "unsupported": 0
+    },
+    "CW-PSV-003": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "unsupported": 0
+    },
     "CW-PWR-001": {
       "precision": 1.0,
       "recall": 1.0,
@@ -42,47 +87,7 @@
       "recall": 1.0,
       "unsupported": 0
     },
-    "CW-PSV-001": {
-      "precision": 1.0,
-      "recall": 1.0,
-      "unsupported": 0
-    },
-    "CW-PSV-002": {
-      "precision": 1.0,
-      "recall": 1.0,
-      "unsupported": 0
-    },
-    "CW-PSV-003": {
-      "precision": 1.0,
-      "recall": 1.0,
-      "unsupported": 0
-    },
-    "CW-ID-001": {
-      "precision": 1.0,
-      "recall": 1.0,
-      "unsupported": 0
-    },
-    "CW-ID-002": {
-      "precision": 1.0,
-      "recall": 1.0,
-      "unsupported": 0
-    },
-    "CW-ID-003": {
-      "precision": 1.0,
-      "recall": 1.0,
-      "unsupported": 0
-    },
-    "CW-ID-004": {
-      "precision": 1.0,
-      "recall": 1.0,
-      "unsupported": 0
-    },
-    "CW-ERC-001": {
-      "precision": 1.0,
-      "recall": 1.0,
-      "unsupported": 0
-    },
-    "CW-I2C-001": {
+    "CW-PWR-015": {
       "precision": 1.0,
       "recall": 1.0,
       "unsupported": 0
@@ -171,6 +176,8 @@
     "CW-PWR-011": "unsupported",
     "CW-PWR-012": "unsupported",
     "CW-PWR-013": "unsupported",
+    "CW-PWR-014": "unsupported",
+    "CW-PWR-015": "scored",
     "CW-SPI-001": "scored",
     "CW-UART-001": "scored"
   },
@@ -189,6 +196,7 @@
     "CW-PWR-010",
     "CW-PWR-011",
     "CW-PWR-012",
-    "CW-PWR-013"
+    "CW-PWR-013",
+    "CW-PWR-014"
   ]
 }

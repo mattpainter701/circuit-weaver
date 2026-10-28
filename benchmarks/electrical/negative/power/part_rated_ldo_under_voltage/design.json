@@ -1,0 +1,7 @@
+{
+  "project": "benchmark_power_part_rated_ldo_under_voltage",
+  "spec_version": "mvp_ir_v1",
+  "auto_repair": false,
+  "blocks": [{"id": "power:U1", "section": "power", "kind": "template", "type": "ldo", "ref": "U1", "ic": "MCP1700-1802E", "params": {"vin": 1.8, "vout": 1.8, "vin_net": "VDD_1P8_IN", "rail_name": "VDD_1P8"}}],
+  "benchmark_intent": {"domain": "power", "polarity": "negative", "scenario": "A 1.8 V rail feeds an LDO whose curated datasheet minimum input is 2.3 V."}
+}

@@ -93,7 +93,10 @@
       "VDD": "0x49",
       "SDA": "0x4A",
       "SCL": "0x4B"
-    }
+    },
+    "supply_ratings": [
+      {"pins": ["8"], "kind": "supply", "v_min": 2.0, "v_max": 5.5, "v_abs_max": 7.0, "confidence": "verified", "source": "TI ADS111x Ultra-Small, Low-Power, I2C-Compatible, 860SPS, 16-Bit ADCs, SBAS444E (Rev. E, Dec 2024); cross-checked against SBAS444D (Jan 2018) (https://www.ti.com/lit/ds/symlink/ads1115.pdf): SBAS444E sec. 5.3 Recommended Operating Conditions (Power supply VDD to GND 2 min, 5.5 max V); sec. 5.1 Absolute Maximum Ratings (Power-supply voltage VDD to GND -0.3 to 7 V)"}
+    ]
   },
   "MCP3208-CI/SL": {
     "topology": "adc",
@@ -229,6 +232,10 @@
       "CH5",
       "CH6",
       "CH7"
+    ],
+    "supply_ratings": [
+      {"pins": ["16"], "kind": "supply", "v_min": 2.7, "v_max": 5.5, "v_abs_max": 7.0, "confidence": "verified", "source": "Microchip MCP3204/3208 2.7V 4-Channel/8-Channel 12-Bit A/D Converters with SPI Serial Interface, DS21298E (2008) (https://ww1.microchip.com/downloads/en/devicedoc/21298e.pdf): DS21298E sec. 1.0 Electrical Characteristics, Power Requirements (Operating Voltage VDD 2.7 min, 5.5 max V); sec. 1.0 Absolute Maximum Ratings (VDD 7.0 V)"},
+      {"pins": ["15"], "kind": "reference_input", "confidence": "verified", "source": "Microchip MCP3204/3208 2.7V 4-Channel/8-Channel 12-Bit A/D Converters with SPI Serial Interface, DS21298E (2008) (https://ww1.microchip.com/downloads/en/devicedoc/21298e.pdf): DS21298E sec. 1.0 Electrical Characteristics, Reference Input (Voltage Range 0.25 min, VDD max V); Absolute Maximum Ratings (all inputs and outputs w.r.t. VSS -0.6 V to VDD + 0.6 V)"}
     ]
   },
   "MCP4725A0T": {
@@ -284,7 +291,10 @@
     "pin_vout": "1",
     "pin_sda": "4",
     "pin_scl": "5",
-    "pin_a0": "6"
+    "pin_a0": "6",
+    "supply_ratings": [
+      {"pins": ["3"], "kind": "supply", "v_min": 2.7, "v_max": 5.5, "v_abs_max": 6.5, "confidence": "verified", "source": "Microchip MCP4725 12-Bit Digital-to-Analog Converter with EEPROM Memory, DS20002039F (2023): DS20002039F sec. 1.0 Electrical Characteristics, Power Requirements (Operating Voltage VDD 2.7 min, 5.5 max V); sec. 1.0 Absolute Maximum Ratings (VDD 6.5 V)"}
+    ]
   },
   "DAC8552IDGK": {
     "topology": "dac",
@@ -351,7 +361,11 @@
     "pin_voutb": "3",
     "pin_din": "7",
     "pin_sclk": "6",
-    "pin_sync": "5"
+    "pin_sync": "5",
+    "supply_ratings": [
+      {"pins": ["1"], "kind": "supply", "v_min": 2.7, "v_max": 5.5, "v_abs_max": 6.0, "confidence": "verified", "source": "TI DAC8552 16-Bit, Dual Channel, Ultra-Low Glitch, Voltage Output DAC, SLAS430A (Oct 2006) (https://www.ti.com/lit/ds/symlink/dac8552.pdf): SLAS430A Electrical Characteristics, Power Requirements (VDD 2.7 min, 5.5 max V); Absolute Maximum Ratings (VDD to GND -0.3 V to 6 V)"},
+      {"pins": ["2"], "kind": "reference_input", "confidence": "verified", "source": "TI DAC8552 16-Bit, Dual Channel, Ultra-Low Glitch, Voltage Output DAC, SLAS430A (Oct 2006) (https://www.ti.com/lit/ds/symlink/dac8552.pdf): SLAS430A Electrical Characteristics, Reference Input (Reference input range 0 to VDD V)"}
+    ]
   },
   "INA219": {
     "topology": "current_sense",

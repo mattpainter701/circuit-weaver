@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass, field
 
 from .evidence_policy import EVIDENCE_ID_PATTERN, validate_evidence_text
+from .supply_ratings import normalize_part_supply_ratings
 
 SUPPORT_PASSIVE_PRESENTATIONS = {"inherit", "literal_local", "symbolic", "topology_local"}
 _ROLE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -665,6 +666,10 @@ class ComponentDef:
     # Regulator input-output headroom requirement, when a source explicitly
     # supplies it.  Unknown dropout stays None rather than a guessed value.
     dropout_voltage: float | None = None
+    # Datasheet supply-pin voltage limits in the normalized ``supply_ratings``
+    # shape (see ``supply_ratings.py``). Empty means "take them from the
+    # curated part entry"; the validator reports supply pins left unrated.
+    supply_ratings: list[dict] = field(default_factory=list)
 
     # Pin numbers intentionally left unconnected (no-connect by design).
     # The generator will place NC markers on these pins without warnings.
@@ -1121,6 +1126,10 @@ class ComponentRegistry:
                     if isinstance(item, dict)
                 ],
                 dropout_voltage=entry.get("dropout_voltage"),
+                supply_ratings=[
+                    rating.to_dict()
+                    for rating in normalize_part_supply_ratings(entry, where=f"{path}:{entry['mpn']}")
+                ],
                 feedback_vref_voltage=(
                     feedback_vref_voltage if (feedback_vref_provenance or feedback_vref_evidence_id) else None
                 ),
@@ -1970,6 +1979,26 @@ def _builtin_components():
     reg.register(
         ComponentDef(
             mpn="AMS1117-3.3",
+            supply_ratings=[
+                {
+                    "pins": ["3"],
+                    "kind": "supply",
+                    "v_min": 4.75,
+                    "v_max": 12.0,
+                    "v_abs_max": 15.0,
+                    "confidence": "single_source",
+                    "source": (
+                        "Advanced Monolithic Systems AMS1117 1A Low Dropout Voltage Regulator "
+                        "(http://www.advanced-monolithic.com/pdf/ds1117.pdf): AMS1117 Absolute Maximum "
+                        "Ratings (Input Voltage 15 V); Electrical Characteristics, AMS1117-3.3 output voltage"
+                        " and line regulation test conditions (4.75 V <= VIN <= 12 V, 0 <= IOUT <= 1 A)"
+                    ),
+                    "note": (
+                        "The AMS datasheet has no recommended-operating table; 4.75-12 V is the range the 3.3"
+                        " V output is specified over."
+                    ),
+                },
+            ],
             ref_prefix="U",
             value="AMS1117-3.3",
             footprint="Package_TO_SOT_SMD:SOT-223-3_TabPin2",
@@ -2036,6 +2065,24 @@ def _builtin_components():
     reg.register(
         ComponentDef(
             mpn="ESP32-WROOM-32E",
+            supply_ratings=[
+                {
+                    "pins": ["2"],
+                    "kind": "supply",
+                    "v_min": 3.0,
+                    "v_max": 3.6,
+                    "v_abs_max": 3.6,
+                    "confidence": "verified",
+                    "source": (
+                        "Espressif ESP32-WROOM-32E & ESP32-WROOM-32UE Datasheet v1.6 (2023-01-18) (https://ww"
+                        "w.espressif.com/sites/default/files/documentation/esp32-wroom-32e_esp32-wroom-32ue_d"
+                        "atasheet_en.pdf): ESP32-WROOM-32E/32UE Datasheet v1.6 sec. 4.2 Table 7 Recommended "
+                        "Operating Conditions (VDD33 min 3.0, typ 3.3, max 3.6 V); sec. 4.1 Table 6 Absolute "
+                        "Maximum Ratings (VDD33 -0.3 to 3.6 V); sec. 3.2 Table 3 Pin Definitions (pin 2 = "
+                        "3V3, P, 'Power supply')"
+                    ),
+                },
+            ],
             ref_prefix="U",
             value="ESP32-WROOM-32E",
             footprint="RF_Module:ESP32-WROOM-32E",
@@ -2147,6 +2194,39 @@ def _builtin_components():
     reg.register(
         ComponentDef(
             mpn="BME280",
+            supply_ratings=[
+                {
+                    "pins": ["8"],
+                    "kind": "supply",
+                    "v_min": 1.71,
+                    "v_max": 3.6,
+                    "v_abs_max": 4.25,
+                    "confidence": "verified",
+                    "source": (
+                        "Bosch Sensortec BME280 Datasheet, BST-BME280-DS001-24, Rev 1.24 (February 2024) (htt"
+                        "ps://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bme280-ds"
+                        "002.pdf): BST-BME280-DS001-24 sec. 1.1 Table 1 Electrical parameter specification "
+                        "(VDD min 1.71, typ 1.8, max 3.6 V, ripple max 50 mVpp); sec. 2 Table 5 Absolute "
+                        "maximum ratings (VDD and VDDIO pin -0.3 to 4.25 V); sec. 7.1 Table 35 Pin "
+                        "description (pin 8 = VDD, analog supply)"
+                    ),
+                },
+                {
+                    "pins": ["6"],
+                    "kind": "supply",
+                    "v_min": 1.2,
+                    "v_max": 3.6,
+                    "v_abs_max": 4.25,
+                    "confidence": "verified",
+                    "source": (
+                        "Bosch Sensortec BME280 Datasheet, BST-BME280-DS001-24, Rev 1.24 (February 2024) (htt"
+                        "ps://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bme280-ds"
+                        "002.pdf): BST-BME280-DS001-24 sec. 1.1 Table 1 (VDDIO min 1.2, typ 1.8, max 3.6 V); "
+                        "sec. 2 Table 5 (VDD and VDDIO pin -0.3 to 4.25 V); sec. 7.1 Table 35 (pin 6 = VDDIO,"
+                        " digital/interface supply)"
+                    ),
+                },
+            ],
             ref_prefix="U",
             value="BME280",
             footprint="Package_LGA:Bosch_LGA-8_2.5x2.5mm_P0.65mm_ClockwisePinNumbering",
@@ -2182,6 +2262,25 @@ def _builtin_components():
     reg.register(
         ComponentDef(
             mpn="W25Q128JVSIQ",
+            supply_ratings=[
+                {
+                    "pins": ["8"],
+                    "kind": "supply",
+                    "v_min": 2.7,
+                    "v_max": 3.6,
+                    "v_abs_max": 4.6,
+                    "confidence": "verified",
+                    "source": (
+                        "Winbond W25Q128JV 3V 128M-bit Serial Flash datasheet, Revision J (Publication "
+                        "Release Date April 25, 2024): W25Q128JV Rev J sec. 9.2 Operating Ranges (VCC 3.0-3.6"
+                        " V at FR = 133 MHz; 2.7-3.0 V at FR = 104 MHz); sec. 9.1 Absolute Maximum Ratings "
+                        "(Supply Voltage VCC -0.6 to 4.6 V); sec. 3.3 Pin Description SOIC 208-mil (pin 8 = "
+                        "VCC); sec. 11 Ordering Information (V = 2.7 V to 3.6 V; S = 8-pin SOIC 208-mil; I = "
+                        "Industrial -40 to +85 C; Q = QE fixed 1)"
+                    ),
+                    "note": "133 MHz operation needs VCC of at least 3.0 V.",
+                },
+            ],
             ref_prefix="U",
             value="W25Q128JVSIQ",
             footprint="Package_SO:SOIC-8_5.23x5.23mm_P1.27mm",
@@ -2210,6 +2309,24 @@ def _builtin_components():
     reg.register(
         ComponentDef(
             mpn="ATmega328P-AU",
+            supply_ratings=[
+                {
+                    "pins": ["4"],
+                    "kind": "supply",
+                    "v_min": 1.8,
+                    "v_max": 5.5,
+                    "v_abs_max": 6.0,
+                    "confidence": "verified",
+                    "source": (
+                        "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet, DS40002061B (2020): "
+                        "DS40002061B Features ('Operating Voltage: 1.8 - 5.5V'; 'Speed Grade: 0 - 4MHz@1.8 - "
+                        "5.5V, 0 - 10MHz@2.7 - 5.5V, 0 - 20MHz @ 4.5 - 5.5V'); sec. 29.3 Speed Grades Figure "
+                        "29-1 (safe operating area 1.8-5.5 V); sec. 29.1 Absolute Maximum Ratings ('Maximum "
+                        "Operating Voltage 6.0V'); sec. 1 Figure 1-1 32 TQFP pinout (VCC = pins 4 and 6)"
+                    ),
+                    "note": "Maximum clock frequency depends on VCC.",
+                },
+            ],
             ref_prefix="U",
             value="ATmega328P",
             footprint="Package_QFP:TQFP-32_7x7mm_P0.8mm",
@@ -2240,6 +2357,52 @@ def _builtin_components():
     reg.register(
         ComponentDef(
             mpn="STM32F103C8T6",
+            supply_ratings=[
+                {
+                    "pins": ["24", "36", "48"],
+                    "kind": "supply",
+                    "v_min": 2.0,
+                    "v_max": 3.6,
+                    "v_abs_max": 4.0,
+                    "confidence": "verified",
+                    "source": (
+                        "STMicroelectronics DS5319 Rev 20, STM32F103x8/STM32F103xB datasheet "
+                        "(https://www.st.com/resource/en/datasheet/stm32f103c8.pdf): DS5319 Rev 20 sec. 5.3.1"
+                        " Table 9 General operating conditions (VDD standard operating voltage 2-3.6 V); sec."
+                        " 5.2 Table 6 Voltage characteristics (VDD-VSS external main supply voltage, "
+                        "including VDDA and VDD, -0.3 to 4.0 V); sec. 3 Table 5 pin definitions, LQFP48 "
+                        "column (VDD_1 = 24, VDD_2 = 36, VDD_3 = 48)"
+                    ),
+                },
+                {
+                    "pins": ["9"],
+                    "kind": "supply",
+                    "v_min": 2.0,
+                    "v_max": 3.6,
+                    "v_abs_max": 4.0,
+                    "confidence": "verified",
+                    "source": (
+                        "STMicroelectronics DS5319 Rev 20, STM32F103x8/STM32F103xB datasheet "
+                        "(https://www.st.com/resource/en/datasheet/stm32f103c8.pdf): DS5319 Rev 20 sec. 5.3.1"
+                        " Table 9 (VDDA 2-3.6 V with ADC not used; 2.4-3.6 V with ADC used); sec. 5.2 Table 6"
+                        " (-0.3 to 4.0 V, 'including VDDA and VDD'); sec. 3 Table 5 LQFP48 (VDDA = 9)"
+                    ),
+                    "note": "2.4 V minimum when the ADC is used; keep within 300 mV of VDD.",
+                },
+                {
+                    "pins": ["1"],
+                    "kind": "supply",
+                    "v_min": 1.8,
+                    "v_max": 3.6,
+                    "confidence": "verified",
+                    "source": (
+                        "STMicroelectronics DS5319 Rev 20, STM32F103x8/STM32F103xB datasheet "
+                        "(https://www.st.com/resource/en/datasheet/stm32f103c8.pdf): DS5319 Rev 20 sec. 5.3.1"
+                        " Table 9 (VBAT backup operating voltage 1.8-3.6 V); sec. 2.3.9 Power supply schemes "
+                        "(VBAT = 1.8 to 3.6 V); sec. 3 Table 5 LQFP48 (VBAT = 1)"
+                    ),
+                },
+            ],
             ref_prefix="U",
             value="STM32F103C8T6",
             footprint="Package_QFP:LQFP-48_7x7mm_P0.5mm",
@@ -2362,6 +2525,41 @@ def _builtin_components():
     reg.register(
         ComponentDef(
             mpn="nRF52840-QIAA",
+            supply_ratings=[
+                {
+                    "pins": ["A22", "AD14", "AD23", "B1", "W1", "Y2"],
+                    "kind": "supply",
+                    "v_min": 1.7,
+                    "v_max": 3.6,
+                    "v_abs_max": 3.9,
+                    "confidence": "verified",
+                    "source": (
+                        "Nordic Semiconductor nRF52840 Product Specification v1.11 (4413_417 v1.11): nRF52840"
+                        " PS v1.11 sec. 8 Table 100 Recommended operating conditions (VDD min 1.7, nom 3.0, "
+                        "max 3.6 V); sec. 9 Table 101 Absolute maximum ratings (VDD -0.3 to +3.9 V); sec. "
+                        "7.1.1 Table 61 aQFN73 ball assignments (A22, AD14, AD23, B1, W1 = VDD 'Power "
+                        "supply')"
+                    ),
+                    "note": (
+                        "Normal voltage mode: VDDH (Y2) is tied to VDD, as this entry wires it. In "
+                        "high-voltage mode VDDH takes 2.5-5.5 V (5.8 V absolute maximum) instead."
+                    ),
+                },
+                {
+                    "pins": ["AD2"],
+                    "kind": "supply",
+                    "v_min": 4.35,
+                    "v_max": 5.5,
+                    "v_abs_max": 5.8,
+                    "confidence": "verified",
+                    "source": (
+                        "Nordic Semiconductor nRF52840 Product Specification v1.11 (4413_417 v1.11): nRF52840"
+                        " PS v1.11 sec. 8 Table 100 (VBUS min 4.35, nom 5.0, max 5.5 V); sec. 9 Table 101 "
+                        "(VBUS -0.3 to +5.8 V); sec. 7.1.1 Table 61 (AD2 = VBUS, '5 V input for USB 3.3 V "
+                        "regulator')"
+                    ),
+                },
+            ],
             ref_prefix="U",
             value="nRF52840",
             footprint="Package_DFN_QFN:Nordic_AQFN-73-1EP_7x7mm_P0.5mm",
@@ -2506,6 +2704,22 @@ def _builtin_components():
     reg.register(
         ComponentDef(
             mpn="AP2112K-3.3TRG1",
+            supply_ratings=[
+                {
+                    "pins": ["1"],
+                    "kind": "supply",
+                    "v_min": 2.5,
+                    "v_max": 6.0,
+                    "v_abs_max": 6.5,
+                    "confidence": "corroborated",
+                    "source": (
+                        "Diodes Inc. AP2112 600mA CMOS LDO Regulator with Enable (DS39724 Rev. 2-2) "
+                        "(https://www.diodes.com/assets/Datasheets/AP2112.pdf): DS39724 Absolute Maximum "
+                        "Ratings (Power Supply Voltage 6.5 V); Recommended Operating Conditions (Supply "
+                        "Voltage VIN 2.5 to 6.0 V)"
+                    ),
+                },
+            ],
             ref_prefix="U",
             value="AP2112K-3.3",
             footprint="Package_TO_SOT_SMD:SOT-23-5",
@@ -2528,6 +2742,22 @@ def _builtin_components():
     reg.register(
         ComponentDef(
             mpn="MCP1700-3302E",
+            supply_ratings=[
+                {
+                    "pins": ["3"],
+                    "kind": "supply",
+                    "v_min": 2.3,
+                    "v_max": 6.0,
+                    "v_abs_max": 6.5,
+                    "confidence": "corroborated",
+                    "source": (
+                        "Microchip MCP1700 Low Quiescent Current LDO (DS20001826E; same values in DS21826A "
+                        "and DS20001826F) (https://ww1.microchip.com/downloads/en/DeviceDoc/MCP1700-Low-Quies"
+                        "cent-Current-LDO-20001826E.pdf): DS20001826 Absolute Maximum Ratings (VDD +6.5 V); "
+                        "DC Characteristics (Input Operating Voltage VIN 2.3 min, 6.0 max, Note 1)"
+                    ),
+                },
+            ],
             ref_prefix="U",
             value="MCP1700-3.3",
             footprint="Package_TO_SOT_SMD:SOT-23",
@@ -2822,6 +3052,23 @@ def _builtin_components():
     reg.register(
         ComponentDef(
             mpn="MAX17048G+T10",
+            supply_ratings=[
+                {
+                    "pins": ["3"],
+                    "kind": "supply",
+                    "v_min": 2.5,
+                    "v_max": 4.5,
+                    "v_abs_max": 6.0,
+                    "confidence": "corroborated",
+                    "source": (
+                        "Analog Devices MAX17048/MAX17049 3uA 1-Cell/2-Cell Fuel Gauge with ModelGauge "
+                        "(19-6171 Rev 7) (https://www.analog.com/media/en/technical-documentation/data-sheets"
+                        "/max17048-max17049.pdf): MAX17048/MAX17049 (19-6171) Absolute Maximum Ratings (CELL "
+                        "to GND -0.3 to +12 V; All Other Pins to GND -0.3 to +6 V); Electrical "
+                        "Characteristics (Supply Voltage VDD, Note 2: 2.5 to 4.5 V)"
+                    ),
+                },
+            ],
             ref_prefix="U",
             value="MAX17048",
             footprint="Package_DFN_QFN:TDFN-8-1EP_2x2mm_P0.5mm_EP0.8x1.2mm",

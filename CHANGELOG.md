@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Supply-voltage checks against datasheet ratings
+
+- Check every supply pin's rail voltage against its datasheet rating. Rail voltages come from `power_domains`, regulator and source block parameters (`vin`/`vin_net`, `vout`/`rail_name`, ...) or, as a review hint, the rail's name. A declared rail above a pin's recommended maximum or below its minimum is a confirmed error (CW-PWR-001/002) when the rating is verified or corroborated, and the message says when the absolute maximum is exceeded. Previously these rules only fired on hand-declared envelopes, so 12 V into a 5.5 V LDO validated cleanly.
+- Fail closed when the check can't run: a supply pin on a known rail with no rating (CW-PWR-014) or a rated pin on a rail whose voltage is never stated (CW-PWR-015) is reported, and conflicting voltage declarations for one rail are an error.
+- Add the normalized `supply_ratings` part-data field (per-pin `v_min`/`v_max`/`v_abs_max`, `kind`, `confidence`, `source`) and populate it from manufacturer datasheets for 43 curated parts. Ratings for parts whose pin maps disagree with their datasheets are withheld until those maps are corrected. Older `vin_max`/`vdd_max`/`supply_range` fields are still read as single-source ratings. Specs can rate their own parts with the same field.
+- Add part-data benchmark fixtures for over-voltage, under-voltage and unknown-rail cases; the electrical benchmark now scores 19 rules over 46 fixtures at precision and recall 1.0.
+
 ### Corrected part data
 
 - Correct the AP2112K-3.3 SOT-23-5 pin map: pin 1 is VIN and pin 5 is VOUT (Diodes DS39724). The swapped entry wired the input rail to the regulator output in the OLED, RF front-end, USB-UART and Zigbee samples. Their checked-in generated artifacts predate this fix and need regenerating.

@@ -145,6 +145,31 @@ Three validation categories are **hard-gated** at generation time — `generate_
 
 ---
 
+### supply-ratings (CW-PWR-001, CW-PWR-002, CW-PWR-014, CW-PWR-015)
+
+**What it checks:** Every non-ground power-input pin's rail voltage against that pin's datasheet rating. Ratings come from the part's normalized `supply_ratings` data (see [IC Data System](ic-data-system.md#supply-ratings)). Rail voltages come from, in order:
+
+1. `power_domains` entries (`v_min`/`v_nominal`/`v_max`/`tolerance`);
+2. block parameters that name a rail and its voltage (`vin_net` + `vin`/`vin_min`/`vin_max`, `rail_name` or `vout_net` + `vout`, `vm_net` + `vm`, `vdd_net` + `vdd`, `bat_net` + `vbat`, ...);
+3. the rail's name (`VIN_12V`, `VDD_3P3`, `3V3`), as a review hint only.
+
+| Code | Rule | Level | Meaning |
+|-|-|-|-|
+| `power-over-voltage` | CW-PWR-001 | Error* | The rail's maximum is above the pin's recommended maximum. The message says when it is also above the absolute maximum. |
+| `power-under-voltage` | CW-PWR-002 | Error* | The rail's minimum is below the pin's recommended minimum. |
+| `supply-rating-missing` | CW-PWR-014 | Warning | A supply pin has no rating, so it cannot be checked. Connectors, passives, test points and virtual containers are exempt. |
+| `supply-voltage-unknown` | CW-PWR-015 | Warning | A rated supply pin sits on a rail whose voltage the design never states. |
+| `power-domain-voltage-conflict` | — | Error | Two declarations give one rail different voltages. The check uses the worst case of both. |
+| `supply-rating-invalid` | — | Error | A `supply_ratings` entry is malformed (for example, `v_min` above `v_max`). |
+
+\* An over- or under-voltage is a confirmed error only when the rail voltage is declared (rule 1 or 2) **and** the rating's `confidence` is `verified` or `corroborated`. A rail voltage implied only by the rail's name, or a `single_source` rating, produces a warning that explains what to confirm.
+
+Rated pins of kind `negative_supply`, `floating` (bootstrap/offset supplies) and `reference_input` (ADC/DAC VREF) count as rated, but they are not compared to a ground-referenced rail.
+
+**Fix:** Move the part to a rail inside its rating, add a regulator in front of it, or choose a part rated for the rail. For a missing rating, add `supply_ratings` to the part entry from its datasheet. For an unknown rail, declare it in `power_domains` or name the regulator that produces it (`rail_name` + `vout`).
+
+---
+
 ## ValidationIssue Fields
 
 Each issue contains:

@@ -1,0 +1,7 @@
+{
+  "project": "benchmark_power_rated_supply_unknown_rail",
+  "spec_version": "mvp_ir_v1",
+  "auto_repair": false,
+  "blocks": [{"id": "sensors:U1", "section": "sensors", "kind": "component", "ref": "U1", "ic": "BME280", "params": {"power_map": {"VDD_3P3": "VCC_AUX"}, "no_connects": ["3", "4", "5"]}}],
+  "benchmark_intent": {"domain": "power", "polarity": "negative", "scenario": "A rated sensor sits on a rail whose voltage is neither declared nor encoded in its name, so its rating cannot be checked."}
+}

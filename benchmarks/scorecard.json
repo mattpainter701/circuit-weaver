@@ -6,10 +6,10 @@
     "minimum_recall": 0.9,
     "precision": 1.0,
     "recall": 1.0,
-    "scored_rule_count": 18,
+    "scored_rule_count": 19,
     "status": "pass",
-    "tp": 22,
-    "unsupported_rule_count": 15
+    "tp": 25,
+    "unsupported_rule_count": 16
   },
   "coverage": {
     "CW-ANALOG-001": {
@@ -198,6 +198,18 @@
       "reason": "no complete labelled executable population",
       "status": "unsupported"
     },
+    "CW-PWR-014": {
+      "code": "supply-rating-missing",
+      "domain": "power",
+      "reason": "no complete labelled executable population",
+      "status": "unsupported"
+    },
+    "CW-PWR-015": {
+      "code": "supply-voltage-unknown",
+      "domain": "power",
+      "reason": null,
+      "status": "scored"
+    },
     "CW-SPI-001": {
       "code": "spi-floating-cs",
       "domain": "spi",
@@ -240,7 +252,7 @@
       "recall": 1.0,
       "recall_status": "defined",
       "tp": 1,
-      "unsupported": 8
+      "unsupported": 6
     },
     "i2c": {
       "fn": 0,
@@ -289,7 +301,7 @@
       "precision_status": "defined",
       "recall": 1.0,
       "recall_status": "defined",
-      "tp": 8,
+      "tp": 11,
       "unsupported": 0
     },
     "protection": {
@@ -310,7 +322,7 @@
       "recall": 1.0,
       "recall_status": "defined",
       "tp": 1,
-      "unsupported": 6
+      "unsupported": 4
     },
     "uart": {
       "fn": 0,
@@ -333,7 +345,7 @@
       "unsupported": 1
     }
   },
-  "fixture_count": 42,
+  "fixture_count": 46,
   "rules": {
     "CW-ANALOG-001": {
       "fn": 0,
@@ -472,7 +484,7 @@
       "precision_status": "defined",
       "recall": 1.0,
       "recall_status": "defined",
-      "tp": 1,
+      "tp": 2,
       "unsupported": 0
     },
     "CW-PWR-002": {
@@ -482,7 +494,7 @@
       "precision_status": "defined",
       "recall": 1.0,
       "recall_status": "defined",
-      "tp": 1,
+      "tp": 2,
       "unsupported": 0
     },
     "CW-PWR-003": {
@@ -526,6 +538,26 @@
       "unsupported": 0
     },
     "CW-PWR-007": {
+      "fn": 0,
+      "fp": 0,
+      "precision": 1.0,
+      "precision_status": "defined",
+      "recall": 1.0,
+      "recall_status": "defined",
+      "tp": 1,
+      "unsupported": 0
+    },
+    "CW-PWR-014": {
+      "fn": 0,
+      "fp": 0,
+      "precision": null,
+      "precision_status": "undefined_no_predictions",
+      "recall": null,
+      "recall_status": "undefined_no_expected",
+      "tp": 0,
+      "unsupported": 0
+    },
+    "CW-PWR-015": {
       "fn": 0,
       "fp": 0,
       "precision": 1.0,
@@ -594,19 +626,11 @@
       "fixture_id": "erc-connected-control"
     },
     {
-      "code": "footprint-library-missing",
-      "fixture_id": "erc-connected-control"
-    },
-    {
       "code": "floating-input-pin",
       "fixture_id": "erc-single-pin"
     },
     {
       "code": "floating-power-pin",
-      "fixture_id": "erc-single-pin"
-    },
-    {
-      "code": "footprint-library-missing",
       "fixture_id": "erc-single-pin"
     },
     {
@@ -650,10 +674,6 @@
       "fixture_id": "spi-chip-select-connected"
     },
     {
-      "code": "footprint-library-missing",
-      "fixture_id": "spi-chip-select-connected"
-    },
-    {
       "code": "bus-completeness",
       "fixture_id": "spi-floating-chip-select"
     },
@@ -663,10 +683,6 @@
     },
     {
       "code": "floating-power-pin",
-      "fixture_id": "spi-floating-chip-select"
-    },
-    {
-      "code": "footprint-library-missing",
       "fixture_id": "spi-floating-chip-select"
     },
     {

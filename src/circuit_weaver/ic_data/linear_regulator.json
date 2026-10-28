@@ -46,7 +46,10 @@
     "pin_vin": "1",
     "pin_gnd": "2",
     "pin_out": "5",
-    "pin_en": "3"
+    "pin_en": "3",
+    "supply_ratings": [
+      {"pins": ["1"], "kind": "supply", "v_min": 1.45, "v_max": 5.5, "v_abs_max": 6.0, "confidence": "corroborated", "source": "TI TLV755P datasheet SBVS320D (Sep 2024) (https://www.ti.com/lit/ds/symlink/tlv755p.pdf): SBVS320 Recommended Operating Conditions (VIN 1.45 to 5.5 V); Absolute Maximum Ratings (IN -0.3 to 6.0 V; EN -0.3 to 6.0 V; OUT -0.3 to min(VIN+0.3, 6.0) V)"}
+    ]
   },
   "AMS1117-3.3": {
     "topology": "ldo",
@@ -82,7 +85,10 @@
     "pin_vin": "3",
     "pin_gnd": "1",
     "pin_out": "2",
-    "pin_en": null
+    "pin_en": null,
+    "supply_ratings": [
+      {"pins": ["3"], "kind": "supply", "v_min": 4.75, "v_max": 12.0, "v_abs_max": 15.0, "confidence": "single_source", "source": "Advanced Monolithic Systems AMS1117 1A Low Dropout Voltage Regulator datasheet (third-party mirror) (https://www.rcscomponents.kiev.ua/datasheets/AMS1117-datasheet.PDF): AMS1117 Absolute Maximum Ratings ('Input Voltage 15V'); Electrical Characteristics, AMS1117-3.3 output-voltage row ('0 <= IOUT <= 1A, 4.75V <= VIN <= 12V')", "note": "The AMS datasheet has no recommended-operating table; 4.75-12 V is the range the 3.3 V output is specified over."}
+    ]
   },
   "AP2112K-3.3": {
     "topology": "ldo",
@@ -131,7 +137,10 @@
     "pin_vin": "1",
     "pin_gnd": "2",
     "pin_out": "5",
-    "pin_en": "3"
+    "pin_en": "3",
+    "supply_ratings": [
+      {"pins": ["1"], "kind": "supply", "v_min": 2.5, "v_max": 6.0, "v_abs_max": 6.5, "confidence": "corroborated", "source": "Diodes Inc AP2112 datasheet DS39724 Rev 2-2 (June 2017) (https://www.diodes.com/assets/Datasheets/AP2112.pdf): DS39724 Recommended Operating Conditions (supply voltage VIN 2.5 to 6.0 V); Absolute Maximum Ratings (power supply voltage 6.5 V)"}
+    ]
   },
   "MCP1700-3302E": {
     "topology": "ldo",
@@ -167,7 +176,10 @@
     "pin_vin": "3",
     "pin_gnd": "1",
     "pin_out": "2",
-    "pin_en": null
+    "pin_en": null,
+    "supply_ratings": [
+      {"pins": ["3"], "kind": "supply", "v_min": 2.3, "v_max": 6.0, "v_abs_max": 6.5, "confidence": "corroborated", "source": "Microchip MCP1700 datasheet DS20001826F (https://ww1.microchip.com/downloads/en/DeviceDoc/MCP1700-Data-Sheet-20001826F.pdf): DS20001826 Electrical Characteristics (input operating voltage VIN 2.3 to 6.0 V); Absolute Maximum Ratings (VDD +6.5 V)"}
+    ]
   },
   "MCP1700-1802E": {
     "topology": "ldo",
@@ -203,7 +215,10 @@
     "pin_vin": "3",
     "pin_gnd": "1",
     "pin_out": "2",
-    "pin_en": null
+    "pin_en": null,
+    "supply_ratings": [
+      {"pins": ["3"], "kind": "supply", "v_min": 2.3, "v_max": 6.0, "v_abs_max": 6.5, "confidence": "corroborated", "source": "Microchip MCP1700 datasheet DS20001826F (https://ww1.microchip.com/downloads/en/DeviceDoc/MCP1700-Data-Sheet-20001826F.pdf): DS20001826 Electrical Characteristics (input operating voltage VIN 2.3 to 6.0 V); Absolute Maximum Ratings (VDD +6.5 V)"}
+    ]
   },
   "LM2776": {
     "topology": "charge_pump",
@@ -313,7 +328,10 @@
     "pin_gnd": "3",
     "pin_vout": "5",
     "pin_cfp": "2",
-    "pin_cfn": "4"
+    "pin_cfn": "4",
+    "supply_ratings": [
+      {"pins": ["8"], "kind": "supply", "v_min": 1.5, "v_max": 10.0, "v_abs_max": 10.5, "confidence": "corroborated", "source": "Renesas (Intersil) ICL7660/ICL7660A CMOS Voltage Converter datasheet (FN3072) (https://html.alldatasheet.net/html-pdf/741766/INTERSIL/ICL7660CBAZ/1176/3/ICL7660CBAZ.html): Intersil ICL7660 Electrical Characteristics (Supply Voltage Range Lo 1.5 to 3.5 V with LV to GND; Hi 3.0 to 10.0 V with LV open); Absolute Maximum Ratings (supply voltage +10.5 V)", "note": "Tie LV (pin 6) to GND when V+ is below 3.5 V; leave it open above."}
+    ]
   },
   "REF3030": {
     "topology": "voltage_reference",
@@ -325,7 +343,7 @@
     "tempco_ppm": 50,
     "iq_ua": 100,
     "iout_max": 0.025,
-    "vin_min": 3.1,
+    "vin_min": 3.05,
     "vin_max": 5.5,
     "vin_abs_max": 7.0,
     "datasheet_url": "https://www.ti.com/lit/ds/symlink/ref30.pdf",
@@ -351,7 +369,10 @@
     ],
     "pin_vin": "1",
     "pin_vout": "2",
-    "pin_gnd": "3"
+    "pin_gnd": "3",
+    "supply_ratings": [
+      {"pins": ["1"], "kind": "supply", "v_min": 3.05, "v_max": 5.5, "v_abs_max": 7.0, "confidence": "corroborated", "source": "TI REF30E and REF30 datasheet SBVS032K (https://www.ti.com/lit/ds/symlink/ref30.pdf): SBVS032K Recommended Operating Conditions (REF30xx VIN = VOUT + 0.05 V to 5.5 V); Absolute Maximum Ratings (IN to GND: REF30xx 7 V; REF30xxE 6 V)", "note": "Non-E grade. REF3030E: VOUT + 0.2 V to 5.75 V, 6 V absolute maximum."}
+    ]
   },
   "REF3033": {
     "topology": "voltage_reference",
@@ -363,7 +384,7 @@
     "tempco_ppm": 50,
     "iq_ua": 100,
     "iout_max": 0.025,
-    "vin_min": 3.4,
+    "vin_min": 3.35,
     "vin_max": 5.5,
     "vin_abs_max": 7.0,
     "datasheet_url": "https://www.ti.com/lit/ds/symlink/ref30.pdf",
@@ -389,7 +410,10 @@
     ],
     "pin_vin": "1",
     "pin_vout": "2",
-    "pin_gnd": "3"
+    "pin_gnd": "3",
+    "supply_ratings": [
+      {"pins": ["1"], "kind": "supply", "v_min": 3.35, "v_max": 5.5, "v_abs_max": 7.0, "confidence": "corroborated", "source": "TI REF30E and REF30 datasheet SBVS032K (https://www.ti.com/lit/ds/symlink/ref30.pdf): SBVS032K Recommended Operating Conditions (REF30xx VIN = VOUT + 0.05 V to 5.5 V); Absolute Maximum Ratings (IN to GND: REF30xx 7 V; REF30xxE 6 V)", "note": "Non-E grade. REF3033E: VOUT + 0.2 V to 5.75 V, 6 V absolute maximum."}
+    ]
   },
   "LM4040-2.5": {
     "topology": "voltage_reference",
@@ -507,7 +531,10 @@
     "pin_stat": "1",
     "pin_temp": null,
     "pin_ce": null,
-    "has_temp_pin": false
+    "has_temp_pin": false,
+    "supply_ratings": [
+      {"pins": ["4"], "kind": "supply", "v_min": 3.75, "v_max": 6.0, "v_abs_max": 7.0, "confidence": "corroborated", "source": "Microchip MCP73831/2 datasheet DS20001984 (mirror copy) (https://www.farnell.com/datasheets/1784520.pdf): DS20001984 Electrical Characteristics, Supply Input (VDD 3.75 to 6 V); Absolute Maximum Ratings (VDD 7.0 V)"}
+    ]
   },
   "TP4056": {
     "topology": "battery_charger",
@@ -573,6 +600,9 @@
     "pin_stat": "6",
     "pin_temp": "1",
     "pin_ce": "8",
-    "has_temp_pin": true
+    "has_temp_pin": true,
+    "supply_ratings": [
+      {"pins": ["4"], "kind": "supply", "v_min": 4.0, "v_max": 8.0, "v_abs_max": 8.0, "confidence": "corroborated", "source": "NanJing Top Power ASIC TP4056 1A Standalone Linear Li-Ion Charger datasheet REV 2.4 (https://www.toppwr.com/uploadfile/file/20240307/65e993d6379ea.pdf): TP4056 Electrical Characteristics (VCC input supply voltage 4.0 min / 5 typ / 8.0 max V); Absolute Maximum Ratings (input supply voltage VCC -0.3 to 8 V)", "note": "Recommended maximum equals the absolute maximum; leave margin."}
+    ]
   }
 }

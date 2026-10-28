@@ -1,0 +1,7 @@
+{
+  "project": "benchmark_power_part_rated_ldo_over_voltage",
+  "spec_version": "mvp_ir_v1",
+  "auto_repair": false,
+  "blocks": [{"id": "power:U1", "section": "power", "kind": "template", "type": "ldo", "ref": "U1", "ic": "TLV75518", "params": {"vin": 12, "vout": 1.8, "vin_net": "VIN_12V", "rail_name": "VDD_1P8"}}],
+  "benchmark_intent": {"domain": "power", "polarity": "negative", "scenario": "A 12 V input rail drives an LDO whose curated datasheet rating is 5.5 V recommended, 6 V absolute maximum. No envelope is hand-declared; the limit comes from part data."}
+}

@@ -4,10 +4,6 @@
     "description": "Dual Op-Amp General Purpose",
     "footprint": "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
     "units": 2,
-    "supply_range": [
-      3.0,
-      32.0
-    ],
     "gbw_mhz": 1.0,
     "pins": [
       {
@@ -63,17 +59,17 @@
     "pin_vminus": "4",
     "pin_out_a": "1",
     "pin_inm_a": "2",
-    "pin_inp_a": "3"
+    "pin_inp_a": "3",
+    "supply_ratings": [
+      {"pins": ["8"], "kind": "supply", "v_min": 3.0, "v_max": 30.0, "v_abs_max": 32.0, "confidence": "verified", "source": "TI LM158/LM258/LM358/LM2904 family, Industry-Standard Dual Operational Amplifiers, SLOS068AB (Rev. AB, Oct 2024) (https://www.ti.com/lit/ds/symlink/lm358.pdf): SLOS068AB sec. 5.3 Recommended Operating Conditions (VS = (V+)-(V-), LM158/LM258/LM358/LM158A/LM258A/LM358A/LM2904V: 3 to 30 V); sec. 5.1 Absolute Maximum Ratings (same devices: +/-16 or 32 V)"},
+      {"pins": ["4"], "kind": "negative_supply", "confidence": "verified", "source": "TI LM158/LM258/LM358/LM2904 family, Industry-Standard Dual Operational Amplifiers, SLOS068AB (Rev. AB, Oct 2024) (https://www.ti.com/lit/ds/symlink/lm358.pdf): SLOS068AB sec. 4 Table 4-1 Pin Functions (V- = pin 4: 'Negative (lowest) supply or ground (for single-supply operation)')"}
+    ]
   },
   "MCP6002": {
     "topology": "opamp",
     "description": "Dual Op-Amp Rail-to-Rail 1MHz",
     "footprint": "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
     "units": 2,
-    "supply_range": [
-      1.8,
-      6.0
-    ],
     "gbw_mhz": 1.0,
     "pins": [
       {
@@ -129,17 +125,16 @@
     "pin_vminus": "4",
     "pin_out_a": "1",
     "pin_inm_a": "2",
-    "pin_inp_a": "3"
+    "pin_inp_a": "3",
+    "supply_ratings": [
+      {"pins": ["8"], "kind": "supply", "v_min": 1.8, "v_max": 6.0, "v_abs_max": 7.0, "confidence": "verified", "source": "Microchip MCP6001/1R/1U/2/4 1 MHz, Low-Power Op Amp, DS21733J (2009) (http://ww1.microchip.com/downloads/en/DeviceDoc/21733j.pdf): DS21733J sec. 1.0 DC Electrical Specifications (Power Supply: Supply Voltage VDD 1.8 min, 6.0 max, Note 2); sec. 1.0 Absolute Maximum Ratings (VDD - VSS 7.0 V)", "note": "6.0 V operation is screened only on parts date-coded November 2007 or later."}
+    ]
   },
   "OPA2340": {
     "topology": "opamp",
     "description": "Dual Op-Amp Rail-to-Rail CMOS 5.5MHz",
     "footprint": "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
     "units": 2,
-    "supply_range": [
-      2.7,
-      5.5
-    ],
     "gbw_mhz": 5.5,
     "pins": [
       {
@@ -195,17 +190,17 @@
     "pin_vminus": "4",
     "pin_out_a": "1",
     "pin_inm_a": "2",
-    "pin_inp_a": "3"
+    "pin_inp_a": "3",
+    "supply_ratings": [
+      {"pins": ["8"], "kind": "supply", "v_min": 2.7, "v_max": 5.5, "confidence": "corroborated", "source": "TI OPAx340 Single-Supply, Rail-to-Rail Operational Amplifiers, SBOS073 (rev C per search excerpts) (https://www.ti.com/lit/gpn/OPA2340): SBOS073C Recommended Operating Conditions (supply 2.7 V min, 5.5 V max) and ti.com/product/OPA2340 (total supply 2.7 V to 5.5 V), via manufacturer-domain search excerpts"},
+      {"pins": ["4"], "kind": "negative_supply", "confidence": "corroborated", "source": "TI OPAx340 Single-Supply, Rail-to-Rail Operational Amplifiers, SBOS073 (rev C per search excerpts) (https://www.ti.com/lit/gpn/OPA2340): Not read from pin table (see note)"}
+    ]
   },
   "INA128PA": {
     "topology": "sensor_frontend",
     "description": "Precision Instrumentation Amplifier PDIP-8",
     "footprint": "Package_DIP:DIP-8_W7.62mm",
     "datasheet_url": "https://www.ti.com/lit/ds/symlink/ina128.pdf",
-    "supply_range": [
-      4.5,
-      36.0
-    ],
     "gain_formula": "ina128",
     "r_internal": 50000.0,
     "pins": [
@@ -265,7 +260,11 @@
     "pin_vout": "6",
     "pin_ref": "5",
     "pin_rg_p": "8",
-    "pin_rg_n": "1"
+    "pin_rg_n": "1",
+    "supply_ratings": [
+      {"pins": ["7"], "kind": "supply", "v_min": 4.5, "v_max": 36.0, "v_abs_max": 36.0, "confidence": "verified", "source": "TI INA12x (INA128, INA129) Precision, Low-Power Instrumentation Amplifiers, SBOS051G (Rev. G, Jan 2026) (https://www.ti.com/lit/ds/symlink/ina128.pdf): SBOS051G sec. 6.3 Recommended Operating Conditions (VS single-supply 4.5 min / 30 typ / 36 max V; dual +/-2.25 to +/-18 V); sec. 6.1 Absolute Maximum Ratings (single supply VS = (V+) - 0 V: 36 V; dual +/-18 V)"},
+      {"pins": ["4"], "kind": "negative_supply", "confidence": "verified", "source": "TI INA12x (INA128, INA129) Precision, Low-Power Instrumentation Amplifiers, SBOS051G (Rev. G, Jan 2026) (https://www.ti.com/lit/ds/symlink/ina128.pdf): SBOS051G sec. 5 Table 5-1 Pin Functions (V- = pin 4, Power, Negative supply)"}
+    ]
   },
   "AD8421BRZ": {
     "topology": "sensor_frontend",
@@ -489,10 +488,6 @@
     "description": "Nanopower single comparator, push-pull/open-drain compatible threshold detector use",
     "footprint": "Package_TO_SOT_SMD:SOT-353_SC-70-5",
     "units": 1,
-    "supply_range": [
-      0.9,
-      6.5
-    ],
     "pins": [
       {
         "number": "1",
@@ -529,6 +524,10 @@
     "pin_vminus": "2",
     "pin_out_a": "1",
     "pin_inm_a": "4",
-    "pin_inp_a": "3"
+    "pin_inp_a": "3",
+    "supply_ratings": [
+      {"pins": ["5"], "kind": "supply", "v_min": 0.9, "v_max": 6.5, "v_abs_max": 7.0, "confidence": "single_source", "source": "TI TLV3691 0.9-V to 6.5-V, Nanopower Comparator, SBOS694A (https://www.ti.com/lit/ds/symlink/tlv3691.pdf): SBOS694A Recommended Operating Conditions / Electrical Characteristics (supply 0.9 V to 6.5 V); Absolute Maximum Ratings (supply voltage 7 V), via ti.com search excerpts"},
+      {"pins": ["2"], "kind": "negative_supply", "confidence": "single_source", "source": "TI TLV3691 0.9-V to 6.5-V, Nanopower Comparator, SBOS694A (https://www.ti.com/lit/ds/symlink/tlv3691.pdf): SBOS694A pin functions via ti.com search excerpt (GND = pin 2 on both DCK and DPF)"}
+    ]
   }
 }

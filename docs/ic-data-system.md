@@ -107,6 +107,35 @@ IC application data is stored in JSON files, grouped by function:
 - `cin`, `cout` — recommended cap values (F)
 - `pin_vin`, `pin_gnd`, `pin_out`, `pin_en`
 
+### Supply Ratings
+
+Every part with a non-ground `power_in` pin should state the datasheet limits of its supply pins. The validator compares them with each pin's rail voltage (see [validation codes](validation-codes.md#supply-ratings-cw-pwr-001-cw-pwr-002-cw-pwr-014-cw-pwr-015)). A part without them still works, but each use gets a `supply-rating-missing` warning.
+
+```json
+"supply_ratings": [
+  {"pins": ["1"], "kind": "supply", "v_min": 1.45, "v_max": 5.5, "v_abs_max": 6.0,
+   "confidence": "verified",
+   "source": "TI SBVS320 (https://www.ti.com/lit/ds/symlink/tlv755p.pdf) 6.3 Recommended Operating Conditions; 6.1 Absolute Maximum Ratings"}
+]
+```
+
+| Field | Meaning |
+|-|-|
+| `pins` | Pin numbers the limits apply to. Group pins that share limits; a pin may appear only once. |
+| `kind` | `supply` (ground-referenced, checked against rail voltage), `negative_supply` (op-amp V−), `floating` (bootstrap or offset supply referenced to another pin) or `reference_input` (ADC/DAC VREF). Only `supply` needs numbers. |
+| `v_min`, `v_max` | Recommended operating range in volts. |
+| `v_abs_max` | Absolute maximum rating in volts. |
+| `confidence` | `verified` (read from the manufacturer datasheet), `corroborated` (the datasheet's table values confirmed through more than one independent channel without reading the PDF itself) or `single_source`. Only `verified` and `corroborated` ratings can produce a confirmed error. |
+| `source` | Document, section and URL, so a reviewer can check the number. |
+| `note` | Constraints the numbers can't express, such as "VCCA ≤ VCCB". |
+
+Rules for adding ratings:
+
+- Take numbers from the manufacturer's datasheet tables, never from memory or a distributor summary. Leave a value out rather than guess it.
+- For op-amps, give the V+ pin's total supply span with V− at ground and mark V− as `negative_supply`.
+- Older entries that only carry `vin_min`/`vin_max`/`vin_abs_max`, `vdd_min`/`vdd_max` or `supply_range` are still read, as `single_source` ratings. New entries should use `supply_ratings`.
+- A design can rate a part instance in its spec with the same `supply_ratings` list (on the block), or rate single pins with `power_pin_defs`. Instance ratings take precedence over the part entry.
+
 ## Python API
 
 ```python

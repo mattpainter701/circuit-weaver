@@ -109,6 +109,9 @@
     ],
     "pin_gnd": [
       "8"
+    ],
+    "supply_ratings": [
+      {"pins": ["16"], "kind": "supply", "v_min": 2.0, "v_max": 6.0, "v_abs_max": 7.0, "confidence": "verified", "source": "Nexperia 74HC595; 74HCT595 8-bit serial-in, serial or parallel-out shift register with output latches; 3-state, Product data sheet Rev. 10 (29 April 2021): Nexperia 74HC_HCT595 Rev 10 sec. 9 Table 5 Recommended operating conditions (74HC595 VCC 2.0-6.0 V typ 5.0); sec. 8 Table 4 Limiting values (VCC -0.5 to +7 V); sec. 6.2 Table 2 Pin description (VCC = 16)"}
     ]
   },
   "SJ-3523-SMT-TR": {

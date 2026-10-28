@@ -728,6 +728,7 @@ class SubcircuitTemplate(ABC):
             "power_pins_extra",
             "interfaces",
             "terminal",
+            "supply_ratings",
         }
         unknown = [k for k in params if k not in known and k not in framework_passthrough]
         if unknown:

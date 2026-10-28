@@ -69,6 +69,9 @@
       "1",
       "2",
       "3"
+    ],
+    "supply_ratings": [
+      {"pins": ["8"], "kind": "supply", "v_min": 2.5, "v_max": 5.5, "confidence": "corroborated", "source": "Microchip 24AA256/24LC256 256K I2C CMOS Serial EEPROM, DS21203C (1998): DS21203C Device Selection Table (24LC256 VCC range 2.5-5.5 V); sec. 1.1 Maximum Ratings (VCC 7.0V); Table 1-1 Pin Function (VCC +2.5 to 5.5V (24LC256)); Table 1-2 DC Characteristics", "note": "Absolute maximum not entered: only the 1998 revision could be read."}
     ]
   },
   "AT25SF128A": {

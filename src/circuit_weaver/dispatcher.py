@@ -1032,6 +1032,57 @@ def _power_message(
     )
 
 
+def _validate_supply_ratings(compiled: CompiledDesign) -> list[ValidationMessage]:
+    """Check every supply pin's rail voltage against its datasheet rating.
+
+    Rail voltages come from declared power domains, regulator/source block
+    parameters, or (as a reviewable hint) the rail's name. Ratings come from
+    the normalized ``supply_ratings`` part data. See ``supply_ratings.py``.
+    """
+
+    from .supply_ratings import check_supply_ratings
+
+    messages: list[ValidationMessage] = []
+    for finding in check_supply_ratings(compiled.ir, compiled.components):
+        confirmed = finding.level == "error"
+        messages.append(
+            ValidationMessage(
+                category="electrical",
+                code=finding.code,
+                level=finding.level,
+                subject=finding.subject,
+                message=finding.message,
+                suggestion=finding.suggestion,
+                calculation=finding.calculation,
+                rule_id=finding.rule_id,
+                observed_value=_supply_observed_value(finding.calculation),
+                expected_constraint=_supply_expected_constraint(finding.calculation),
+                safest_next_action=finding.suggestion,
+                detection_confidence="verified" if confirmed else "heuristic",
+                severity="blocker" if confirmed else "major",
+            )
+        )
+    return messages
+
+
+def _supply_observed_value(calculation: Mapping[str, Any]) -> str | None:
+    observed = calculation.get("observed") if isinstance(calculation, Mapping) else None
+    if isinstance(observed, Mapping) and observed.get("value") is not None:
+        return f"{observed['value']:g} {observed.get('unit', '')}".strip()
+    return None
+
+
+def _supply_expected_constraint(calculation: Mapping[str, Any]) -> str | None:
+    expected = calculation.get("expected") if isinstance(calculation, Mapping) else None
+    if not isinstance(expected, Mapping):
+        return None
+    for bound, word in (("maximum", "at most"), ("minimum", "at least")):
+        limit = expected.get(bound)
+        if isinstance(limit, Mapping) and limit.get("value") is not None:
+            return f"rail voltage {word} {limit['value']:g} {limit.get('unit', 'V')}"
+    return None
+
+
 def _validate_typed_power_envelopes(compiled: CompiledDesign) -> list[ValidationMessage]:
     """Validate explicitly supplied power envelopes without guessing values.
 
@@ -1724,6 +1775,7 @@ def validate_design(
     categories["electrical"].extend(_validate_required_support(compiled))
     categories["electrical"].extend(_validate_power_domains(compiled))
     categories["electrical"].extend(_validate_typed_power_envelopes(compiled))
+    categories["electrical"].extend(_validate_supply_ratings(compiled))
     categories["electrical"].extend(_validate_pin_coverage(compiled))
     categories["electrical"].extend(_validate_power_domain_consistency(compiled))
 

@@ -51,6 +51,7 @@ from .component_db import (
 )
 from .kicad_lib import KiCadLibrary
 from .subcircuits.base import BoundaryPort, SubcircuitRegistry, get_default_registry
+from .supply_ratings import parse_supply_ratings
 
 
 def _make_stub_component(name: str, category: str, ref: str = "", reason: str = "") -> ComponentDef:
@@ -337,6 +338,23 @@ def _apply_power_map(item: dict, comp: ComponentDef) -> None:
             req.net = str(explicit_map[req.net])
         elif req.net.upper() in _DEFAULT_POWER_MAP:
             req.net = _DEFAULT_POWER_MAP[req.net.upper()]
+
+
+def _apply_supply_ratings(item: dict, comp: ComponentDef) -> None:
+    """Apply instance-level datasheet supply ratings for the block's own part.
+
+    Ratings name pin numbers of one part, so they only ever apply to the
+    block's primary component, never to its generated support passives.
+    Malformed ratings raise here rather than quietly disabling the check.
+    """
+    if "supply_ratings" not in item:
+        return
+    comp.supply_ratings = [
+        rating.to_dict()
+        for rating in parse_supply_ratings(
+            item.get("supply_ratings"), where=f"{comp.source_ref or comp.mpn}.supply_ratings"
+        )
+    ]
 
 
 def _apply_power_envelopes(item: dict, comp: ComponentDef) -> None:
@@ -821,6 +839,8 @@ def _resolve_component(
             # distinct refs for the remaining physical components.
             if ref and result_index == 0:
                 comp.source_ref = ref
+            if result_index == 0:
+                _apply_supply_ratings(item, comp)
             comp.category = section_category
             _apply_power_envelopes(item, comp)
             _apply_power_map(item, comp)
@@ -906,6 +926,7 @@ def _resolve_component(
     _apply_pinout_overrides(item, instance)
     _apply_partial_pin_overrides(item, instance)
     _apply_power_envelopes(item, instance)
+    _apply_supply_ratings(item, instance)
     _apply_power_map(item, instance)
     _apply_net_prefix(item, instance)
     _maybe_enrich_component(item, instance, parts_lookup)

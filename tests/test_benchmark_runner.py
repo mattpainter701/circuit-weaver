@@ -185,6 +185,8 @@ def test_scorecard_inventory_matches_actual_emitted_finding_rule_ids():
         "CW-PWR-004",
         "CW-PWR-005",
         "CW-PWR-007",
+        "CW-PWR-014",
+        "CW-PWR-015",
         "CW-ID-001",
         "CW-ID-002",
         "CW-ID-003",

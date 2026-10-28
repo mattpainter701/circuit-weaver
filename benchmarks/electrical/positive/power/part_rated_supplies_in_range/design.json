@@ -1,0 +1,11 @@
+{
+  "project": "benchmark_power_part_rated_supplies_in_range",
+  "spec_version": "mvp_ir_v1",
+  "auto_repair": false,
+  "blocks": [
+    {"id": "power:U1", "section": "power", "kind": "template", "type": "buck", "ref": "U1", "ic": "AP62300", "params": {"vin": 12, "vout": 3.3, "iout": 1, "vin_net": "VIN_12V", "rail_name": "VDD_3P3"}},
+    {"id": "power:U2", "section": "power", "kind": "template", "type": "ldo", "ref": "U2", "ic": "TLV75518", "params": {"vin": 3.3, "vout": 1.8, "vin_net": "VDD_3P3", "rail_name": "VDD_1P8"}},
+    {"id": "sensors:U3", "section": "sensors", "kind": "component", "ref": "U3", "ic": "BME280", "params": {"no_connects": ["3", "4", "5"]}}
+  ],
+  "benchmark_intent": {"domain": "power", "polarity": "positive", "scenario": "A 12 V buck, a 3.3 V LDO and a 3.3 V sensor all run inside their curated datasheet ratings."}
+}
