@@ -2613,7 +2613,25 @@ def autoroute_pcb(
             expected_hashes=source_hashes,
         )
         if imported["status"] != "ok":
-            return {**result, "status": "error", "message": imported["message"], "board_import": imported}
+            verification = dict(result.get("verification", {}))
+            verification["connection_completeness"] = "native_import_rejected"
+            native_drc = imported.get("drc")
+            verification["kicad_drc"] = (
+                "failed"
+                if isinstance(native_drc, dict)
+                and native_drc.get("status") == "ok"
+                and native_drc.get("passed") is False
+                else "not_verified"
+            )
+            return {
+                **result,
+                "status": "error",
+                "message": imported["message"],
+                "routing_complete": False,
+                "requires_kicad_drc": True,
+                "verification": verification,
+                "board_import": imported,
+            }
         return {
             **result,
             **imported,

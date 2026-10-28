@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Recover private sessions when the router reports completion but a fresh native
+  import finds only open connections. Reject mixed or ambiguous failures, rerun
+  native checks before repair, and report native import failures as incomplete.
+
 - Run all unseen scale cases through one pinned, bounded routing-recovery
   profile, retaining strict native DRC, path and model-coverage gates. Preserve
   private routing diagnostics in CI artifacts for failed-candidate review.

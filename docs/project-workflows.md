@@ -480,6 +480,13 @@ also retains available router-reported statistics and the validation failure.
 These diagnostics do not change the error status or populate the requested
 session output; reported zero opens cannot override an invalid session.
 
+When the router reports zero opens but native import finds open connections,
+opt-in recovery can continue only from the validated private session and a
+complete, opens-only native rejection. It reimports into quarantine and requires
+a new hash-matched native report before any repair. Missing reports, other
+physical faults and ambiguous results remain errors. A failed native import
+always reports routing as incomplete, regardless of the router's statistics.
+
 The frozen 438-part DAC completes this eight-pass, post-route-plane recipe from
 its zero-copper placement in the isolated installed runtime. It needs no native
 repair on that run; all native DRC, 110-path, 144-leg, 72-return and assembly gates

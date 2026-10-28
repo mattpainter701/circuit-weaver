@@ -1154,6 +1154,66 @@ class TestAutoroute:
         assert result["rejected_session"]["available"] is True
         assert result["stats"]["clearance_violations"] == 3
 
+    @pytest.mark.parametrize(
+        ("native_drc_failure", "expected_drc_status"),
+        [(True, "failed"), (False, "not_verified")],
+    )
+    def test_native_import_failure_does_not_claim_routing_complete(
+        self, tmp_path, monkeypatch, native_drc_failure, expected_drc_status,
+    ):
+        import circuit_weaver.pcb_layout as layout
+
+        source = _write_routable_board(tmp_path)
+        session = tmp_path / "candidate.ses"
+        board = tmp_path / "candidate.kicad_pcb"
+        monkeypatch.setattr(layout, "_require_modern_project_settings", lambda *_: None)
+        monkeypatch.setattr(autoroute_module, "preflight_pcb", lambda *_: {
+            "routable": True,
+            "reason": "",
+            "stats": {"footprints": 2, "pads": 4, "nets": 2, "connected_pad_nets": 2},
+        })
+        monkeypatch.setattr(autoroute_module, "_find_kicad_cli", lambda *_: "kicad-cli")
+        monkeypatch.setattr(autoroute_module, "_find_freerouting_command", lambda *_: ["freerouting"])
+        monkeypatch.setattr(autoroute_module, "_probe_freerouting_capabilities", lambda *_args, **_kwargs: {
+            "probe_ok": True, "version": "2.4.1", "seed": False,
+        })
+        monkeypatch.setattr(autoroute_module, "export_dsn", lambda *_args, **_kwargs: {"status": "ok"})
+        monkeypatch.setattr(
+            autoroute_module, "_preexisting_fixed_pad_clearance_baseline", lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(autoroute_module, "_route_candidates", lambda *_args, **_kwargs: {
+            "status": "ok",
+            "artifact": {"valid": True, "kind": "ses", "path": str(session)},
+            "stats": {"incomplete": 0, "clearance_violations": 0, "traces": 4, "vias": 0},
+            "router": {"version": "2.4.1"},
+            "verification": {"clearance": "verified_clear"},
+        })
+        native_rejection = {
+            "status": "error",
+            "message": (
+                "Imported routing failed KiCad DRC; board was not published"
+                if native_drc_failure else "Could not import SES"
+            ),
+        }
+        if native_drc_failure:
+            native_rejection["drc"] = {"status": "ok", "passed": False, "blocker_count": 1}
+        monkeypatch.setattr(layout, "import_routing_session", lambda *_args, **_kwargs: native_rejection)
+
+        result = autoroute_module.autoroute_pcb(
+            source,
+            output_path=str(session),
+            routed_board_path=str(board),
+            freerouting_path="freerouting",
+            kicad_cli_path="kicad-cli",
+        )
+
+        assert result["status"] == "error"
+        assert result["routing_complete"] is False
+        assert result["requires_kicad_drc"] is True
+        assert result["verification"]["connection_completeness"] == "native_import_rejected"
+        assert result["verification"]["kicad_drc"] == expected_drc_status
+        assert result["board_import"] is native_rejection
+
     def test_only_exact_unchanged_same_native_pad_pair_can_be_classified(self):
         native, dsn = _same_pad_identity_fixture()
         baseline = _same_pad_overlap_report()

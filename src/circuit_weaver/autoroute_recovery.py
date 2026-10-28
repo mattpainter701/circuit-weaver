@@ -11,6 +11,50 @@ import time
 from pathlib import Path
 from typing import Any
 
+_NATIVE_DRC_REJECTION_MESSAGE = "Imported routing failed KiCad DRC; board was not published"
+
+
+def _eligible_native_open_rejection(initial: dict[str, Any], session_path: Path) -> bool:
+    """Allow recovery only for a validated SES rejected by opens-only native DRC."""
+    if initial.get("status") != "error":
+        return False
+    if initial.get("output_kind") != "specctra_session":
+        return False
+    try:
+        if Path(initial.get("output_path", "")).resolve() != session_path.resolve():
+            return False
+        if Path(initial["artifact"]["path"]).resolve() != session_path.resolve():
+            return False
+    except (KeyError, TypeError, ValueError, OSError):
+        return False
+    artifact = initial.get("artifact")
+    stats = initial.get("stats")
+    if not isinstance(artifact, dict) or artifact.get("valid") is not True or artifact.get("kind") != "ses":
+        return False
+    if not isinstance(stats, dict) or type(stats.get("incomplete")) is not int or stats["incomplete"] != 0:
+        return False
+
+    imported = initial.get("board_import")
+    if not isinstance(imported, dict) or imported.get("status") != "error":
+        return False
+    if imported.get("message") != _NATIVE_DRC_REJECTION_MESSAGE:
+        return False
+    drc = imported.get("drc")
+    if not isinstance(drc, dict) or drc.get("status") != "ok" or drc.get("passed") is not False:
+        return False
+    blockers = drc.get("blocker_count")
+    findings = drc.get("findings")
+    if type(blockers) is not int or blockers <= 0 or not isinstance(findings, list) or len(findings) != blockers:
+        return False
+    return all(
+        isinstance(finding, dict)
+        and finding.get("rule_id") == "CW-DRC-002"
+        and finding.get("severity") == "blocker"
+        and finding.get("suppressed") is False
+        and finding.get("confirmed_blocker") is True
+        for finding in findings
+    )
+
 
 def _serialize_native_session(
     board_path: str | Path,
@@ -260,8 +304,36 @@ def autoroute_with_recovery(
             **router_options,
         )
         _check_snapshots(snapshots)
-        if initial.get("status") not in {"ok", "partial", "review_required"} or not initial_session.is_file():
+        native_open_rejection = _eligible_native_open_rejection(initial, initial_session)
+        if (
+            initial.get("status") not in {"ok", "partial", "review_required"} and not native_open_rejection
+        ) or not initial_session.is_file():
             return {**initial, "recovery_evidence_dir": str(work), "routing_complete": False}
+        recovery_trigger = None
+        private_session_sha256 = None
+        if native_open_rejection:
+            private_session_sha256 = hashlib.sha256(initial_session.read_bytes()).hexdigest()
+            native_drc = initial["board_import"]["drc"]
+            recovery_trigger = {
+                "kind": "native_open_drc_after_router_reported_zero_incomplete",
+                "message": "Native DRC found open connections despite a zero-incomplete router statistic; "
+                "the validated private SES is being re-imported into quarantine for fresh-DRC recovery.",
+                "session_path": str(initial_session),
+                "session_sha256": private_session_sha256,
+                "router_incomplete": initial["stats"]["incomplete"],
+                "native_drc": {
+                    "board_sha256": native_drc.get("board_sha256"),
+                    "blocker_count": native_drc["blocker_count"],
+                    "findings": [
+                        {
+                            key: finding.get(key)
+                            for key in ("rule_id", "severity", "ref", "net", "message")
+                            if key in finding
+                        }
+                        for finding in native_drc["findings"]
+                    ],
+                },
+            }
         completed_session = initial_session
         repair: dict[str, Any] = {"used": False}
         if initial.get("status") != "ok" or not initial.get("routing_complete"):
@@ -287,6 +359,11 @@ def autoroute_with_recovery(
             )
             if imported.get("status") != "ok" or not partial.is_file():
                 raise ValueError("Could not import the partial session into private native quarantine")
+            if (
+                native_open_rejection
+                and hashlib.sha256(initial_session.read_bytes()).hexdigest() != private_session_sha256
+            ):
+                raise ValueError("Validated private SES changed during native quarantine import")
             _restore_settings(source, partial, staged_settings)
             repair = recover_routing(
                 partial,
@@ -304,6 +381,7 @@ def autoroute_with_recovery(
                     "recovery": repair,
                     "recovery_evidence_dir": str(work),
                     "fabrication_ready": False,
+                    **({"recovery_trigger": recovery_trigger} if recovery_trigger else {}),
                 }
             completed_session = work / "complete.ses"
             # The stock router serializes all copper with autorouter, fanout,
@@ -326,6 +404,7 @@ def autoroute_with_recovery(
                     "serialization": serialization,
                     "recovery_evidence_dir": str(work),
                     "fabrication_ready": False,
+                    **({"recovery_trigger": recovery_trigger} if recovery_trigger else {}),
                 }
         _check_snapshots(snapshots)
         if inspect_project_footprint_context(source.parent) != library:
@@ -346,13 +425,15 @@ def autoroute_with_recovery(
         if accepted.get("status") != "ok":
             return {**accepted, "routing_complete": False, "recovery": repair,
                     "serialization": serialization if repair.get("used") is not False else None,
-                    "recovery_evidence_dir": str(work)}
+                    "recovery_evidence_dir": str(work),
+                    **({"recovery_trigger": recovery_trigger} if recovery_trigger else {})}
         return {
             **accepted,
             "session_path": str(session),
             "recovery": repair,
             **({"serialization": serialization} if repair.get("used") is not False else {}),
             "recovery_evidence_dir": str(work),
+            **({"recovery_trigger": recovery_trigger} if recovery_trigger else {}),
             "artifact": {
                 "valid": True,
                 "kind": "kicad_pcb",

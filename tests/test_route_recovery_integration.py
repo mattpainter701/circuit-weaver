@@ -24,6 +24,8 @@ def recovery(tmp_path, monkeypatch):
     session = tmp_path / "accepted.ses"
     state = {
         "initial_complete": False,
+        "initial_error_factory": None,
+        "mutate_session_on_import": False,
         "repair_status": "ok",
         "convert_status": "ok",
         "import_status": "ok",
@@ -36,6 +38,8 @@ def recovery(tmp_path, monkeypatch):
             Path(output).write_text("partial session", encoding="utf-8")
             if state["mutate"] == "source":
                 source.write_text("concurrent edit", encoding="utf-8")
+            if state["initial_error_factory"] is not None:
+                return state["initial_error_factory"](Path(output))
             return {
                 "status": "ok" if state["initial_complete"] else "partial",
                 "routing_complete": state["initial_complete"],
@@ -49,6 +53,8 @@ def recovery(tmp_path, monkeypatch):
 
     def import_partial(command, **options):
         assert command == "import_ses"
+        if state["mutate_session_on_import"]:
+            Path(options["session"]).write_text("altered session", encoding="utf-8")
         if state["import_status"] == "ok":
             Path(options["output"]).write_text("private candidate", encoding="utf-8")
         return {"status": state["import_status"]}
@@ -60,7 +66,11 @@ def recovery(tmp_path, monkeypatch):
     def accept(board, ses, output, **options):
         if state["accept_status"] == "ok":
             Path(output).write_text("accepted board", encoding="utf-8")
-        return {"status": state["accept_status"], "drc": {"board_sha256": "verified"}}
+        return {
+            "status": state["accept_status"],
+            "routing_complete": state["accept_status"] == "ok",
+            "drc": {"board_sha256": "verified"},
+        }
 
     route_mock = Mock(side_effect=route)
     repair_mock = Mock(side_effect=repair)
@@ -134,6 +144,156 @@ def test_complete_initial_route_bypasses_repair_but_keeps_native_gate(recovery):
     assert route.call_count == 1
     repair.assert_not_called()
     accept.assert_called_once()
+
+
+def _initial_native_open_rejection(session_path: Path, *, drc=None, **overrides):
+    return {
+        "status": "error",
+        "message": "Imported routing failed KiCad DRC; board was not published",
+        "output_kind": "specctra_session",
+        "output_path": str(session_path),
+        "routing_complete": False,
+        "requires_kicad_drc": True,
+        "stats": {"incomplete": 0},
+        "artifact": {"valid": True, "kind": "ses", "path": str(session_path)},
+        "board_import": {
+            "status": "error",
+            "message": "Imported routing failed KiCad DRC; board was not published",
+            "drc": drc or {
+                "status": "ok",
+                "passed": False,
+                "blocker_count": 1,
+                "findings": [{
+                    "rule_id": "CW-DRC-002",
+                    "severity": "blocker",
+                    "suppressed": False,
+                    "confirmed_blocker": True,
+                }],
+            },
+        },
+        **overrides,
+    }
+
+
+def test_zero_router_incomplete_with_verified_native_open_rejection_enters_private_recovery(recovery):
+    source, ses, dest, state, route, repair, accept, _ = recovery
+    state["initial_error_factory"] = _initial_native_open_rejection
+
+    result = autoroute_with_recovery(source, ses, routed_board_path=dest)
+
+    assert result["status"] == "ok"
+    assert result["routing_complete"] is True
+    assert result["recovery_trigger"]["kind"] == "native_open_drc_after_router_reported_zero_incomplete"
+    assert result["recovery_trigger"]["router_incomplete"] == 0
+    assert result["recovery_trigger"]["session_sha256"]
+    assert result["recovery_trigger"]["native_drc"]["findings"][0]["rule_id"] == "CW-DRC-002"
+    assert route.call_count == 1
+    repair.assert_called_once()
+    accept.assert_called_once()
+    assert dest.read_text(encoding="utf-8") == "accepted board"
+    assert ses.read_text(encoding="utf-8") == "complete session"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        "missing-board-import",
+        "wrong-board-import-message",
+        "wrong-drc-status",
+        "drc-passed",
+        "no-findings",
+        "blocker-count-mismatch",
+        "other-rule",
+        "suppressed",
+        "nonzero-incomplete",
+        "boolean-incomplete",
+        "float-incomplete",
+        "missing-incomplete",
+        "wrong-session-kind",
+        "wrong-session-path",
+        "invalid-artifact",
+        "wrong-artifact-kind",
+        "missing-findings",
+        "malformed-finding",
+        "warning-finding",
+        "unconfirmed-finding",
+        "generic-import-error-message",
+    ],
+)
+def test_ambiguous_initial_import_error_never_enters_recovery(recovery, mutate):
+    source, ses, dest, state, route, repair, accept, _ = recovery
+
+    def initial_error(path):
+        report = _initial_native_open_rejection(path)
+        if mutate == "missing-board-import":
+            report.pop("board_import")
+        elif mutate == "wrong-board-import-message":
+            report["board_import"]["message"] = "Import failed for another reason"
+        elif mutate == "wrong-drc-status":
+            report["board_import"]["drc"]["status"] = "error"
+        elif mutate == "drc-passed":
+            report["board_import"]["drc"]["passed"] = True
+        elif mutate == "no-findings":
+            report["board_import"]["drc"]["findings"] = []
+            report["board_import"]["drc"]["blocker_count"] = 0
+        elif mutate == "blocker-count-mismatch":
+            report["board_import"]["drc"]["blocker_count"] = 2
+        elif mutate == "other-rule":
+            report["board_import"]["drc"]["findings"][0]["rule_id"] = "CW-DRC-001"
+        elif mutate == "suppressed":
+            report["board_import"]["drc"]["findings"][0]["suppressed"] = True
+        elif mutate == "nonzero-incomplete":
+            report["stats"]["incomplete"] = 1
+        elif mutate == "boolean-incomplete":
+            report["stats"]["incomplete"] = False
+        elif mutate == "float-incomplete":
+            report["stats"]["incomplete"] = 0.0
+        elif mutate == "missing-incomplete":
+            report["stats"].pop("incomplete")
+        elif mutate == "wrong-session-kind":
+            report["output_kind"] = "kicad_pcb"
+        elif mutate == "wrong-session-path":
+            report["artifact"]["path"] = str(path.with_name("other.ses"))
+        elif mutate == "invalid-artifact":
+            report["artifact"]["valid"] = False
+        elif mutate == "wrong-artifact-kind":
+            report["artifact"]["kind"] = "dsn"
+        elif mutate == "missing-findings":
+            report["board_import"]["drc"].pop("findings")
+        elif mutate == "malformed-finding":
+            report["board_import"]["drc"]["findings"][0] = None
+        elif mutate == "warning-finding":
+            report["board_import"]["drc"]["findings"][0]["severity"] = "warning"
+        elif mutate == "unconfirmed-finding":
+            report["board_import"]["drc"]["findings"][0]["confirmed_blocker"] = False
+        elif mutate == "generic-import-error-message":
+            report["board_import"]["message"] = "Could not import SES"
+        return report
+
+    state["initial_error_factory"] = initial_error
+    result = autoroute_with_recovery(source, ses, routed_board_path=dest)
+
+    assert result["status"] == "error"
+    assert result["routing_complete"] is False
+    repair.assert_not_called()
+    accept.assert_not_called()
+    assert not dest.exists()
+    assert not ses.exists()
+
+
+def test_validated_initial_ses_hash_must_stay_stable_through_quarantine_import(recovery):
+    source, ses, dest, state, _, repair, accept, _ = recovery
+    state["initial_error_factory"] = _initial_native_open_rejection
+    state["mutate_session_on_import"] = True
+
+    result = autoroute_with_recovery(source, ses, routed_board_path=dest)
+
+    assert result["status"] == "error"
+    assert "Validated private SES changed" in result["message"]
+    repair.assert_not_called()
+    accept.assert_not_called()
+    assert not dest.exists()
+    assert not ses.exists()
 
 
 @pytest.mark.parametrize(
