@@ -11,10 +11,10 @@ from pathlib import Path
 
 try:
     from ._native_ground_plane import _outline_bounds
-    from ._native_routing_repair import _class_rules, _native_point_vector
+    from ._native_routing_repair import _class_rules, _native_point_vector, _via_width_on_layer
 except ImportError:  # Standalone import inside KiCad's bundled Python worker.
     from _native_ground_plane import _outline_bounds
-    from _native_routing_repair import _class_rules, _native_point_vector
+    from _native_routing_repair import _class_rules, _native_point_vector, _via_width_on_layer
 
 
 _MAX_VIAS = 16
@@ -365,7 +365,7 @@ def repair(board, pcbnew, violations, *, max_vias=16, search_radius_mm=6.0, grid
     query.SetDrill(pcbnew.FromMM(drill))
     query.SetNetCode(net_code)
     for layer in stack:
-        if int(query.GetWidth(layer)) != int(pcbnew.FromMM(diameter)):
+        if _via_width_on_layer(query, layer) != int(pcbnew.FromMM(diameter)):
             raise ValueError("native through-via diameter cannot be verified on every copper layer")
 
     def candidate_clear(x, y, planned):
@@ -562,7 +562,7 @@ def repair(board, pcbnew, violations, *, max_vias=16, search_radius_mm=6.0, grid
         via.SetDrill(pcbnew.FromMM(drill))
         via.SetNetCode(net_code)
         for layer in stack:
-            if int(via.GetWidth(layer)) != int(pcbnew.FromMM(diameter)):
+            if _via_width_on_layer(via, layer) != int(pcbnew.FromMM(diameter)):
                 raise ValueError("candidate via width differs from derived net-class rules")
         board.Add(via)
         location["via_uuid"] = _uuid(via)

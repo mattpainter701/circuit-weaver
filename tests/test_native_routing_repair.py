@@ -11,6 +11,48 @@ import pytest
 from circuit_weaver import _native_routing_repair as repair
 
 
+class _KiCad8Via:
+    def __init__(self, width):
+        self.width = width
+        self.calls = []
+
+    def GetWidth(self):
+        self.calls.append(())
+        return self.width
+
+
+class _KiCad10Via:
+    def __init__(self, width):
+        self.width = width
+        self.calls = []
+
+    def GetWidth(self, layer):
+        self.calls.append(layer)
+        return self.width
+
+
+def test_via_width_reader_supports_kicad8_noarg_binding():
+    via = _KiCad8Via(600_000)
+
+    assert repair._via_width_on_layer(via, 4) == 600_000
+    assert via.calls == [()]
+
+
+def test_via_width_reader_preserves_kicad10_layer_specific_binding():
+    via = _KiCad10Via(600_000)
+
+    assert repair._via_width_on_layer(via, 4) == 600_000
+    assert via.calls == [4]
+
+
+@pytest.mark.parametrize("width", [0, -1, True, float("nan"), float("inf"), 1.5])
+def test_via_width_reader_rejects_invalid_native_width_without_coercion(width):
+    via = _KiCad10Via(width)
+
+    with pytest.raises(ValueError, match="valid positive integer"):
+        repair._via_width_on_layer(via, 4)
+
+
 class _TruncatingNativeUnits:
     @staticmethod
     def FromMM(value):

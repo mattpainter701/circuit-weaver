@@ -12,6 +12,26 @@ import math
 from pathlib import Path
 
 
+def _via_width_on_layer(via, layer_id):
+    """Read a native via width across KiCad SWIG signatures and fail closed."""
+    try:
+        raw_width = via.GetWidth(layer_id)
+    except TypeError:
+        # KiCad 8 exposes PCB_TRACK.GetWidth() without a layer argument;
+        # KiCad 10's PCB_VIA binding requires one.
+        raw_width = via.GetWidth()
+    try:
+        if isinstance(raw_width, bool):
+            raise ValueError
+        width = int(raw_width)
+        finite_width = float(raw_width)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError("native via width is not a valid positive integer") from exc
+    if not math.isfinite(finite_width) or width <= 0 or finite_width != width:
+        raise ValueError("native via width is not a valid positive integer")
+    return width
+
+
 def _native_point_vector(pcbnew, point):
     """Round query and emitted coordinates back to their nearest native IU."""
     scale = pcbnew.FromMM(1.0)
@@ -286,7 +306,7 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
     via_query.SetWidth(pcbnew.FromMM(diameter))
     via_query.SetDrill(pcbnew.FromMM(drill))
     via_query.SetNetCode(net)
-    if any(via_query.GetWidth(layer_id) != pcbnew.FromMM(diameter) for layer_id in stack):
+    if any(_via_width_on_layer(via_query, layer_id) != pcbnew.FromMM(diameter) for layer_id in stack):
         raise ValueError("native via diameter cannot be verified on every enabled copper layer")
 
     def candidates(layer, box):
@@ -387,7 +407,7 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
                 via.SetPosition(vec(a))
                 via.SetWidth(pcbnew.FromMM(diameter))
                 via.SetDrill(pcbnew.FromMM(drill))
-                if any(via.GetWidth(layer_id) != pcbnew.FromMM(diameter) for layer_id in stack):
+                if any(_via_width_on_layer(via, layer_id) != pcbnew.FromMM(diameter) for layer_id in stack):
                     raise ValueError("new native via diameter differs from its resolved net class")
                 via.SetNetCode(net)
                 board.Add(via)

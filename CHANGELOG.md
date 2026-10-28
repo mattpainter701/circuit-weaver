@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Support KiCad 8/9 and 10 native via-width APIs in routing and plane repairs,
+  preserving width verification on every enabled copper layer.
 - Add opt-in thermal repair for deferred four-layer GND planes: join nearby
   local fill components to another plane with bounded, rule-sized stitching
   vias. Preserve existing copper, placement, labels and rules, and publish only
