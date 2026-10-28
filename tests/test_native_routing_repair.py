@@ -89,6 +89,211 @@ def test_native_point_rounding_avoids_reproduced_one_iu_truncation():
     )
 
 
+def test_npth_keepouts_use_exact_native_drill_shape_and_board_hole_clearance():
+    # Pad copper extents deliberately differ from the drill. Circle and slot
+    # drills both arrive as KiCad's effective hole shape, without approximation.
+    circle_hole, slot_hole = _HoleShape(), _HoleShape()
+    circle = _DrilledPad(_PcbnewWithNPTH.PAD_ATTRIB_NPTH, circle_hole,
+                         drill=(600_000, 600_000), copper_size=(4_000_000, 4_000_000))
+    slot = _DrilledPad(_PcbnewWithNPTH.PAD_ATTRIB_NPTH, slot_hole,
+                       drill=(1_200_000, 400_000), copper_size=(100_000, 100_000))
+    plated = _DrilledPad(0, _HoleShape(collision=True))
+
+    holes, clearance, hole_to_hole = repair._native_npth_hole_obstacles(
+        _HoleBoard([circle, slot, plated]), _PcbnewWithNPTH,
+    )
+    candidate = object()
+
+    assert holes == [circle_hole, slot_hole]
+    assert clearance == 250_000
+    assert hole_to_hole == 450_000
+    assert repair._collides_with_npth_hole(candidate, holes, clearance) is False
+    assert circle_hole.calls == [(candidate, 250_000)]
+    assert slot_hole.calls == [(candidate, 250_000)]
+    assert plated.GetEffectiveHoleShape().calls == []
+
+
+def test_npth_collision_rejects_candidate_using_native_clearance_units():
+    hole = _HoleShape(collision=True)
+    candidate = object()
+
+    assert repair._collides_with_npth_hole(candidate, [hole], 375_000) is True
+    assert hole.calls == [(candidate, 375_000)]
+
+
+def test_candidate_via_drill_uses_separate_hole_to_hole_clearance():
+    npth_hole = _HoleShape(collision=True)
+    candidate_via_drill = object()  # via.GetEffectiveHoleShape() native geometry
+
+    assert repair._collides_with_npth_hole(candidate_via_drill, [npth_hole], 450_000) is True
+    assert npth_hole.calls == [(candidate_via_drill, 450_000)]
+
+
+def test_npth_spatial_bounds_expand_exact_drill_shape_by_hole_clearance():
+    hole = _HoleShape()
+
+    assert repair._native_hole_bbox_mm(hole, 250_000, _Pcbnew) == (0.75, 1.75, 4.25, 6.25)
+    assert hole.bbox_clearance == 250_000
+
+
+@pytest.mark.parametrize("clearance,hole_to_hole", [
+    (None, 100_000), (True, 100_000), (-1, 100_000), (1.5, 100_000),
+    (float("nan"), 100_000), (100_000, None), (100_000, True),
+    (100_000, -1), (100_000, 1.5), (100_000, float("nan")),
+])
+def test_npth_keepouts_fail_closed_for_missing_or_invalid_hole_rules(clearance, hole_to_hole):
+    hole = _HoleShape()
+    board = _HoleBoard([_DrilledPad(_PcbnewWithNPTH.PAD_ATTRIB_NPTH, hole)], clearance, hole_to_hole)
+
+    with pytest.raises(ValueError, match="hole-clearance rule is unavailable or invalid"):
+        repair._native_npth_hole_obstacles(board, _PcbnewWithNPTH)
+
+
+def test_npth_keepouts_fail_closed_when_native_drill_shape_is_unavailable():
+    class _NoHoleGeometryPad(_DrilledPad):
+        GetEffectiveHoleShape = None
+
+    board = _HoleBoard([
+        _NoHoleGeometryPad(_PcbnewWithNPTH.PAD_ATTRIB_NPTH, _HoleShape()),
+    ])
+
+    with pytest.raises(ValueError, match="native NPTH drill geometry is unavailable"):
+        repair._native_npth_hole_obstacles(board, _PcbnewWithNPTH)
+
+
+@pytest.mark.parametrize("drill", [
+    (0, 0), (0, 400_000), (-1, 400_000), (True, 400_000), (1.5, 400_000),
+])
+def test_npth_keepouts_fail_closed_for_malformed_native_drill_dimensions(drill):
+    board = _HoleBoard([
+        _DrilledPad(_PcbnewWithNPTH.PAD_ATTRIB_NPTH, _HoleShape(), drill=drill),
+    ])
+
+    with pytest.raises(ValueError, match="native NPTH drill geometry is unavailable"):
+        repair._native_npth_hole_obstacles(board, _PcbnewWithNPTH)
+
+
+def test_repair_one_routes_candidate_via_checks_with_native_hole_rules(monkeypatch, tmp_path):
+    class _Vector:
+        def __init__(self, x, y):
+            self.x, self.y = x, y
+
+    class _Box:
+        def __init__(self, x, y, width, height):
+            self.x, self.y, self.width, self.height = x, y, width, height
+
+        def GetX(self): return self.x
+        def GetY(self): return self.y
+        def GetWidth(self): return self.width
+        def GetHeight(self): return self.height
+
+    class _Shape:
+        def Collide(self, _candidate, clearance_iu):
+            return clearance_iu >= 450_000
+
+    class _Hole(_Shape):
+        def BBox(self, clearance_iu):
+            assert clearance_iu == 450_000
+            return _Box(9_550_000, 9_550_000, 900_000, 900_000)
+
+    class PAD:
+        def __init__(self, uuid, position, *, npth=False, layer_ids=(1, 2), hole=None):
+            self.m_Uuid = SimpleNamespace(AsString=lambda: uuid)
+            self.position = _Vector(*position)
+            self.npth = npth
+            self.layer_ids = set(layer_ids)
+            self.hole = hole
+
+        def GetNetCode(self): return 0 if self.npth else 1
+        def GetNetname(self): return "" if self.npth else "SIG"
+        def GetPosition(self): return self.position
+        def GetAttribute(self): return 3 if self.npth else 0
+        def GetDrillSize(self): return _Vector(600_000, 400_000) if self.npth else _Vector(0, 0)
+        def GetEffectiveHoleShape(self): return self.hole
+        def GetBoundingBox(self): return _Box(self.position.x - 100_000, self.position.y - 100_000,
+                                              200_000, 200_000)
+        def GetEffectiveShape(self, *_args): return _Shape()
+        def IsOnLayer(self, layer_id): return layer_id in self.layer_ids
+
+    class _Field:
+        def IsVisible(self): return False
+        def GetLayer(self): return 0
+
+    class _Footprint:
+        def __init__(self, pads): self.pads = pads
+        def Pads(self): return self.pads
+        def Reference(self): return _Field()
+        def Value(self): return _Field()
+        def GraphicalItems(self): return []
+
+    class _Board:
+        def __init__(self, pads): self.footprint = _Footprint(pads)
+        def Zones(self): return []
+        def GetTracks(self): return []
+        def GetFootprints(self): return [self.footprint]
+        def GetDrawings(self): return []
+        def GetDesignSettings(self):
+            return SimpleNamespace(m_HoleClearance=100_000, m_HoleToHoleMin=450_000)
+        def BuildConnectivity(self): pass
+
+    class _Track:
+        def __init__(self, _board): self.shape = _Shape()
+        def SetStart(self, _value): pass
+        def SetEnd(self, _value): pass
+        def SetWidth(self, _value): pass
+        def SetLayer(self, _value): pass
+        def SetNetCode(self, _value): pass
+        def GetEffectiveShape(self): return self.shape
+
+    class _Via:
+        def __init__(self, _board): self.drill_shape = _Shape()
+        def SetViaType(self, _value): pass
+        def SetLayerPair(self, *_values): pass
+        def SetWidth(self, _value): pass
+        def SetDrill(self, value):
+            assert isinstance(value, int) and value == 300_000
+        def SetNetCode(self, _value): pass
+        def SetPosition(self, _value): pass
+        def GetWidth(self, _layer): return 600_000
+        def GetEffectiveShape(self, _layer): return _Shape()
+        def GetEffectiveHoleShape(self): return self.drill_shape
+
+    class _Native(_PcbnewWithNPTH):
+        F_Cu, B_Cu, Edge_Cuts = 1, 2, 44
+        VIATYPE_THROUGH = 0
+        VECTOR2I = staticmethod(lambda x, y: (x, y))
+        PCB_TRACK = _Track
+        PCB_VIA = _Via
+
+    first = PAD("first", (9_000_000, 10_000_000), layer_ids=(1,))
+    last = PAD("last", (11_000_000, 10_000_000), layer_ids=(2,))
+    npth = PAD("npth", (10_000_000, 10_000_000), npth=True, hole=_Hole())
+    board = _Board([first, last, npth])
+    worker = SimpleNamespace(
+        _native_copper_layer_stack=lambda *_args: ([1, 2], True),
+        _rectangular_outline_bounds_iu=lambda *_args: (0, 0, 100_000_000, 100_000_000),
+    )
+    rules = SimpleNamespace(native_edge_clearance=lambda *_args: {"value_iu": 0})
+    monkeypatch.setitem(sys.modules, "_kicad_worker", worker)
+    monkeypatch.setitem(sys.modules, "_native_board_rules", rules)
+    monkeypatch.setattr(repair, "_class_rules", lambda *_args: (0.2, 0.6, 0.3, 0.1))
+
+    def search(start, goal, _layers, _targets, _origins, _bounds, _step, _budget, _clear, can_change):
+        # Candidate via copper clears m_HoleClearance; its drill must still
+        # reject against the same NPTH using the larger hole-to-hole rule.
+        assert can_change((10.0, 10.0)) is False
+        return None, None, 1, start, goal, False
+
+    monkeypatch.setattr(repair, "_search_with_fallback", search)
+    report = {"unconnected_items": [{"items": [
+        {"uuid": "first", "pos": {"x": 9, "y": 10}},
+        {"uuid": "last", "pos": {"x": 11, "y": 10}},
+    ]}]}
+
+    with pytest.raises(RuntimeError, match="no collision-free repair"):
+        repair.repair_one(board, _Native, report)
+
+
 @pytest.mark.parametrize("width_iu,edge_iu,expected", [
     (200_000, 500_000, 600_000),
     (600_000, 500_000, 800_000),
@@ -173,6 +378,55 @@ class _Pcbnew:
     @staticmethod
     def FromMM(value):
         return int(round(value * 1_000_000))
+
+
+class _HoleShape:
+    def __init__(self, collision=False):
+        self.collision = collision
+        self.calls = []
+
+    def Collide(self, candidate, clearance_iu):
+        self.calls.append((candidate, clearance_iu))
+        return self.collision
+
+    def BBox(self, clearance_iu):
+        self.bbox_clearance = clearance_iu
+        return SimpleNamespace(GetX=lambda: 750_000, GetY=lambda: 1_750_000,
+                               GetWidth=lambda: 3_500_000, GetHeight=lambda: 4_500_000)
+
+
+class _DrilledPad:
+    def __init__(self, attribute, hole_shape, *, drill=(600_000, 400_000), copper_size=(1, 1)):
+        self.attribute = attribute
+        self.hole_shape = hole_shape
+        self.drill = SimpleNamespace(x=drill[0], y=drill[1])
+        self.copper_size = copper_size
+
+    def GetAttribute(self):
+        return self.attribute
+
+    def GetDrillSize(self):
+        return self.drill
+
+    def GetEffectiveHoleShape(self):
+        return self.hole_shape
+
+
+class _HoleBoard:
+    def __init__(self, pads, clearance=250_000, hole_to_hole=450_000):
+        self.pads = list(pads)
+        self.clearance = clearance
+        self.hole_to_hole = hole_to_hole
+
+    def GetFootprints(self):
+        return [SimpleNamespace(Pads=lambda: self.pads)]
+
+    def GetDesignSettings(self):
+        return SimpleNamespace(m_HoleClearance=self.clearance, m_HoleToHoleMin=self.hole_to_hole)
+
+
+class _PcbnewWithNPTH(_Pcbnew):
+    PAD_ATTRIB_NPTH = 3
 
 
 def _write_project(tmp_path, classes):

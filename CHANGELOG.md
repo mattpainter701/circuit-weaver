@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Respect native mounting-hole geometry and board hole-clearance rules during
+  bounded routing recovery, including slotted holes and candidate via drills.
+  Keep copper spacing and hole-to-hole constraints separate, and require fresh
+  full native DRC before publishing a repaired board.
 - Preserve exact native arc and circle geometry in footprint and board drawings
   during copper-only validation and edits, while rejecting unknown drawing types.
 - Stage each native dangling-copper cleanup pass in its own private project

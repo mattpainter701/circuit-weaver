@@ -55,6 +55,101 @@ def _segment_inside_edge_margin(start, end, outline, margin_iu):
             and min(sy, ey) >= y0 + margin_iu and max(sy, ey) <= y1 - margin_iu)
 
 
+def _native_npth_hole_obstacles(board, pcbnew):
+    """Return exact native NPTH drill shapes and the board hole clearance.
+
+    NPTH pad copper geometry is not a safe proxy for the drill: footprint pad
+    size may be larger, smaller, or otherwise unrelated to the actual hole.
+    Use KiCad's effective hole geometry so circles and slots retain their real
+    shape. Missing geometry or rule APIs fail closed before searching.
+    """
+    footprints = list(board.GetFootprints())
+    npth_attribute = getattr(pcbnew, "PAD_ATTRIB_NPTH", None)
+    if npth_attribute is None:
+        for footprint in footprints:
+            for pad in footprint.Pads():
+                try:
+                    drill = pad.GetDrillSize()
+                except AttributeError:
+                    # Lightweight legacy adapters may not expose drill data;
+                    # no drilled-pad evidence means there is no NPTH to index.
+                    continue
+                try:
+                    if int(drill.x) > 0 or int(drill.y) > 0:
+                        raise ValueError("native NPTH attribute API is unavailable")
+                except (AttributeError, TypeError, ValueError, OverflowError) as exc:
+                    raise ValueError("native pad drill geometry is unavailable") from exc
+        return [], 0, 0
+
+    holes = []
+    for footprint in footprints:
+        for pad in footprint.Pads():
+            try:
+                if int(pad.GetAttribute()) != int(npth_attribute):
+                    continue
+                drill = pad.GetDrillSize()
+                raw_drill_x, raw_drill_y = drill.x, drill.y
+                if isinstance(raw_drill_x, bool) or isinstance(raw_drill_y, bool):
+                    raise ValueError("native NPTH drill dimensions are invalid")
+                drill_x, drill_y = int(raw_drill_x), int(raw_drill_y)
+                if (float(raw_drill_x) != drill_x or float(raw_drill_y) != drill_y
+                        or drill_x < 0 or drill_y < 0):
+                    raise ValueError("native NPTH drill dimensions are invalid")
+                if drill_x <= 0 or drill_y <= 0:
+                    raise ValueError("native NPTH drill dimensions are invalid")
+                hole_shape = pad.GetEffectiveHoleShape()
+            except (AttributeError, RuntimeError, TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("native NPTH drill geometry is unavailable") from exc
+            if hole_shape is None:
+                raise ValueError("native NPTH drill geometry is unavailable")
+            holes.append(hole_shape)
+
+    if not holes:
+        return [], 0, 0
+    try:
+        settings = board.GetDesignSettings()
+        raw_clearance = settings.m_HoleClearance
+        raw_hole_to_hole = settings.m_HoleToHoleMin
+        if isinstance(raw_clearance, bool) or isinstance(raw_hole_to_hole, bool):
+            raise ValueError
+        clearance_iu = int(raw_clearance)
+        hole_to_hole_iu = int(raw_hole_to_hole)
+        if (clearance_iu < 0 or hole_to_hole_iu < 0
+                or float(raw_clearance) != clearance_iu
+                or float(raw_hole_to_hole) != hole_to_hole_iu):
+            raise ValueError
+    except (AttributeError, RuntimeError, TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("native hole-clearance rule is unavailable or invalid") from exc
+    return holes, clearance_iu, hole_to_hole_iu
+
+
+def _collides_with_npth_hole(candidate_shape, holes, clearance_iu):
+    """Check copper geometry against native NPTH drill shapes and hole rule."""
+    for hole_shape in holes:
+        try:
+            if hole_shape.Collide(candidate_shape, clearance_iu):
+                return True
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+            raise ValueError("native NPTH hole-clearance geometry check failed") from exc
+    return False
+
+
+def _native_hole_bbox_mm(hole_shape, clearance_iu, pcbnew):
+    """Get a native drill-shape broad-phase box expanded by hole clearance."""
+    try:
+        box = hole_shape.BBox(clearance_iu)
+        coordinates = tuple(pcbnew.ToMM(int(value)) for value in (
+            box.GetX(), box.GetY(), box.GetX() + box.GetWidth(), box.GetY() + box.GetHeight(),
+        ))
+        if not all(math.isfinite(value) for value in coordinates):
+            raise ValueError
+        if coordinates[0] > coordinates[2] or coordinates[1] > coordinates[3]:
+            raise ValueError
+        return coordinates
+    except (AttributeError, RuntimeError, TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("native NPTH clearance bounding geometry is unavailable") from exc
+
+
 def _astar_search(start, goal, layer_count, target_layers, origins, bounds, step, max_expanded_states,
                   clear_segment, can_change_layer):
     """Search lattice states and return a route path plus real expansion count."""
@@ -258,6 +353,8 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
     if not isinstance(pair, list) or len(pair) != 2 or any(not isinstance(x, dict) for x in pair):
         raise ValueError("selected DRC item is not an explicit two-item pair")
     items = list(board.GetTracks()) + [pad for fp in board.GetFootprints() for pad in fp.Pads()]
+    npth_holes, hole_clearance_iu, hole_to_hole_iu = _native_npth_hole_obstacles(board, pcbnew)
+    npth_attribute = getattr(pcbnew, "PAD_ATTRIB_NPTH", None)
     by_uuid = {_uuid(item): item for item in items}
     if len(by_uuid) != len(items):
         raise ValueError("native track/pad UUIDs are not unique")
@@ -327,8 +424,24 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
             for y in range(math.floor(box[1] / cell_size), math.floor(box[3] / cell_size) + 1):
                 yield x, y
 
+    npth_hole_index = {}
+    for hole_index, hole_shape in enumerate(npth_holes):
+        # Expand the drill geometry itself by the configured hole clearance;
+        # route candidates separately include their own copper half-width.
+        hole_box = _native_hole_bbox_mm(hole_shape, max(hole_clearance_iu, hole_to_hole_iu), pcbnew)
+        for layer_id in stack:
+            for x, y in cells(hole_box):
+                npth_hole_index.setdefault((layer_id, x, y), set()).add(hole_index)
+
     for item in items:
         is_pad = type(item).__name__ == "PAD"
+        if (is_pad and npth_attribute is not None
+                and int(item.GetAttribute()) == int(npth_attribute)):
+            npth_drill_size = item.GetDrillSize()
+            if int(npth_drill_size.x) > 0 or int(npth_drill_size.y) > 0:
+                # NPTHs are modeled by their actual drill shape below. Their
+                # nominal pad copper size must not create a second obstacle.
+                continue
         box = bbox(item)
         for layer in stack:
             if not item.IsOnLayer(layer):
@@ -358,6 +471,12 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
             found.update(index.get((layer, x, y), ()))
         return found
 
+    def candidate_holes(layer, box):
+        found = set()
+        for x, y in cells(box):
+            found.update(npth_hole_index.get((layer, x, y), ()))
+        return found
+
     def clear_segment(a, b, layer, copper_width=width, avoid_pads=False):
         start_iu, end_iu = vec(a), vec(b)
         segment_width_iu = int(pcbnew.FromMM(copper_width))
@@ -368,13 +487,28 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
         query.SetEnd(end_iu)
         query.SetWidth(segment_width_iu)
         query.SetLayer(layer)
-        if a == b and copper_width == diameter:
+        candidate_via = a == b and copper_width == diameter
+        if candidate_via:
             via_query.SetPosition(start_iu)
             shape = via_query.GetEffectiveShape(layer)
         else:
             shape = query.GetEffectiveShape()
         radius = copper_width / 2
         box = (min(a[0], b[0]) - radius, min(a[1], b[1]) - radius, max(a[0], b[0]) + radius, max(a[1], b[1]) + radius)
+        nearby_npth_holes = candidate_holes(layer, box) if npth_holes else set()
+        if any(_collides_with_npth_hole(shape, [npth_holes[n]], hole_clearance_iu)
+               for n in nearby_npth_holes):
+            return False
+        if candidate_via and nearby_npth_holes:
+            try:
+                via_hole_shape = via_query.GetEffectiveHoleShape()
+            except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+                raise ValueError("native candidate via drill geometry is unavailable") from exc
+            if via_hole_shape is None:
+                raise ValueError("native candidate via drill geometry is unavailable")
+            if any(_collides_with_npth_hole(via_hole_shape, [npth_holes[n]], hole_to_hole_iu)
+                   for n in nearby_npth_holes):
+                return False
         for n in candidates(layer, box):
             other_net, is_pad, other_shape = records[n]
             if other_net == net and not (avoid_pads and is_pad):
@@ -484,5 +618,13 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
         "resolved_via_diameter_mm": diameter,
         "resolved_via_drill_mm": drill,
         "resolved_clearance_mm": clearance,
+        "native_npth_hole_rules": {
+            "status": "verified" if npth_holes else "not_required",
+            "hole_clearance_iu": hole_clearance_iu if npth_holes else None,
+            "hole_clearance_mm": pcbnew.ToMM(hole_clearance_iu) if npth_holes else None,
+            "hole_to_hole_min_iu": hole_to_hole_iu if npth_holes else None,
+            "hole_to_hole_min_mm": pcbnew.ToMM(hole_to_hole_iu) if npth_holes else None,
+            "source": "BOARD_DESIGN_SETTINGS.m_HoleClearance/m_HoleToHoleMin",
+        },
         "native_edge_clearance": {"status": "ok", **edge},
     }

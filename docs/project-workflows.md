@@ -531,6 +531,13 @@ on their actual grid origin before restoring the original endpoint direction.
 Track widths, clearances, via rules, exact native collision checks and the final
 full DRC gate are unchanged. A trapped endpoint can still require global rerouting.
 
+Native recovery treats non-plated mounting holes as drill geometry across every
+enabled copper layer, including circular and slotted holes. Tracks and via copper
+must respect the board's copper-to-hole clearance; candidate via drills must also
+respect its separate hole-to-hole minimum. These constraints do not replace the
+net-class copper spacing or the fresh full native DRC gate. Unsupported hole
+geometry or unavailable native hole rules stop the candidate.
+
 The frozen 438-part DAC completes this eight-pass, post-route-plane recipe from
 its zero-copper placement in the isolated installed runtime. It needs no native
 repair on that run; all native DRC, 110-path, 144-leg, 72-return and assembly gates
