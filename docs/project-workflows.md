@@ -480,12 +480,14 @@ also retains available router-reported statistics and the validation failure.
 These diagnostics do not change the error status or populate the requested
 session output; reported zero opens cannot override an invalid session.
 
-When the router reports zero opens but native import finds open connections,
-opt-in recovery can continue only from the validated private session and a
-complete, opens-only native rejection. It reimports into quarantine and requires
-a new hash-matched native report before any repair. Missing reports, other
-physical faults and ambiguous results remain errors. A failed native import
-always reports routing as incomplete, regardless of the router's statistics.
+When the router reports zero opens but native import finds open connections or
+recognized dangling-track warnings, opt-in recovery can continue only from the
+validated private session and a complete native rejection with those findings.
+It requires verified, unsuppressed findings and consistent blocker counts, then
+reimports into quarantine for a new hash-matched full native report. Missing
+reports, other physical faults and ambiguous results remain errors. A failed
+native import always reports routing as incomplete until recovery and the final
+native gate pass, regardless of the router's statistics.
 
 Before opens-only recovery, the host records the complete fresh native DRC
 report. If the only additional findings are KiCad `track_dangling` warnings on
@@ -508,11 +510,22 @@ otherwise it remains a separate selected directory. The conventional `output/`
 directory continues to resolve to its parent project. This behavior applies
 outside Git checkouts as well as inside them.
 
-For endpoint pairs spanning more than 256 requested grid steps, native recovery
-first tries a 0.5 mm lattice when the requested grid is finer. This pass uses at
-most one quarter of the shared search-state budget. Unspent states remain
-available to the requested grid and its fine fallback. Track widths, clearances,
-via rules, exact native collision checks and the final full DRC gate are unchanged.
+Before native-board routing attempts, private DSN inputs receive stable image
+aliases and component, image, net and pin ordering. The original exported file
+is retained. Geometry, placements, net membership, padstacks, class/rule payloads
+and the original design name are checked before and after canonicalization.
+Evidence records original and canonical hashes; the preserved design name keeps
+session correlation intact. Unsupported or ambiguous records stop the attempt.
+This removes input-order variation; it does not guarantee routing completion.
+
+For endpoint pairs spanning more than 128 requested grid steps, native recovery
+tries a 0.5 mm lattice from each endpoint when the requested grid is finer. Each
+coarse orientation receives at most one quarter of the shared search-state cap.
+Unspent states remain available to the requested grid and its fine fallback;
+short connections retain their previous allocations. Reverse paths are resolved
+on their actual grid origin before restoring the original endpoint direction.
+Track widths, clearances, via rules, exact native collision checks and the final
+full DRC gate are unchanged. A trapped endpoint can still require global rerouting.
 
 The frozen 438-part DAC completes this eight-pass, post-route-plane recipe from
 its zero-copper placement in the isolated installed runtime. It needs no native

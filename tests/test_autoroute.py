@@ -12,6 +12,7 @@ from unittest import mock
 import pytest
 
 import circuit_weaver.autoroute as autoroute_module
+from circuit_weaver._specctra_canonical import canonicalize_native_dsn
 from circuit_weaver.autoroute import (
     _apply_specctra_clearance_margin,
     _compare_clearance_reports,
@@ -129,7 +130,13 @@ VALID_DSN = """(pcb "sensor-board"
   (placement
     (component "Resistor_SMD:R_0402_1005Metric" (place R1 10000 10000 front 0))
   )
-  (library (image "Resistor_SMD:R_0402_1005Metric"))
+  (library
+    (image "Resistor_SMD:R_0402_1005Metric"
+      (outline (polygon F.Cu 10 0 0 10 0 10 10 0 10))
+      (pin 1 0 0 0)
+    )
+    (padstack "Via[0-1]_600:300_um" (shape (circle F.Cu 300)))
+  )
   (network
     (net GND (pins R1-1 J1-2))
     (net VDD_3P3 (pins R1-2 J1-1))
@@ -996,6 +1003,11 @@ class TestAutoroute:
             '(component "Resistor_SMD:R_0402_1005Metric" (place R1 10000 10000 front 0))',
             '(component "Resistor_SMD:R_0402_1005Metric" (place R1 10000 10000 front 0))\n'
             '(component "Connector:USB" (place J1 30000 10000 front 0))',
+        ).replace(
+            '    (padstack "Via[0-1]_600:300_um" (shape (circle F.Cu 300)))\n  )\n  (network',
+            '    (image "Connector:USB" (outline (polygon F.Cu 10 0 0 10 0 10 10 0 10)) (pin 1 0 0 0))\n'
+            '    (padstack "Via[0-1]_600:300_um" (shape (circle F.Cu 300)))\n'
+            '  )\n  (network',
         )
 
         def fake_run(command, **_kwargs):
@@ -1029,7 +1041,7 @@ class TestAutoroute:
 
         assert result["status"] == "ok"
         assert len(route_inputs) == 3
-        assert [entry[2] for entry in route_inputs] == [["J1", "R1"], ["R1", "J1"], ["R1", "J1"]]
+        assert [entry[2] for entry in route_inputs] == [["J1", "R1"], ["R1", "J1"], ["J1", "R1"]]
         assert len({entry[0].parent for entry in route_inputs}) == 3
         assert all(entry[0].name == "sensor-board_autoroute.dsn" for entry in route_inputs)
         assert len({entry[1] for entry in route_inputs}) == 2
@@ -1037,8 +1049,9 @@ class TestAutoroute:
             "ascending", "descending", "original",
         ]
         assert [row["placement_order"] for row in result["search"]["attempts"]] == [
-            ["J1", "R1"], ["R1", "J1"], ["R1", "J1"],
+            ["J1", "R1"], ["R1", "J1"], ["J1", "R1"],
         ]
+        assert result["search"]["native_dsn_canonicalization"]["root_design_name_preserved"] is True
         assert [row["optimizer_strategy"] for row in result["search"]["attempts"]] == optimizer_strategies
         if optimization_threads == 0:
             assert all("--router.optimizer.enabled=false" in command for command in route_commands)
@@ -1065,7 +1078,9 @@ class TestAutoroute:
             start, end = spans[0]
             return (text[:start] + text[end:]).encode("utf-8")
 
-        assert all(without_placement(variant) == without_placement(baseline_snapshots[0])
+        canonical_baseline, canonical_info = canonicalize_native_dsn(baseline_snapshots[0].decode("utf-8"))
+        assert canonical_info["semantic"]["design_name"] == "sensor-board"
+        assert all(without_placement(variant) == without_placement(canonical_baseline.encode("utf-8"))
                    for _, variant, _ in route_inputs)
         assert board.read_bytes() == original_board
         assert (tmp_path / "sensor-board_autoroute.dsn").exists()

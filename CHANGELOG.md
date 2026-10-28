@@ -2,13 +2,18 @@
 
 ## [Unreleased]
 
+- Search long native repairs from both endpoint grids on a coarse lattice,
+  sharing the existing state cap with fine-grid fallbacks and preserving short
+  connection behavior, native collision checks and final DRC requirements.
+- Canonicalize private native routing inputs to remove component-image alias
+  and net/pin ordering differences while verifying geometry, membership, rules
+  and the original design name used for session correlation.
+
 - Before opens-only recovery, retain fresh native DRC and allow bounded removal
   of only warning-identified, unlocked router-generated dangling tracks. Verify
   original source copper and board state, rerun DRC after each removal, and keep
-  strict zero-finding publication checks.
-
-- Add a bounded coarse first pass for long native routing repairs, retaining
-  fine-grid fallbacks, the shared search-state cap and native collision checks.
+  strict zero-finding publication checks. Also handle validated private sessions
+  rejected for recognized dangling warnings after the router reports completion.
 
 - Keep an unclaimed child directory separate from unrelated circuits above its
   nearest workflow state, including projects used outside a Git checkout.

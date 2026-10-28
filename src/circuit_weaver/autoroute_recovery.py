@@ -285,16 +285,35 @@ def _eligible_native_open_rejection(initial: dict[str, Any], session_path: Path)
         return False
     blockers = drc.get("blocker_count")
     findings = drc.get("findings")
-    if type(blockers) is not int or blockers <= 0 or not isinstance(findings, list) or len(findings) != blockers:
+    if type(blockers) is not int or blockers < 0 or not isinstance(findings, list) or not findings:
         return False
-    return all(
-        isinstance(finding, dict)
-        and finding.get("rule_id") == "CW-DRC-002"
-        and finding.get("severity") == "blocker"
-        and finding.get("suppressed") is False
-        and finding.get("confirmed_blocker") is True
-        for finding in findings
-    )
+    open_findings = [finding for finding in findings if isinstance(finding, dict)
+                     and finding.get("rule_id") == "CW-DRC-002"]
+    dangling_findings = [finding for finding in findings if isinstance(finding, dict)
+                         and finding.get("rule_id") == "CW-DRC-841"]
+    if (blockers != len(open_findings)
+            or not (open_findings or dangling_findings)
+            or len(findings) != len(open_findings) + len(dangling_findings)):
+        return False
+    if any(
+        finding.get("severity") != "blocker"
+        or finding.get("level") != "error"
+        or finding.get("detection_confidence") != "verified"
+        or finding.get("suppressed") is not False
+        or finding.get("confirmed_blocker") is not True
+        for finding in open_findings
+    ):
+        return False
+    if any(
+        finding.get("severity") != "major"
+        or finding.get("level") != "warning"
+        or finding.get("detection_confidence") != "verified"
+        or finding.get("suppressed") is not False
+        or finding.get("confirmed_blocker") is not False
+        for finding in dangling_findings
+    ):
+        return False
+    return True
 
 
 def _serialize_native_session(
@@ -556,23 +575,48 @@ def autoroute_with_recovery(
         if native_open_rejection:
             private_session_sha256 = hashlib.sha256(initial_session.read_bytes()).hexdigest()
             native_drc = initial["board_import"]["drc"]
+            native_findings = native_drc["findings"]
+            dangling_warning_count = sum(
+                finding.get("rule_id") == "CW-DRC-841" for finding in native_findings
+            )
+            warning_triggered = dangling_warning_count > 0
+            mixed_triggered = warning_triggered and native_drc["blocker_count"] > 0
             recovery_trigger = {
-                "kind": "native_open_drc_after_router_reported_zero_incomplete",
-                "message": "Native DRC found open connections despite a zero-incomplete router statistic; "
-                "the validated private SES is being re-imported into quarantine for fresh-DRC recovery.",
+                "kind": (
+                    "native_open_and_dangling_drc_after_router_reported_zero_incomplete"
+                    if mixed_triggered
+                    else "native_dangling_drc_after_router_reported_zero_incomplete"
+                    if warning_triggered
+                    else "native_open_drc_after_router_reported_zero_incomplete"
+                ),
+                "message": (
+                    "Native DRC found verified open connections and recognized router dangling-track warnings "
+                    "despite a zero-incomplete router statistic; the validated private SES is being re-imported "
+                    "into quarantine for fresh-DRC cleanup and recovery."
+                    if mixed_triggered
+                    else "Native DRC found recognized router dangling-track warnings despite a zero-incomplete "
+                    "router statistic; the validated private SES is being re-imported into quarantine for "
+                    "fresh-DRC cleanup and strict final validation."
+                    if warning_triggered
+                    else "Native DRC found open connections despite a zero-incomplete router statistic; "
+                    "the validated private SES is being re-imported into quarantine for fresh-DRC recovery."
+                ),
                 "session_path": str(initial_session),
                 "session_sha256": private_session_sha256,
                 "router_incomplete": initial["stats"]["incomplete"],
                 "native_drc": {
                     "board_sha256": native_drc.get("board_sha256"),
                     "blocker_count": native_drc["blocker_count"],
+                    "finding_count": len(native_findings),
+                    "dangling_warning_count": dangling_warning_count,
                     "findings": [
                         {
                             key: finding.get(key)
-                            for key in ("rule_id", "severity", "ref", "net", "message")
+                            for key in ("rule_id", "severity", "level", "suppressed", "confirmed_blocker",
+                                        "ref", "net", "message")
                             if key in finding
                         }
-                        for finding in native_drc["findings"]
+                        for finding in native_findings
                     ],
                 },
             }

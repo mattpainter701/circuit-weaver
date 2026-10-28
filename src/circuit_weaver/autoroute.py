@@ -27,6 +27,8 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+from ._specctra_canonical import canonicalize_native_dsn
+
 log = logging.getLogger(__name__)
 
 _EFFORT_PASSES = {"fast": 100, "medium": 500, "high": 1000}
@@ -2131,6 +2133,20 @@ def _route_candidates(
     try:
         input_snapshot = dsn_path.read_bytes()
         input_hash = hashlib.sha256(input_snapshot).hexdigest()
+        native_dsn_text = None
+        native_dsn_canonicalization = None
+        if native_placement_portfolio:
+            native_dsn_text, canonicalization = canonicalize_native_dsn(input_snapshot.decode("utf-8"))
+            native_dsn_canonicalization = {
+                "source_sha256": canonicalization["source_sha256"],
+                "canonical_sha256": canonicalization["canonical_sha256"],
+                "canonical_bytes_changed": canonicalization["canonical_bytes_changed"],
+                "canonicalization_idempotent": canonicalization["idempotent"],
+                "root_design_name_preserved": True,
+                "image_alias_count": len(canonicalization["image_alias_map"]),
+                "placement_count": len(canonicalization["semantic"]["placements"]),
+                "net_count": len(canonicalization["semantic"]["net_membership"]),
+            }
         # Same filesystem as the destination allows atomic final publication.
         # The context also cleans up losing sessions and interrupted attempts.
         with tempfile.TemporaryDirectory(prefix=".cw-routing-", dir=ses_path.parent) as temporary:
@@ -2155,7 +2171,7 @@ def _route_candidates(
                     else:
                         placement_order_kind = "rotated"
                     variant_text, placement_order = _native_placement_variant(
-                        input_snapshot.decode("utf-8"),
+                        native_dsn_text,
                         placement_order_kind,
                         rotation=index - 2,
                     )
@@ -2269,6 +2285,8 @@ def _route_candidates(
                 "ranking": ["incomplete", "clearance_unreported", "trace_length_mm", "vias", "traces"],
                 "attempts": attempt_rows,
             }
+            if native_dsn_canonicalization is not None:
+                search["native_dsn_canonicalization"] = native_dsn_canonicalization
             if options.get("cooperative_partial_timeout"):
                 search["timeout_budget"] = {
                     "overall_host_timeout_seconds": timeout_seconds,

@@ -31,6 +31,7 @@ def recovery(tmp_path, monkeypatch):
         "convert_status": "ok",
         "import_status": "ok",
         "accept_status": "ok",
+        "cleanup_native_clean": False,
         "mutate": None,
     }
 
@@ -85,6 +86,12 @@ def recovery(tmp_path, monkeypatch):
     # Keep this API workflow fixture isolated from KiCad CLI and filesystem
     # footprint-context staging.
     def clean_partial(source_path, partial_path, **_options):
+        if state["cleanup_native_clean"]:
+            drc = SimpleNamespace(
+                findings=(), blocker_count=0, status="ok",
+                raw_report={"unconnected_items": [], "violations": [], "schematic_parity": []},
+            )
+            return Path(partial_path), drc, {"status": "cleaned", "removed_track_count": 1}
         finding = SimpleNamespace(
             rule_id="CW-DRC-002", severity="blocker", suppressed=False,
         )
@@ -179,6 +186,8 @@ def _initial_native_open_rejection(session_path: Path, *, drc=None, **overrides)
                 "findings": [{
                     "rule_id": "CW-DRC-002",
                     "severity": "blocker",
+                    "level": "error",
+                    "detection_confidence": "verified",
                     "suppressed": False,
                     "confirmed_blocker": True,
                 }],
@@ -205,6 +214,171 @@ def test_zero_router_incomplete_with_verified_native_open_rejection_enters_priva
     accept.assert_called_once()
     assert dest.read_text(encoding="utf-8") == "accepted board"
     assert ses.read_text(encoding="utf-8") == "complete session"
+
+
+def test_zero_router_incomplete_with_known_dangling_warning_enters_fresh_cleanup_and_recovery(recovery):
+    source, ses, dest, state, route, repair, accept, _ = recovery
+
+    def initial_error(path):
+        return _initial_native_open_rejection(path, drc={
+            "status": "ok",
+            "passed": False,
+            "blocker_count": 1,
+            "findings": [
+                {
+                    "rule_id": "CW-DRC-002",
+                    "severity": "blocker",
+                    "level": "error",
+                    "detection_confidence": "verified",
+                    "suppressed": False,
+                    "confirmed_blocker": True,
+                    "net": "SIGNAL_A",
+                },
+                {
+                    "rule_id": "CW-DRC-841",
+                    "severity": "major",
+                    "level": "warning",
+                    "detection_confidence": "verified",
+                    "suppressed": False,
+                    "confirmed_blocker": False,
+                    "net": "SIGNAL_B",
+                    "message": "Track has unconnected end",
+                },
+            ],
+        })
+
+    state["initial_error_factory"] = initial_error
+    result = autoroute_with_recovery(source, ses, routed_board_path=dest)
+
+    assert result["status"] == "ok"
+    assert result["routing_complete"] is True
+    trigger = result["recovery_trigger"]
+    assert trigger["kind"] == "native_open_and_dangling_drc_after_router_reported_zero_incomplete"
+    assert "dangling-track warnings" in trigger["message"]
+    assert trigger["native_drc"]["blocker_count"] == 1
+    assert trigger["native_drc"]["finding_count"] == 2
+    assert trigger["native_drc"]["dangling_warning_count"] == 1
+    assert route.call_count == 1
+    repair.assert_called_once()
+    accept.assert_called_once()
+    assert dest.read_text(encoding="utf-8") == "accepted board"
+
+
+def test_warning_only_complete_router_result_cleans_then_serializes_without_link_recovery(recovery):
+    source, ses, dest, state, route, repair, accept, _ = recovery
+    state["cleanup_native_clean"] = True
+
+    def initial_error(path):
+        return _initial_native_open_rejection(path, drc={
+            "status": "ok",
+            "passed": False,
+            "blocker_count": 0,
+            "findings": [{
+                "rule_id": "CW-DRC-841",
+                "severity": "major",
+                "level": "warning",
+                "detection_confidence": "verified",
+                "suppressed": False,
+                "confirmed_blocker": False,
+                "message": "Track has unconnected end",
+            }],
+        })
+
+    state["initial_error_factory"] = initial_error
+    result = autoroute_with_recovery(source, ses, routed_board_path=dest)
+
+    assert result["status"] == "ok"
+    assert result["routing_complete"] is True
+    assert result["recovery_trigger"]["kind"] == "native_dangling_drc_after_router_reported_zero_incomplete"
+    assert result["recovery_trigger"]["native_drc"]["blocker_count"] == 0
+    assert result["recovery_trigger"]["native_drc"]["dangling_warning_count"] == 1
+    assert route.call_count == 1
+    repair.assert_not_called()
+    accept.assert_called_once()
+    assert dest.read_text(encoding="utf-8") == "accepted board"
+    assert ses.read_text(encoding="utf-8") == "complete session"
+
+
+@pytest.mark.parametrize(
+    "warning_mutation",
+    [
+        "wrong-level",
+        "wrong-severity",
+        "unverified-open",
+        "unverified-warning",
+        "suppressed",
+        "confirmed-blocker",
+        "unknown-rule",
+        "extra-finding",
+        "blocker-count-mismatch",
+        "no-findings",
+        "warning-only-drc-passed",
+    ],
+)
+def test_mixed_open_and_dangling_rejection_requires_exact_verified_finding_inventory(recovery, warning_mutation):
+    source, ses, dest, state, route, repair, accept, _ = recovery
+
+    def initial_error(path):
+        drc = {
+            "status": "ok",
+            "passed": False,
+            "blocker_count": 1,
+            "findings": [
+                {
+                    "rule_id": "CW-DRC-002",
+                    "severity": "blocker",
+                    "level": "error",
+                    "detection_confidence": "verified",
+                    "suppressed": False,
+                    "confirmed_blocker": True,
+                },
+                {
+                    "rule_id": "CW-DRC-841",
+                    "severity": "major",
+                    "level": "warning",
+                    "detection_confidence": "verified",
+                    "suppressed": False,
+                    "confirmed_blocker": False,
+                },
+            ],
+        }
+        if warning_mutation == "wrong-level":
+            drc["findings"][1]["level"] = "error"
+        elif warning_mutation == "wrong-severity":
+            drc["findings"][1]["severity"] = "minor"
+        elif warning_mutation == "unverified-open":
+            drc["findings"][0]["detection_confidence"] = "single_source"
+        elif warning_mutation == "unverified-warning":
+            drc["findings"][1]["detection_confidence"] = "single_source"
+        elif warning_mutation == "suppressed":
+            drc["findings"][1]["suppressed"] = True
+        elif warning_mutation == "confirmed-blocker":
+            drc["findings"][1]["confirmed_blocker"] = True
+        elif warning_mutation == "unknown-rule":
+            drc["findings"][1]["rule_id"] = "CW-DRC-999"
+        elif warning_mutation == "extra-finding":
+            drc["findings"].append({"rule_id": "CW-DRC-841", "severity": "info", "level": "info"})
+        elif warning_mutation == "blocker-count-mismatch":
+            drc["blocker_count"] = 2
+        elif warning_mutation == "no-findings":
+            drc["blocker_count"] = 0
+            drc["findings"] = []
+        elif warning_mutation == "warning-only-drc-passed":
+            drc["blocker_count"] = 0
+            drc["findings"].pop(0)
+            drc["passed"] = True
+        return _initial_native_open_rejection(path, drc=drc)
+
+    state["initial_error_factory"] = initial_error
+    result = autoroute_with_recovery(source, ses, routed_board_path=dest)
+
+    assert result["status"] == "error"
+    assert result["routing_complete"] is False
+    assert result.get("recovery_trigger") is None
+    repair.assert_not_called()
+    accept.assert_not_called()
+    assert not dest.exists()
+    assert not ses.exists()
 
 
 @pytest.mark.parametrize(

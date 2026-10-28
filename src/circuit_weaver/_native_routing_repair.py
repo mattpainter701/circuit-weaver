@@ -94,31 +94,41 @@ def _search_with_fallback(start, goal, layer_count, target_layers, origins, boun
                           max_expanded_states, clear_segment, can_change_layer):
     """Search long spans on a coarse grid first, sharing one hard state budget."""
     requested_step = float(grid_step_mm)
-    long_span_coarse = requested_step < 0.5 and math.dist(start, goal) > 256 * requested_step
-    steps = ([0.5, requested_step] if long_span_coarse else [requested_step])
+    long_span_coarse = requested_step < 0.5 and math.dist(start, goal) > 128 * requested_step
+    searches = ([(0.5, False), (0.5, True), (requested_step, False)]
+                if long_span_coarse else [(requested_step, False)])
     if requested_step > 0.125:
-        steps.append(0.125)
+        searches.append((0.125, False))
     remaining = max_expanded_states
     expanded = 0
-    for attempt, step in enumerate(steps):
+    for attempt, (step, reverse) in enumerate(searches):
         if remaining <= 0:
             break
-        if long_span_coarse and attempt == 0:
-            # Keep this exploratory pass bounded to one quarter of the total cap.
-            budget = max(1, max_expanded_states // 4)
+        if long_span_coarse and attempt < 2:
+            budget = min(remaining, max(1, max_expanded_states // 4))
         else:
-            # Reserve half of the actual unspent budget for the next finer pass.
-            budget = remaining if attempt == len(steps) - 1 else max(1, remaining // 2)
+            budget = remaining if attempt == len(searches) - 1 else max(1, remaining // 2)
+        search_start, search_goal = (goal, start) if reverse else (start, goal)
+        search_origins = ({(0, 0, layer) for layer in target_layers} if reverse else origins)
+        search_targets = {node[2] for node in origins} if reverse else target_layers
         path, used = _astar_search(
-            start, goal, layer_count, target_layers, origins, bounds, step, budget,
-            clear_segment, can_change_layer,
+            search_start, search_goal, layer_count, search_targets, search_origins,
+            bounds, step, budget, clear_segment, can_change_layer,
         )
         expanded += used
         remaining -= used
         if path is not None:
-            return path, step, expanded
-    return None, None, expanded
+            return path, step, expanded, search_start, search_goal, reverse
+    return None, None, expanded, start, goal, False
 
+
+def _physical_search_points(path, step, origin, goal, reverse, stack):
+    """Resolve a lattice on its own origin before restoring original direction."""
+    points = [((origin[0] + n[0] * step, origin[1] + n[1] * step), stack[n[2]]) for n in path]
+    points.append((goal, stack[path[-1][2]]))
+    if reverse:
+        points.reverse()
+    return _collapse_collinear_points(points)
 
 def _collapse_collinear_points(points):
     """Merge only forward, exactly collinear same-layer grid segments."""
@@ -389,7 +399,7 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
     origins = {(0, 0, i) for i, layer_id in enumerate(stack) if first.IsOnLayer(layer_id)}
     if not origins or not any(last.IsOnLayer(layer_id) for layer_id in stack):
         raise ValueError("endpoints do not occupy supported copper layers")
-    path, step, expanded = _search_with_fallback(
+    path, step, expanded, search_origin, search_goal, reverse = _search_with_fallback(
         start, goal, len(stack),
         {i for i, layer_id in enumerate(stack) if last.IsOnLayer(layer_id)},
         origins, bounds, grid_step_mm, max_expanded_states,
@@ -397,12 +407,7 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
     )
     if path is None:
         raise RuntimeError(f"no collision-free repair within {expanded} native search states")
-    def coordinate(node):
-        return start[0] + node[0] * step, start[1] + node[1] * step
-
-    points = _collapse_collinear_points(
-        [(coordinate(n), stack[n[2]]) for n in path] + [(goal, stack[path[-1][2]])]
-    )
+    points = _physical_search_points(path, step, search_origin, search_goal, reverse, stack)
     added_tracks = added_vias = 0
     for (a, la), (b, lb) in zip(points, points[1:]):
         if la != lb:
@@ -441,6 +446,7 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
         "added_vias": added_vias,
         "expanded_states": expanded,
         "search_grid_step_mm": step,
+        "search_direction": "reverse" if reverse else "forward",
         "search_state_budget": max_expanded_states,
         "resolved_track_width_mm": width,
         "resolved_via_diameter_mm": diameter,

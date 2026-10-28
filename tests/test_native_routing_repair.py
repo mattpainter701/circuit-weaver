@@ -306,7 +306,7 @@ def test_finer_grid_fallback_shares_one_expansion_budget(monkeypatch):
         return None, budget
 
     monkeypatch.setattr(repair, "_astar_search", exhausted)
-    path, step, expanded = repair._search_with_fallback(
+    path, step, expanded, *_ = repair._search_with_fallback(
         (0, 0), (1, 0), 1, {0}, {(0, 0, 0)}, (0, 0, 1, 1), 0.25, 10,
         lambda *_args: True, lambda _point: False,
     )
@@ -332,7 +332,7 @@ def test_fallback_finds_narrow_clearance_checked_corridor_unreachable_on_coarse_
     )
     assert coarse_path is None
 
-    path, step, expanded = repair._search_with_fallback(
+    path, step, expanded, *_ = repair._search_with_fallback(
         start, goal, 1, {0}, {(0, 0, 0)}, (0.0, 0.0, 1.0, 0.125),
         0.25, 200, clear, lambda _point: False,
     )
@@ -369,13 +369,13 @@ def test_long_span_coarse_pass_is_quarter_capped_and_finer_passes_share_actual_r
         return None, used
 
     monkeypatch.setattr(repair, "_astar_search", bounded_search)
-    path, step, expanded = repair._search_with_fallback(
+    path, step, expanded, *_ = repair._search_with_fallback(
         (0.0, 0.0), (100.0, 0.0), 2, {1}, {(0, 0, 1)},
         (0.0, 0.0, 100.0, 1.0), 0.25, 100, lambda *_args: True, lambda _point: False,
     )
 
     assert path is None and step is None
-    assert calls == [(0.5, 25), (0.25, 40), (0.125, 70)]
+    assert calls == [(0.5, 25), (0.5, 25), (0.25, 30), (0.125, 50)]
     assert expanded == 100
 
 
@@ -388,7 +388,7 @@ def test_long_span_coarse_pass_can_return_candidate_within_quarter_budget(monkey
         return [(0, 0, 1)], 12
 
     monkeypatch.setattr(repair, "_astar_search", coarse_success)
-    path, step, expanded = repair._search_with_fallback(
+    path, step, expanded, *_ = repair._search_with_fallback(
         (0.0, 0.0), (100.0, 0.0), 2, {1}, {(0, 0, 1)},
         (0.0, 0.0, 100.0, 1.0), 0.25, 100, lambda *_args: True, lambda _point: False,
     )
@@ -447,7 +447,7 @@ def test_long_route_maze_uses_coarse_pass_under_total_budget():
     import math
 
     start, goal, bounds, clear = _long_route_maze()
-    fine_path, fine_step, fine_used = repair._search_with_fallback(
+    fine_path, fine_step, fine_used, *_ = repair._search_with_fallback(
         start, goal, 1, {0}, {(0, 0, 0)}, bounds, 0.25, 150_000, clear, lambda _point: False,
     )
     assert fine_path is not None
@@ -471,7 +471,7 @@ def test_long_span_coarse_trap_falls_back_to_requested_fine_grid():
                 and bounds[0] <= b[0] <= bounds[2] and bounds[1] <= b[1] <= bounds[3]
                 and not _segment_hits_rect(a, b, blocker))
 
-    path, step, expanded = repair._search_with_fallback(
+    path, step, expanded, *_ = repair._search_with_fallback(
         start, goal, 1, {0}, {(0, 0, 0)}, bounds, 0.25, 1000, clear, lambda _point: False,
     )
 
@@ -481,3 +481,60 @@ def test_long_span_coarse_trap_falls_back_to_requested_fine_grid():
     points = [(start[0] + node[0] * step, start[1] + node[1] * step) for node in path]
     assert all(clear(a, b, 0) for a, b in zip(points, points[1:]))
     assert clear(points[-1], goal, 0)
+
+
+def test_reverse_coarse_swaps_layers_and_preserves_off_grid_physical_endpoints(monkeypatch):
+    calls = []
+    start, goal = (-0.137, 1.019), (46.241, 3.087)
+
+    def search(a, b, layers, targets, origins, bounds, step, budget, clear, change):
+        calls.append((a, b, targets, origins, step, budget))
+        return (None, 20) if len(calls) == 1 else ([(0, 0, 1), (-1, 0, 1), (-1, 0, 0)], 12)
+
+    monkeypatch.setattr(repair, "_astar_search", search)
+    path, step, used, origin, target, reverse = repair._search_with_fallback(
+        start, goal, 2, {1}, {(0, 0, 0)}, (-1, 0, 50, 5), .25, 100,
+        lambda *_: True, lambda _: True,
+    )
+    assert reverse and used == 32 and origin == goal and target == start
+    assert calls[1] == (goal, start, {0}, {(0, 0, 1)}, .5, 25)
+    points = repair._physical_search_points(path, step, origin, target, reverse, [0, 2])
+    assert points[0] == (start, 0) and points[-1] == (goal, 2)
+    assert ((goal[0] - .5, goal[1]), 0) in points
+    assert ((goal[0] - .5, goal[1]), 2) in points
+
+
+def test_medium_span_threshold_and_shared_cap_do_not_claim_impossible_route(monkeypatch):
+    calls = []
+
+    def exhausted(a, b, layers, targets, origins, bounds, step, budget, clear, change):
+        calls.append((step, budget, a))
+        return None, budget
+
+    monkeypatch.setattr(repair, "_astar_search", exhausted)
+    result = repair._search_with_fallback(
+        (0, 0), (46, 0), 1, {0}, {(0, 0, 0)}, (0, 0, 46, 2), .25, 150000,
+        lambda *_: False, lambda _: False,
+    )
+    assert result[0] is None and result[2] == 150000
+    assert calls == [(.5, 37500, (0, 0)), (.5, 37500, (46, 0)),
+                     (.25, 37500, (0, 0)), (.125, 37500, (0, 0))]
+
+
+def test_medium_coarse_real_detour_and_impossible_pocket():
+    start, goal = (0.125, .125), (46.125, .125)
+    wall = (20, -1, 21, 2)
+    def clear(a, b, _layer):
+        return not _segment_hits_rect(a, b, wall)
+    path, step, used, origin, target, reverse = repair._search_with_fallback(
+        start, goal, 1, {0}, {(0, 0, 0)}, (0, 0, 47, 4), .25, 150000,
+        clear, lambda _: False,
+    )
+    assert path is not None and step == .5 and used <= 37500 and not reverse
+    points = repair._physical_search_points(path, step, origin, target, reverse, [0])
+    assert all(clear(a, b, 0) for (a, _), (b, _) in zip(points, points[1:]))
+    trapped = repair._search_with_fallback(
+        start, goal, 1, {0}, {(0, 0, 0)}, (0, 0, 47, 4), .25, 100,
+        lambda a, b, _: a == b, lambda _: False,
+    )
+    assert trapped[0] is None and trapped[2] <= 100
