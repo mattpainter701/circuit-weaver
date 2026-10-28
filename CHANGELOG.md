@@ -11,6 +11,8 @@
 
 ### Corrected part data
 
+- Move the `high_voltage_isolation` and `inverter_gate_driver` samples to a 12 V input. Both fed 24 V into the AP62300 (rated 4.2-18 V, 20 V absolute maximum) and tied its enable pin to that rail; `high_voltage_isolation` also clamped 24 V with a 12 V-standoff TVS. The new supply-rating check caught the regulator over-voltage. A sample-corpus test now keeps every rated part inside its supply rating.
+
 - Correct the AP2112K-3.3 SOT-23-5 pin map: pin 1 is VIN and pin 5 is VOUT (Diodes DS39724). The swapped entry wired the input rail to the regulator output in the OLED, RF front-end, USB-UART and Zigbee samples. Their checked-in generated artifacts predate this fix and need regenerating.
 - Correct the built-in MCP1700-3302E SOT-23 pin map to 1 GND, 2 VOUT, 3 VIN. The entry used the SOT-89/TO-92 order, so a raw (non-template) MCP1700 instance fed its input rail into VOUT.
 

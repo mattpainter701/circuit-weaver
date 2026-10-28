@@ -1,26 +1,31 @@
 # Sprint 41 corpus — high-voltage-rail isolated power archetype.
 # Demonstrates a mains / industrial control rail survival circuit:
-#   - 24V industrial input clamped by a 12V TVS diode (SMBJ12A)
-#   - AP62300 buck stepping 24V → 3.3V for the MCU
+#   - 12V industrial input clamped by a TVS diode (SMBJ12A, 12 V standoff)
+#   - AP62300 buck stepping 12V → 3.3V for the MCU
 #   - MCP1700 LDO for a quiet 1.8V rail
 #   - STM32F103 MCU with BOOT0 and reset straps and explicit unused-pin NCs
-# The TVS clamp protects VIN_24V; no isolated data path is wired on
+# The TVS clamp protects VIN_12V; no isolated data path is wired on
 # this preview — the spec focuses on surviving the high-voltage input.
+# Earlier revisions fed 24 V into the AP62300 (rated 4.2-18 V, 20 V absolute
+# maximum), tied its EN pin to that rail, and clamped it with a 12 V TVS that
+# would conduct continuously at 24 V. A 24 V input needs a buck and a TVS
+# rated for it; the curated library has neither yet. The SMBJ12A's standoff
+# equals this rail's nominal voltage, so a production design would choose a
+# higher standoff (for example SMBJ15A) to leave tolerance margin.
 
 project: High_Voltage_Isolation
 company: Demo Corp
-description: 24V industrial input with TVS clamp and 3.3V MCU rail
+description: 12V industrial input with TVS clamp and 3.3V MCU rail
 
 power:
   - type: buck
     ic: AP62300
     ref: U1
-    vin: 24
+    vin: 12
     vout: 3.3
     iout: 1
-    vin_net: VIN_24V
+    vin_net: VIN_12V
     rail_name: VDD_3P3
-    en_net: VIN_24V
   - type: ldo
     ic: MCP1700-3302E
     ref: U2
@@ -33,7 +38,7 @@ protection:
   - type: protection
     ic: SMBJ12A
     ref: D1
-    protect_net: VIN_24V
+    protect_net: VIN_12V
     protection_type: tvs
 
 digital:
