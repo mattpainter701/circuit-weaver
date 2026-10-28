@@ -30,6 +30,15 @@ BOARD = '''(kicad_pcb (version 20240108) (generator "pcbnew")
   (gr_rect (start 5 5) (end 25 20) (stroke (width 0.1) (type solid)) (fill none) (layer "Edge.Cuts")))
 '''
 
+EDGE_CLEARANCE = {
+    "status": "ok",
+    "value_iu": 500_000,
+    "value_mm": 0.5,
+    "value_um": 500.0,
+    "source": "BOARD_DESIGN_SETTINGS.m_CopperEdgeClearance",
+}
+
+
 def dsn(placements: str, pin_refs: str = 'R1-1 J1-2') -> str:
     return f'''(pcb "dup-board"
   (parser (string_quote ")) (resolution mil 1000) (unit mil)
@@ -78,6 +87,9 @@ def test_public_export_refuses_duplicate_references_without_publishing(tmp_path)
         return mock.Mock(returncode=0, stdout='', stderr='')
     with mock.patch('circuit_weaver.autoroute._find_kicad_cli', return_value='kicad-cli'), \
          mock.patch('circuit_weaver.autoroute._kicad_cli_supports_specctra', return_value=True), \
+         mock.patch(
+             'circuit_weaver.autoroute._inspect_native_edge_clearance', return_value=(EDGE_CLEARANCE, None)
+         ), \
          mock.patch('circuit_weaver.autoroute.subprocess.run', side_effect=fake_cli_export):
         result = export_dsn(board, output)
     assert result['status'] == 'error'
@@ -95,6 +107,9 @@ def test_public_export_publishes_valid_distinct_references(tmp_path):
         return mock.Mock(returncode=0, stdout='', stderr='')
     with mock.patch('circuit_weaver.autoroute._find_kicad_cli', return_value='kicad-cli'), \
          mock.patch('circuit_weaver.autoroute._kicad_cli_supports_specctra', return_value=True), \
+         mock.patch(
+             'circuit_weaver.autoroute._inspect_native_edge_clearance', return_value=(EDGE_CLEARANCE, None)
+         ), \
          mock.patch('circuit_weaver.autoroute.subprocess.run', side_effect=fake_cli_export):
         result = export_dsn(board, output)
     assert result['status'] == 'ok'
