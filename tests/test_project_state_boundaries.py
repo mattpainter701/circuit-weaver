@@ -129,6 +129,35 @@ def test_unrelated_ancestor_state_and_kicad_project_do_not_claim_child_board(tmp
     assert summary["project_id"] != parent_state.project_id
 
 
+def test_unclaimed_generated_directory_stops_at_nearest_state_ancestor(tmp_path: Path) -> None:
+    aggregate = tmp_path / "unrelated-aggregate"
+    aggregate.mkdir()
+    aggregate_spec = aggregate / "design.yaml"
+    aggregate_spec.write_text("project: Aggregate\nblocks: []\n", encoding="utf-8")
+    aggregate_board = aggregate / "unrelated.kicad_pcb"
+    aggregate_board.write_text("(kicad_pcb unrelated)", encoding="utf-8")
+    aggregate_manifest = save_project_state(aggregate, ProjectState(name="Aggregate"))
+
+    parent = aggregate / "parent-project"
+    case = parent / "case"
+    case.mkdir(parents=True)
+    parent_manifest = save_project_state(parent, ProjectState(name="Parent"))
+    case_state = ProjectState(name="Case")
+    save_project_state(case, case_state)
+    ancestor_bytes = {
+        path: path.read_bytes()
+        for path in (aggregate_spec, aggregate_board, aggregate_manifest, parent_manifest)
+    }
+
+    generated = case / "generated"
+    assert resolve_project_root(generated) == generated.resolve()
+
+    case_state.workflow["generate"] = {"output_dir": str(generated)}
+    save_project_state(case, case_state)
+    assert resolve_project_root(generated) == case.resolve()
+    assert {path: path.read_bytes() for path in ancestor_bytes} == ancestor_bytes
+
+
 def test_canonical_output_child_inherits_parent_project_boundary(tmp_path: Path) -> None:
     for parent_kind in ("state", "design"):
         parent = tmp_path / parent_kind

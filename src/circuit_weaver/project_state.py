@@ -262,9 +262,13 @@ def resolve_project_root(target: str | Path = ".") -> Path:
     if _has_local_circuit_boundary(start):
         return start
 
-    # Fall back to the nearest ancestor boundary only when the selected
-    # directory contains no supported circuit input of its own.
+    # Do not resolve through an unrelated state-bearing project. If the
+    # nearest manifest did not claim this path above, it is a durable project
+    # boundary; circuit files farther up may belong to an unrelated aggregate
+    # or validation workspace.
     for directory in start.parents:
+        if project_state_path(directory).is_file():
+            break
         if _has_strong_circuit_boundary(directory) or _has_local_circuit_boundary(directory):
             return directory
     return start

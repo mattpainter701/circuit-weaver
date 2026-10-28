@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Keep an unclaimed child directory separate from unrelated circuits above its
+  nearest workflow state, including projects used outside a Git checkout.
+
 - Recover private sessions when the router reports completion but a fresh native
   import finds only open connections. Reject mixed or ambiguous failures, rerun
   native checks before repair, and report native import failures as incomplete.

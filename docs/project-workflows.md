@@ -487,6 +487,13 @@ a new hash-matched native report before any repair. Missing reports, other
 physical faults and ambiguous results remain errors. A failed native import
 always reports routing as incomplete, regardless of the router's statistics.
 
+Directory discovery also stops at an unclaimed workflow-state boundary before
+considering unrelated circuits higher in the directory tree. A child such as
+`generated/` belongs to a project when its saved state records that output;
+otherwise it remains a separate selected directory. The conventional `output/`
+directory continues to resolve to its parent project. This behavior applies
+outside Git checkouts as well as inside them.
+
 The frozen 438-part DAC completes this eight-pass, post-route-plane recipe from
 its zero-copper placement in the isolated installed runtime. It needs no native
 repair on that run; all native DRC, 110-path, 144-leg, 72-return and assembly gates
