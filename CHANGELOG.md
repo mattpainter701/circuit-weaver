@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Apply explicit search-grid and state-budget settings in native same-net repair
+  requests, and report the requested grid alongside the grid used by a candidate.
+  This lets automation verify its search limits before accepting native results.
 - Respect native mounting-hole geometry and board hole-clearance rules during
   bounded routing recovery, including slotted holes and candidate via drills.
   Keep copper spacing and hole-to-hole constraints separate, and require fresh

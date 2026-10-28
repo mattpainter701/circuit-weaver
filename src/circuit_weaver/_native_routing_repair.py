@@ -611,6 +611,7 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
         "added_tracks": added_tracks,
         "added_vias": added_vias,
         "expanded_states": expanded,
+        "requested_grid_step_mm": float(grid_step_mm),
         "search_grid_step_mm": step,
         "search_direction": "reverse" if reverse else "forward",
         "search_state_budget": max_expanded_states,

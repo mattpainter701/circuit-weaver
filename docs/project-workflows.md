@@ -531,6 +531,16 @@ on their actual grid origin before restoring the original endpoint direction.
 Track widths, clearances, via rules, exact native collision checks and the final
 full DRC gate are unchanged. A trapped endpoint can still require global rerouting.
 
+Low-level `repair_open` worker requests accept `grid_step_mm` and
+`max_expanded_states`, defaulting to 0.25 mm and 150,000 states. The worker applies
+these values to the native search. A candidate reports `requested_grid_step_mm`,
+the actual `search_grid_step_mm`, and `search_state_budget`; a fallback grid can
+differ from the requested grid. The state budget bounds search work, while the
+operation timeout separately bounds elapsed time. These responses describe
+private repair candidates. The shared recovery runner requires a fresh full
+native DRC and preserved source state before accepting each candidate, and
+publishes a board only after all open connections are closed.
+
 Native recovery treats non-plated mounting holes as drill geometry across every
 enabled copper layer, including circular and slotted holes. Tracks and via copper
 must respect the board's copper-to-hole clearance; candidate via drills must also
