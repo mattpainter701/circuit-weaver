@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Preserve exact native arc and circle geometry in footprint and board drawings
+  during copper-only validation and edits, while rejecting unknown drawing types.
 - Stage each native dangling-copper cleanup pass in its own private project
   directory so repeated passes preserve footprint libraries without collisions.
 - Carry KiCad's project-backed copper-to-edge minimum into native-board

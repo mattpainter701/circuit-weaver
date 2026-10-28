@@ -499,7 +499,8 @@ uses a separate private project directory to retain its footprint context.
 The native worker verifies
 that original source copper remains an exact object-level subset and that no
 other copper, footprint/text state, source geometry, zones or layer stack
-changes. It reruns full native DRC after each bounded removal and retains both
+changes, including native arc and circle drawing geometry. Unsupported drawing
+types still block the operation. It reruns full native DRC after each bounded removal and retains both
 raw reports. Open and dangling-warning counts may not increase; every removed
 warning UUID must disappear. Unknown findings, ambiguous objects, source or
 locked copper, a worse DRC result, or exhausting the bound stops recovery.

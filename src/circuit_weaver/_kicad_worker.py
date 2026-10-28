@@ -405,8 +405,15 @@ def _ground_plane_graphic_state(item, pcbnew):
     uuid = item.m_Uuid.AsString()
     if kind == "PCB_SHAPE":
         shape = item.GetShapeStr()
-        if item.GetShape() == pcbnew.SHAPE_T_SEGMENT:
+        native_shape = item.GetShape()
+        if native_shape == pcbnew.SHAPE_T_SEGMENT:
             geometry = ((item.GetStart().x, item.GetStart().y), (item.GetEnd().x, item.GetEnd().y))
+        elif native_shape == pcbnew.SHAPE_T_ARC:
+            start, middle, end = item.GetStart(), item.GetArcMid(), item.GetEnd()
+            geometry = ((start.x, start.y), (middle.x, middle.y), (end.x, end.y))
+        elif native_shape == pcbnew.SHAPE_T_CIRCLE:
+            center, radius_point = item.GetStart(), item.GetEnd()
+            geometry = ((center.x, center.y), (radius_point.x, radius_point.y))
         elif shape == "Rect":
             geometry = tuple((point.x, point.y) for point in item.GetRectCorners())
         elif shape == "Polygon":
