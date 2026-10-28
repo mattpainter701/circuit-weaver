@@ -1090,13 +1090,19 @@ def _tool_args(options: dict[str, Any], *keys: str) -> list[str]:
 
 def _require_ok(result: dict[str, Any], stage: str) -> None:
     if result.get("status") not in {"ok", "success", "completed"}:
-        raise WorkflowError(f"{stage}_failed", str(result.get("message") or result.get("reason") or f"{stage} failed"))
+        raise WorkflowError(
+            f"{stage}_failed", str(result.get("message") or result.get("reason") or f"{stage} failed"),
+            stage_result=result,
+        )
 
 
 def _require_outputs(stage: str, result: dict[str, Any], paths: list[Path]) -> None:
     missing = [str(path) for path in paths if not path.is_file()]
     if missing:
-        raise WorkflowError("stage_output_missing", f"{stage} did not create expected output(s): {', '.join(missing)}")
+        raise WorkflowError(
+            "stage_output_missing", f"{stage} did not create expected output(s): {', '.join(missing)}",
+            stage_result=result,
+        )
 
 
 def _related_outputs(path: Path) -> list[str]:

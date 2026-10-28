@@ -43,6 +43,30 @@ def test_native_ci_requires_complete_shared_four_layer_cad_on_installed_package(
         assert required in command
 
 
+def test_samples_require_exact_wheel_and_pinned_bounded_recovery_without_waiving_cases():
+    job = _workflow("ci.yml")["jobs"]["kicad-validation"]
+    assert job["env"]["CIRCUIT_WEAVER_TEST_PACKAGE"] == "wheel"
+    steps = job["steps"]
+    downloads = [step for step in steps if step.get("uses", "").startswith("actions/download-artifact@")]
+    assert any(step.get("with", {}).get("name") == "ci-distributions" for step in downloads)
+    sample = next(
+        step for step in steps if step["name"] == "Validate all samples with native assembled previews and MCP"
+    )
+    command = sample["run"]
+    for required in (
+        "--suite samples", "--require-clean", "--installed", '--expected-wheel "$wheel"',
+        "--route-max-passes 20", "--repair-open-connections", "--recovery-timeout 600",
+        "f6f51bb02245e8e717f9359bd260cc9c5c0b1bc0acc8b7cb2cd5b8ffeb5de3c7",
+        "sha256sum --check",
+    ):
+        assert required in command
+    assert sample["env"]["CIRCUIT_WEAVER_FREEROUTING"] == "/tmp/freerouting-2.5.0.jar"
+    assert sample.get("continue-on-error", "false") == "false"
+    # Legacy native coverage stays separate from the explicit recovery profile.
+    core = next(step for step in steps if step["name"] == "Verify pinned Freerouting and route real basic circuits")
+    assert core["env"]["CIRCUIT_WEAVER_FREEROUTING"] == "/tmp/freerouting-2.4.1.jar"
+
+
 def test_design_validation_runs_once_per_pr_revision_and_cancels_superseded_work():
     workflow = _workflow("validate-design.yml")
     assert workflow["on"]["push"]["branches"] == ["main"]

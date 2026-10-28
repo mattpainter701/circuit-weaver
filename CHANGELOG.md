@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Retain native diagnostics from direct workflow operations, including deferred
+  ground-plane import failures, while keeping public errors concise.
 - Preserve native repair coordinates to the nearest internal unit, avoiding
   one-nanometre truncation drift when repaired copper passes through Specctra.
 - Request a bounded cooperative stop before the host deadline for private

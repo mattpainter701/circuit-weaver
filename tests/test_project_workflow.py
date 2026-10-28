@@ -586,6 +586,77 @@ def test_failed_workflow_checkpoint_preserves_structured_native_diagnostics(tmp_
     assert result["error"] == {"code": "stage_failed", "message": "placement rejected"}
 
 
+def test_direct_native_failure_helper_retains_diagnostics_in_durable_checkpoint(tmp_path: Path, monkeypatch):
+    root = _project(tmp_path)
+    native_result = {
+        "status": "error", "message": "Imported routing failed KiCad DRC; board was not published",
+        "drc": {"blocker_count": 2, "findings": [{"rule_id": "CW-DRC-002", "message": "Missing connection"}]},
+        "diagnostics": ["native-detail"] * 5000,
+    }
+
+    def failed_stage(*_args, **_kwargs):
+        workflow._require_ok(native_result, "ground_plane")
+
+    monkeypatch.setattr(workflow, "_execute_stage", failed_stage)
+    result = workflow.run_workflow(root, stages=["validate"])
+
+    assert result["ok"] is False
+    assert result["error"] == {"code": "ground_plane_failed", "message": native_result["message"]}
+    assert len(json.dumps(result["error"])) < 200
+    checkpoint = load_project_state(root).workflow["runner"]["stages"]["validate"]
+    assert checkpoint["status"] == "failed"
+    assert checkpoint["result"] == native_result
+    assert not (root / "routed.kicad_pcb").exists()
+    assert not (root / "routed.ses").exists()
+
+
+def test_deferred_plane_import_failure_retains_full_native_payload_without_publication(tmp_path: Path, monkeypatch):
+    root = tmp_path / "deferred-plane-failure"
+    root.mkdir()
+    (root / "placed.kicad_pcb").write_text("frozen placement", encoding="utf-8")
+    native_result = {
+        "status": "error", "message": "Imported routing failed KiCad DRC; board was not published",
+        "drc": {"blocker_count": 1, "board_sha256": "a" * 64,
+                "findings": [{"rule_id": "CW-DRC-002", "message": "Missing plane connection"}]},
+    }
+
+    def route(_stage, args, _cwd, _timeout):
+        Path(args[args.index("--output") + 1]).write_text("complete session", encoding="utf-8")
+        Path(args[args.index("--routed-board") + 1]).write_text("private routed board", encoding="utf-8")
+        return {"status": "ok"}
+
+    def add_plane(_board, output, _plan, **_kwargs):
+        Path(output).write_text("private plane input", encoding="utf-8")
+        return {"status": "ok"}
+
+    monkeypatch.setattr(workflow, "_cli", route)
+    monkeypatch.setattr("circuit_weaver.pcb_ground_plane.add_ground_plane", add_plane)
+    monkeypatch.setattr("circuit_weaver.pcb_layout.import_routing_session", lambda *_args, **_kwargs: native_result)
+
+    with pytest.raises(workflow.WorkflowError) as failure:
+        workflow._execute_stage(root, "route", {
+            "ground_plane_after_route": True,
+            "ground_plane": {"net": "GND", "layers": ["In1.Cu"]},
+        }, [])
+
+    assert failure.value.code == "ground_plane_failed"
+    assert failure.value.stage_result is native_result
+    assert str(failure.value) == native_result["message"]
+    assert not (root / "routed.kicad_pcb").exists()
+    assert not (root / "routed.ses").exists()
+
+
+def test_missing_native_output_helper_keeps_success_payload_for_failure_evidence(tmp_path: Path):
+    native_result = {"status": "ok", "native_report": {"pad_identity_preserved": True}}
+
+    with pytest.raises(workflow.WorkflowError) as failure:
+        workflow._require_outputs("build", native_result, [tmp_path / "missing.kicad_pcb"])
+
+    assert failure.value.code == "stage_output_missing"
+    assert failure.value.stage_result is native_result
+    assert not (tmp_path / "missing.kicad_pcb").exists()
+
+
 def test_nonzero_native_cli_keeps_structured_error_ahead_of_large_inventory(tmp_path: Path, monkeypatch):
     inventory = ["model-entry"] * 5000
     payload = json.dumps(
