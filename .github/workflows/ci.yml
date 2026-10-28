@@ -325,6 +325,7 @@ jobs:
         with:
           name: native-pcb-kicad-${{ matrix.kicad-major }}
           path: .ci-kicad/native-pcb
+          include-hidden-files: true
           if-no-files-found: warn
 
   unseen-scale-validation:
@@ -376,20 +377,22 @@ jobs:
           distribution: temurin
           java-version: "25"
 
-      - name: Verify pinned router and run every prototype stage
+      - name: Verify pinned recovery router and run every prototype stage
         shell: bash
         env:
           CIRCUIT_WEAVER_KICAD_PYTHON: /usr/bin/python3
-          CIRCUIT_WEAVER_FREEROUTING: /tmp/freerouting-2.4.1.jar
+          CIRCUIT_WEAVER_FREEROUTING: /tmp/freerouting-2.5.0.jar
         run: |
           set -euo pipefail
-          curl --fail --location --retry 3 https://github.com/freerouting/freerouting/releases/download/v2.4.1/freerouting-2.4.1.jar -o /tmp/freerouting-2.4.1.jar
-          echo '251101c3eeac22d7e7dfcf6796603279e5d1000283eb82d8f093780f7afc6aa9  /tmp/freerouting-2.4.1.jar' | sha256sum --check
+          curl --fail --location --retry 3 https://github.com/freerouting/freerouting/releases/download/v2.5.0/freerouting-2.5.0.jar -o /tmp/freerouting-2.5.0.jar
+          echo 'f6f51bb02245e8e717f9359bd260cc9c5c0b1bc0acc8b7cb2cd5b8ffeb5de3c7  /tmp/freerouting-2.5.0.jar' | sha256sum --check
           wheel=$(find dist -maxdepth 1 -name 'circuit_weaver-*.whl' -print -quit)
           python benchmarks/general_scale/run_general_scale.py \
             --suite benchmarks/unseen_scale/cases.yaml --case '${{ matrix.case }}' \
             --output .ci-kicad/unseen-scale --installed --expected-wheel "$wheel" \
-              --require-clean --workers 1 --iterations 6000 --attempts 1 --route-timeout 1800 --timeout 7200
+            --require-clean --workers 1 --iterations 6000 --attempts 1 \
+            --route-timeout 1800 --route-max-passes 20 \
+            --repair-open-connections --recovery-timeout 1800 --timeout 7200
 
       - name: Preserve full workflow, connectivity, and assembled preview evidence
         if: always()
@@ -397,4 +400,5 @@ jobs:
         with:
           name: unseen-native-${{ matrix.case }}
           path: .ci-kicad/unseen-scale
+          include-hidden-files: true
           if-no-files-found: warn

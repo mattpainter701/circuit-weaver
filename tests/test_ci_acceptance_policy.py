@@ -73,3 +73,25 @@ def test_design_validation_runs_once_per_pr_revision_and_cancels_superseded_work
     assert "pull_request" in workflow["on"]
     assert workflow["concurrency"]["cancel-in-progress"] == "true"
     assert "github.head_ref" in workflow["concurrency"]["group"]
+
+
+def test_unseen_cases_share_pinned_recovery_profile_and_retain_private_diagnostics():
+    jobs = _workflow("ci.yml")["jobs"]
+    job = jobs["unseen-scale-validation"]
+    assert job["strategy"]["matrix"]["case"] == [
+        "distributed_facility_gateway", "serial_relay_output_card", "multichannel_analog_setpoint_card",
+    ]
+    step = next(step for step in job["steps"] if "benchmarks/unseen_scale/cases.yaml" in step.get("run", ""))
+    assert step["env"]["CIRCUIT_WEAVER_FREEROUTING"] == "/tmp/freerouting-2.5.0.jar"
+    for required in (
+        "--require-clean", "--installed", '--expected-wheel "$wheel"',
+        "--route-timeout 1800", "--route-max-passes 20", "--attempts 1",
+        "--repair-open-connections", "--recovery-timeout 1800", "--timeout 7200",
+        "f6f51bb02245e8e717f9359bd260cc9c5c0b1bc0acc8b7cb2cd5b8ffeb5de3c7",
+        "sha256sum --check",
+    ):
+        assert required in step["run"]
+    assert "if " not in step["run"]
+    for name in ("kicad-validation", "unseen-scale-validation"):
+        uploads = [step for step in jobs[name]["steps"] if step.get("uses", "").startswith("actions/upload-artifact@")]
+        assert any(step["with"].get("include-hidden-files") == "true" for step in uploads)

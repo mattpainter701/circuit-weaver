@@ -1586,6 +1586,32 @@ def _router_log_bundle(stdout_path: Path, stderr_path: Path) -> dict[str, Any]:
     }
 
 
+def _preserve_rejected_session(staging: Path, log_dir: Path) -> dict[str, Any]:
+    """Keep an invalid SES beside this attempt's private logs for diagnosis."""
+    target = log_dir / "rejected.ses"
+    try:
+        if not staging.is_file():
+            return {"available": False, "reason": "router did not create an SES"}
+        # log_dir is unique to this attempt. Do not publish the artifact at the
+        # requested output path, even when it is syntactically well-formed.
+        shutil.copyfile(staging, target)
+        digest = hashlib.sha256()
+        size = 0
+        with target.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                size += len(chunk)
+                digest.update(chunk)
+    except OSError as exc:
+        return {"available": False, "reason": f"{type(exc).__name__}: {exc}"}
+    return {
+        "available": True,
+        "path": str(target),
+        "sha256": digest.hexdigest(),
+        "bytes": size,
+        "published": False,
+    }
+
+
 def _read_router_diagnostic(path: Path) -> str:
     """Return only a bounded UTF-8-safe tail for returned error diagnostics."""
     size = path.stat().st_size
@@ -1840,27 +1866,7 @@ def _route_specctra(
             router_logs=log_bundle,
         )
     try:
-        validation = _validate_specctra_artifact(
-            staging, "ses", source_dsn=dsn_path, allow_partial_nets=allow_partial_nets,
-        )
-        if not validation["valid"]:
-            return _result_error(
-                f"Freerouting produced an invalid SES: {validation['reason']}",
-                artifact=validation,
-                router_logs=log_bundle,
-            )
         stats = _parse_routing_stats(output_text)
-        session_text = staging.read_text(encoding="utf-8")
-        stats.update(_measure_session_trace_lengths(session_text))
-        # Recent router logs omit trace/via counts. Measure the validated
-        # session itself so alternative strategies can still be ranked.
-        if stats["vias"] is None or stats["traces"] is None:
-            routes = _first_sexpr_block(session_text, "network_out") or ""
-            if stats["vias"] is None:
-                stats["vias"] = len(list(_iter_sexpr_blocks(routes, "via")))
-            if stats["traces"] is None:
-                stats["traces"] = len(list(_iter_sexpr_blocks(routes, "wire")))
-            stats["geometry_counts_source"] = "validated_session"
         router = {
             "version": _parse_freerouting_version(version_text) or (capability_probe or {}).get("version"),
             "logs": log_bundle,
@@ -1874,10 +1880,43 @@ def _route_specctra(
             "seed": seed,
             **({"timeout_budget": timeout_budget} if cooperative_partial_timeout else {}),
         }
+        validation = _validate_specctra_artifact(
+            staging, "ses", source_dsn=dsn_path, allow_partial_nets=allow_partial_nets,
+        )
+        if not validation["valid"]:
+            rejected_session = _preserve_rejected_session(staging, log_dir)
+            try:
+                diagnostic_stdout = _read_router_diagnostic(stdout_path)
+                diagnostic_stderr = _read_router_diagnostic(stderr_path)
+            except OSError as log_error:
+                diagnostic_stdout = ""
+                diagnostic_stderr = f"Could not read bounded router diagnostics: {log_error}"
+            return _result_error(
+                f"Freerouting produced an invalid SES: {validation['reason']}",
+                artifact=validation,
+                rejected_session=rejected_session,
+                stats=stats,
+                router=router,
+                diagnostic_stdout=diagnostic_stdout,
+                diagnostic_stderr=diagnostic_stderr,
+                router_logs=log_bundle,
+            )
+        session_text = staging.read_text(encoding="utf-8")
+        stats.update(_measure_session_trace_lengths(session_text))
+        # Recent router logs omit trace/via counts. Measure the validated
+        # session itself so alternative strategies can still be ranked.
+        if stats["vias"] is None or stats["traces"] is None:
+            routes = _first_sexpr_block(session_text, "network_out") or ""
+            if stats["vias"] is None:
+                stats["vias"] = len(list(_iter_sexpr_blocks(routes, "via")))
+            if stats["traces"] is None:
+                stats["traces"] = len(list(_iter_sexpr_blocks(routes, "wire")))
+            stats["geometry_counts_source"] = "validated_session"
         if stats["incomplete"] is None:
             return _result_error(
                 "Freerouting did not report final connection completeness; refusing to publish an unverified SES",
                 artifact=validation,
+                rejected_session=_preserve_rejected_session(staging, log_dir),
                 stats=stats,
                 router=router,
                 router_logs=log_bundle,
@@ -1894,6 +1933,7 @@ def _route_specctra(
                 return _result_error(
                     "Could not obtain the final FreeRouting DRC pair table for pre-existing pad overlaps",
                     artifact=validation,
+                    rejected_session=_preserve_rejected_session(staging, log_dir),
                     stats=stats,
                     router=router,
                     router_logs=log_bundle,
@@ -1910,6 +1950,7 @@ def _route_specctra(
                     "FreeRouting clearance violations changed from the qualified fixed-pad baseline: "
                     + str(clearance_audit.get("reason", "unclassified violation")),
                     artifact=validation,
+                    rejected_session=_preserve_rejected_session(staging, log_dir),
                     stats=stats,
                     router=router,
                     clearance_audit=clearance_audit,
@@ -1919,6 +1960,7 @@ def _route_specctra(
             return _result_error(
                 f"Freerouting reported {stats['clearance_violations']} clearance violation(s); SES was not published",
                 artifact=validation,
+                rejected_session=_preserve_rejected_session(staging, log_dir),
                 stats=stats,
                 router=router,
                 router_logs=log_bundle,
@@ -2185,6 +2227,9 @@ def _route_candidates(
                     row["stats"] = result["stats"]
                 if "router_logs" in result:
                     row["router_logs"] = result["router_logs"]
+                for key in ("artifact", "rejected_session", "router"):
+                    if key in result:
+                        row[key] = result[key]
                 if "message" in result:
                     row["message"] = result["message"]
                 for key in ("diagnostic_stdout", "diagnostic_stderr"):

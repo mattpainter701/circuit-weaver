@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -1122,6 +1123,7 @@ class TestAutoroute:
         assert result["status"] == "error"
         assert "connection completeness" in result["message"]
         assert not destination.exists()
+        assert result["rejected_session"]["available"] is True
 
     def test_unreported_clearance_publishes_only_for_kicad_drc_review(self, tmp_path):
         dsn = _write_dsn(tmp_path)
@@ -1149,6 +1151,8 @@ class TestAutoroute:
         assert result["status"] == "error"
         assert "3 clearance violation" in result["message"]
         assert not destination.exists()
+        assert result["rejected_session"]["available"] is True
+        assert result["stats"]["clearance_violations"] == 3
 
     def test_only_exact_unchanged_same_native_pad_pair_can_be_classified(self):
         native, dsn = _same_pad_identity_fixture()
@@ -1310,6 +1314,70 @@ class TestAutoroute:
             assert result["status"] == "error"
             assert expected in result["message"]
             assert not destination.exists()
+            assert result["rejected_session"]["available"] is True
+            assert Path(result["rejected_session"]["path"]).is_file()
+
+    def test_invalid_ses_is_retained_privately_with_stats_and_bounded_logs(self, tmp_path):
+        dsn = _write_dsn(tmp_path)
+        destination = tmp_path / "rejected.ses"
+        incomplete_ses = VALID_SES.replace(
+            '      (net VDD_3P3 (wire (path F.Cu 250 10500 10000 20000 10000)))\n',
+            "",
+        )
+
+        with mock.patch("circuit_weaver.autoroute._find_freerouting_command", return_value=["freerouting"]):
+            with mock.patch(
+                "subprocess.run",
+                side_effect=_fake_freerouting_success(
+                    output=_routing_output(incomplete=2, traces=7, vias=3),
+                    ses_text=incomplete_ses,
+                ),
+            ):
+                result = autoroute_pcb(dsn, output_path=str(destination), attempts=2)
+
+        assert result["status"] == "error"
+        assert "No routing attempt" in result["message"]
+        assert not destination.exists()
+        attempt = result["search"]["attempts"][0]
+        assert "missing net(s) from source DSN" in attempt["message"]
+        assert attempt["artifact"]["valid"] is False
+        assert "missing net(s) from source DSN" in attempt["artifact"]["reason"]
+        assert attempt["stats"]["incomplete"] == 2
+        assert attempt["stats"]["traces"] == 7
+        assert attempt["stats"]["vias"] == 3
+        assert attempt["router"]["version"] == "2.2.4"
+        assert "incomplete_count" in attempt["diagnostic_stdout"]
+        assert attempt["router_logs"]["stdout"]["available"] is True
+        assert attempt["router_logs"]["stdout"]["preserved_full_log"] is True
+        rejected = attempt["rejected_session"]
+        rejected_path = Path(rejected["path"])
+        assert rejected["available"] is True
+        assert rejected["published"] is False
+        assert rejected["bytes"] == rejected_path.stat().st_size
+        assert rejected["sha256"] == hashlib.sha256(rejected_path.read_bytes()).hexdigest()
+        assert rejected_path.read_text(encoding="utf-8") == incomplete_ses
+
+    def test_invalid_ses_retention_failure_still_fails_closed(self, tmp_path):
+        dsn = _write_dsn(tmp_path)
+        destination = tmp_path / "not-published.ses"
+        incomplete_ses = VALID_SES.replace(
+            '      (net VDD_3P3 (wire (path F.Cu 250 10500 10000 20000 10000)))\n',
+            "",
+        )
+
+        with mock.patch("circuit_weaver.autoroute._find_freerouting_command", return_value=["freerouting"]):
+            with mock.patch(
+                "subprocess.run",
+                side_effect=_fake_freerouting_success(ses_text=incomplete_ses),
+            ):
+                with mock.patch("circuit_weaver.autoroute.shutil.copyfile", side_effect=OSError("disk full")):
+                    result = autoroute_pcb(dsn, output_path=str(destination))
+
+        assert result["status"] == "error"
+        assert not destination.exists()
+        assert result["artifact"]["valid"] is False
+        assert result["rejected_session"]["available"] is False
+        assert "disk full" in result["rejected_session"]["reason"]
 
     def test_no_overwrite_publication_cannot_clobber_file_created_during_route(self, tmp_path):
         dsn = _write_dsn(tmp_path)

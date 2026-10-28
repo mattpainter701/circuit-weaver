@@ -465,6 +465,21 @@ When recovery is enabled, the general-scale runner rejects a per-case
 effective route deadline and each constituent budget. Case contracts, source
 hash checks, native DRC and assembly coverage remain required.
 
+The unseen-scale CI suite uses the same pinned Freerouting 2.5 recovery profile
+for all three cases: 20 passes, one 1800-second routing attempt and an optional
+1800-second native recovery phase, within a 7200-second case deadline. The
+separate basic native tests retain Freerouting 2.4.1 coverage. CI preserves the
+private router logs and rejected candidates in its controlled validation-output
+artifacts so failures can be investigated; those candidates are not accepted
+workflow outputs. Full native DRC, authored path contracts and assembled model
+coverage are required after recovery, just as for a direct route.
+
+Rejected router sessions are retained alongside the attempt's private logs as
+`rejected.ses`, with a hash, byte count and `published: false`. Attempt evidence
+also retains available router-reported statistics and the validation failure.
+These diagnostics do not change the error status or populate the requested
+session output; reported zero opens cannot override an invalid session.
+
 The frozen 438-part DAC completes this eight-pass, post-route-plane recipe from
 its zero-copper placement in the isolated installed runtime. It needs no native
 repair on that run; all native DRC, 110-path, 144-leg, 72-return and assembly gates

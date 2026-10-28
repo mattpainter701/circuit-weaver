@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Run all unseen scale cases through one pinned, bounded routing-recovery
+  profile, retaining strict native DRC, path and model-coverage gates. Preserve
+  private routing diagnostics in CI artifacts for failed-candidate review.
+- Retain rejected router sessions privately with hashes, available router
+  statistics and validation failures, while leaving requested outputs untouched.
+
 - Support KiCad 8/9 and 10 native via-width APIs in routing and plane repairs,
   preserving width verification on every enabled copper layer.
 - Add opt-in thermal repair for deferred four-layer GND planes: join nearby
