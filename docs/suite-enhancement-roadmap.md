@@ -19,6 +19,15 @@ operating cases, stock-library context and the native four-layer scale ladder.
 It records the new memory cost exposed by complete stock-catalog lookup and
 keeps CAD completion separate from device qualification.
 
+October 28 routing update at `15a6625`: fresh local 187-part gateway and
+268-part relay workflows passed all 16 stages and independent acceptance. The
+438-part DAC passed adopted-board routing, preview, and independent acceptance
+through installed stdio MCP with four copper layers and two saved inner ground
+planes. All three retained zero native DRC findings and complete component-model
+coverage. They ran serially under a 1 GiB owned-process cap. These results extend
+the earlier phase snapshots below; they do not close electrical qualification,
+the remaining scale cases, final-head CI, or the showcase handoff.
+
 | Phase | Enhancement and workflow | Acceptance criteria | Execution status |
 | --- | --- | --- | --- |
 | 1 | Complete representative native boards, beginning with the 236-part SDR clock carrier and 150-part BLE sensor node | Preserve declared connectivity through placement/routing; native DRC and reference labels checked; assembled preview from actual native board; explicit runtime and memory limits | SDR placement/routing/DRC/contracts/assembled preview passed; BLE placement passed, routing stopped by RAM reserve at 3 opens |

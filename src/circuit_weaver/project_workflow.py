@@ -518,8 +518,44 @@ def _normalize_options(options: dict[str, Any] | None) -> dict[str, Any]:
     return normalized
 
 
-def _plan_data(root: Path, stages: list[str], options: dict[str, Any]) -> dict[str, Any]:
-    inputs = _snapshot(root, _stage_inputs(root, stages[0], []))
+def _planned_route_board(plan: Any, root: Path) -> Path | None:
+    """Return the exact route board input recorded by an existing plan."""
+    if not isinstance(plan, dict) or not isinstance(plan.get("inputs"), list):
+        return None
+    boards = []
+    for item in plan["inputs"]:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+            continue
+        path = Path(item["path"])
+        if path.suffix.casefold() == ".kicad_pcb":
+            boards.append(path)
+    if len(boards) != 1:
+        return None
+    board = boards[0].resolve(strict=False)
+    if board.parent != root.resolve(strict=False):
+        return None
+    return board
+
+
+def _plan_data(
+    root: Path,
+    stages: list[str],
+    options: dict[str, Any],
+    *,
+    saved_plan: Any = None,
+    known_route_outputs: list[str] | None = None,
+) -> dict[str, Any]:
+    planned_board = _planned_route_board(saved_plan, root) if stages[0] == "route" else None
+    inputs = _snapshot(
+        root,
+        _stage_inputs(
+            root,
+            stages[0],
+            [],
+            planned_board=planned_board,
+            known_route_outputs=known_route_outputs,
+        ),
+    )
     return {
         "stages": stages,
         "options": options,
@@ -1267,12 +1303,40 @@ def _root_schematic(root: Path) -> Path:
     return files[0]
 
 
-def _latest_board(root: Path, stage: str) -> Path:
+def _latest_board(
+    root: Path,
+    stage: str,
+    *,
+    planned_board: Path | None = None,
+    known_route_outputs: list[str] | None = None,
+) -> Path:
     preferred = {
         "place": [root / "prototype.kicad_pcb"],
         "route": [root / "placed.kicad_pcb", root / "prototype.kicad_pcb"],
         "preview": [root / "routed.kicad_pcb", root / "placed.kicad_pcb", root / "prototype.kicad_pcb"],
     }[stage]
+    if stage == "route" and planned_board is not None:
+        if not planned_board.is_file():
+            raise WorkflowError(
+                "needs_replan",
+                f"The saved route input no longer exists: {planned_board}",
+            )
+        first_preferred = next((path for path in preferred if path.is_file()), None)
+        if first_preferred is not None and planned_board.resolve(strict=False) == first_preferred.resolve(strict=False):
+            return planned_board
+        known = {Path(path).resolve(strict=False) for path in known_route_outputs or []}
+        candidates = _native_boards(root)
+        untracked = [
+            path for path in candidates if path.resolve(strict=False) != planned_board.resolve(strict=False)
+            and path.resolve(strict=False) not in known
+        ]
+        if untracked:
+            raise WorkflowError(
+                "ambiguous_board",
+                "Additional native PCB files appeared after planning; review the intended route input",
+                [str(planned_board), *(str(path) for path in untracked)],
+            )
+        return planned_board
     for path in preferred:
         if path.is_file():
             return path
@@ -1287,7 +1351,14 @@ def _latest_board(root: Path, stage: str) -> Path:
     raise WorkflowError("board_missing", f"No board input is available for {stage}")
 
 
-def _stage_inputs(root: Path, stage: str, completed_outputs: list[str]) -> list[str | Path]:
+def _stage_inputs(
+    root: Path,
+    stage: str,
+    completed_outputs: list[str],
+    *,
+    planned_board: Path | None = None,
+    known_route_outputs: list[str] | None = None,
+) -> list[str | Path]:
     paths: list[str | Path] = []
     if _stage_requires_spec(stage):
         paths.append(_spec_path(root))
@@ -1303,7 +1374,12 @@ def _stage_inputs(root: Path, stage: str, completed_outputs: list[str]) -> list[
         paths.extend(_custom_footprint_inputs(root))
     elif stage in {"place", "route", "preview"}:
         try:
-            board = _latest_board(root, stage)
+            board = _latest_board(
+                root,
+                stage,
+                planned_board=planned_board,
+                known_route_outputs=known_route_outputs,
+            )
             paths.append(board)
             paths.extend(_existing_sidecars(board))
             if stage in {"place", "route"}:
@@ -1401,8 +1477,21 @@ def run_workflow(
         normalized_stages = _normalize_stages(stages)
         normalized_options = _normalize_options(options)
         with _RunLock(root):
-            plan = _plan_data(root, normalized_stages, normalized_options)
             state = load_project_state(root)
+            saved_run = _runner(state) if state is not None else {}
+            saved_plan = saved_run.get("plan") if resume else None
+            planned_board = _planned_route_board(saved_plan, root) if normalized_stages[0] == "route" else None
+            route_checkpoint = saved_run.get("stages", {}).get("route", {})
+            known_route_outputs = (
+                _checkpoint_output_paths(route_checkpoint) if isinstance(route_checkpoint, dict) else []
+            )
+            plan = _plan_data(
+                root,
+                normalized_stages,
+                normalized_options,
+                saved_plan=saved_plan,
+                known_route_outputs=known_route_outputs,
+            )
             if state is None:
                 state = ProjectState(name=root.name or "project", kind="native")
                 save_project_state(root, state)
@@ -1442,7 +1531,13 @@ def run_workflow(
                     return _result(
                         False, "cancelled", project_dir=str(root), run_id=run_id, completed=list(completed_outputs)
                     )
-                inputs = _stage_inputs(root, stage, completed_outputs)
+                inputs = _stage_inputs(
+                    root,
+                    stage,
+                    completed_outputs,
+                    planned_board=planned_board if stage == normalized_stages[0] else None,
+                    known_route_outputs=known_route_outputs if stage == normalized_stages[0] else None,
+                )
                 if stage == normalized_stages[0] and _snapshot(root, inputs) != plan.get("inputs"):
                     raise WorkflowError(
                         "needs_replan", "Workflow inputs changed after planning; plan again before running"

@@ -79,6 +79,12 @@ completed routed board, or manufacturing readiness. Native or assembled stages
 must report their actual evidence and remain incomplete when required tools or
 artifacts are absent.
 
+For a plan beginning at `route`, resume retains the exact PCB selected during
+planning, including a custom source filename alongside checkpointed
+`routed.kicad_pcb` output. Completed stages are skipped only while their input
+and output hashes still match. Missing or changed sources require a new plan;
+unrecognized extra boards alongside a custom-named input remain ambiguous.
+
 The shared runner accepts these routing controls in `options_json` through
 CLI, Python and MCP. They are included in checkpoint option hashes.
 

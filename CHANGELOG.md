@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Resume completed native routing from the board selected by its saved plan,
+  including projects whose original PCB has a custom filename. Recognize
+  checkpointed route outputs without confusing them with the source; retain
+  input-change, output-integrity and ambiguous-board checks.
 - Give bounded native recovery a final, explicitly reported Freerouting 2.5+
   fanout attempt for fresh two-layer boards without zones. Repair generated
   undersized straight tracks against the authored board/net-class widths in

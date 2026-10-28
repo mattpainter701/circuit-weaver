@@ -232,6 +232,202 @@ def test_resume_rejects_changed_source_inputs(tmp_path: Path, monkeypatch):
     assert resumed["error"]["code"] == "needs_replan"
 
 
+@pytest.mark.parametrize("adopt", [True, False])
+def test_resume_uses_planned_native_board_when_routed_output_exists(tmp_path: Path, monkeypatch, adopt):
+    root = tmp_path / "portable-adopted-board"
+    root.mkdir()
+    source = root / "Diverse_dual_dac_72_comparison.kicad_pcb"
+    source.write_text("source board", encoding="utf-8")
+    if adopt:
+        assert workflow.adopt_project(root)["ok"] is True
+    calls: list[str] = []
+
+    def fake_stage(project, stage, _options, _prior):
+        calls.append(stage)
+        outputs = []
+        for name, content in {
+            "route": {"routed.kicad_pcb": "routed board", "routed.ses": "session"},
+            "preview": {"preview.svg": "preview"},
+        }[stage].items():
+            output = project / name
+            output.write_text(content, encoding="utf-8")
+            outputs.append(str(output))
+        return {"status": "ok"}, outputs
+
+    monkeypatch.setattr(workflow, "_execute_stage", fake_stage)
+    plan = workflow.plan_workflow(root, stages=["route", "preview"])
+    assert plan["ok"] is True
+    initial = workflow.run_workflow(root, stages=["route", "preview"])
+    assert initial["ok"] is True
+    assert calls == ["route", "preview"]
+    route_inputs = load_project_state(root).workflow["runner"]["stages"]["route"]["inputs"]
+    assert [Path(item["path"]) for item in route_inputs if item["path"].endswith(".kicad_pcb")] == [source.resolve()]
+
+    calls.clear()
+    resumed = workflow.resume_workflow(root)
+
+    assert resumed["ok"] is True
+    assert resumed["stages"] == ["route", "preview"]
+    assert calls == []
+
+
+def test_resume_still_rejects_new_untracked_board_after_adopted_route(tmp_path: Path, monkeypatch):
+    root = tmp_path / "portable-adopted-board-ambiguous"
+    root.mkdir()
+    (root / "Diverse_dual_dac_72_comparison.kicad_pcb").write_text("source board", encoding="utf-8")
+    assert workflow.adopt_project(root)["ok"] is True
+
+    def fake_stage(project, stage, _options, _prior):
+        outputs = []
+        if stage == "route":
+            for name in ("routed.kicad_pcb", "routed.ses"):
+                output = project / name
+                output.write_text(name, encoding="utf-8")
+                outputs.append(str(output))
+        else:
+            output = project / "preview.svg"
+            output.write_text("preview", encoding="utf-8")
+            outputs.append(str(output))
+        return {"status": "ok"}, outputs
+
+    monkeypatch.setattr(workflow, "_execute_stage", fake_stage)
+    assert workflow.run_workflow(root, stages=["route", "preview"])["ok"] is True
+    (root / "other-board.kicad_pcb").write_text("untracked board", encoding="utf-8")
+
+    resumed = workflow.resume_workflow(root)
+
+    assert resumed["ok"] is False
+    assert resumed["error"]["code"] == "ambiguous_board"
+
+
+def test_resume_does_not_substitute_routed_output_for_missing_planned_source(tmp_path: Path):
+    root = tmp_path / "missing-planned-native-board"
+    root.mkdir()
+    source = root / "Diverse_dual_dac_72_comparison.kicad_pcb"
+    source.write_text("source board", encoding="utf-8")
+    assert workflow.plan_workflow(root, stages=["route", "preview"])["ok"] is True
+    source.unlink()
+    (root / "routed.kicad_pcb").write_text("unrelated or stale route output", encoding="utf-8")
+
+    resumed = workflow.resume_workflow(root)
+
+    assert resumed["ok"] is False
+    assert resumed["error"]["code"] == "needs_replan"
+
+
+def test_resume_keeps_canonical_placed_board_preference_over_prototype(tmp_path: Path, monkeypatch):
+    root = tmp_path / "standard-placement-outputs"
+    root.mkdir()
+    prototype = root / "prototype.kicad_pcb"
+    placed = root / "placed.kicad_pcb"
+    prototype.write_text("prototype", encoding="utf-8")
+    placed.write_text("placed", encoding="utf-8")
+
+    def fake_stage(project, stage, _options, _prior):
+        outputs = []
+        names = {"route": ("routed.kicad_pcb", "routed.ses"), "preview": ("preview.svg",)}[stage]
+        for name in names:
+            output = project / name
+            output.write_text(name, encoding="utf-8")
+            outputs.append(str(output))
+        return {"status": "ok"}, outputs
+
+    monkeypatch.setattr(workflow, "_execute_stage", fake_stage)
+    first = workflow.run_workflow(root, stages=["route", "preview"])
+
+    assert first["ok"] is True
+    inputs = load_project_state(root).workflow["runner"]["stages"]["route"]["inputs"]
+    assert [Path(item["path"]) for item in inputs if item["path"].endswith(".kicad_pcb")] == [placed.resolve()]
+    assert workflow.resume_workflow(root)["ok"] is True
+
+
+def test_resume_does_not_treat_changed_route_output_as_a_valid_checkpoint(tmp_path: Path, monkeypatch):
+    root = tmp_path / "changed-route-output"
+    root.mkdir()
+    (root / "Diverse_dual_dac_72_comparison.kicad_pcb").write_text("source board", encoding="utf-8")
+    calls: list[str] = []
+
+    def fake_stage(project, stage, _options, _prior):
+        calls.append(stage)
+        outputs = []
+        names = {"route": ("routed.kicad_pcb", "routed.ses"), "preview": ("preview.svg",)}[stage]
+        for name in names:
+            output = project / name
+            output.write_text(name, encoding="utf-8")
+            outputs.append(str(output))
+        return {"status": "ok"}, outputs
+
+    monkeypatch.setattr(workflow, "_execute_stage", fake_stage)
+    assert workflow.run_workflow(root, stages=["route", "preview"])["ok"] is True
+    (root / "routed.kicad_pcb").write_text("modified route output", encoding="utf-8")
+
+    resumed = workflow.resume_workflow(root)
+
+    assert resumed["ok"] is False
+    assert resumed["error"]["code"] == "needs_replan"
+    assert calls == ["route", "preview"]
+
+
+@pytest.mark.parametrize(
+    "changed_file",
+    [
+        "Diverse_dual_dac_72_comparison.kicad_pcb",
+        "Diverse_dual_dac_72_comparison.kicad_pro",
+        "Diverse_dual_dac_72_comparison.kicad_dru",
+    ],
+)
+def test_resume_invalidates_planned_native_source_and_sidecars(tmp_path: Path, monkeypatch, changed_file: str):
+    root = tmp_path / "changed-planned-native-input"
+    root.mkdir()
+    board = root / "Diverse_dual_dac_72_comparison.kicad_pcb"
+    board.write_text("source board", encoding="utf-8")
+    for suffix in (".kicad_pro", ".kicad_dru"):
+        board.with_suffix(suffix).write_text(suffix, encoding="utf-8")
+
+    def fake_stage(project, stage, _options, _prior):
+        outputs = []
+        names = {"route": ("routed.kicad_pcb", "routed.ses"), "preview": ("preview.svg",)}[stage]
+        for name in names:
+            output = project / name
+            output.write_text(name, encoding="utf-8")
+            outputs.append(str(output))
+        return {"status": "ok"}, outputs
+
+    monkeypatch.setattr(workflow, "_execute_stage", fake_stage)
+    assert workflow.run_workflow(root, stages=["route", "preview"])["ok"] is True
+    changed = root / changed_file
+    changed.write_text(changed.read_text(encoding="utf-8") + "\nchanged", encoding="utf-8")
+
+    resumed = workflow.resume_workflow(root)
+
+    assert resumed["ok"] is False
+    assert resumed["error"]["code"] == "needs_replan"
+
+
+def test_route_without_saved_selection_keeps_ambiguous_native_board_error(tmp_path: Path):
+    root = tmp_path / "unplanned-ambiguous-boards"
+    root.mkdir()
+    (root / "first.kicad_pcb").write_text("first", encoding="utf-8")
+    (root / "second.kicad_pcb").write_text("second", encoding="utf-8")
+
+    result = workflow.plan_workflow(root, stages=["route"])
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "ambiguous_board"
+
+
+def test_saved_route_board_selection_requires_one_project_local_board(tmp_path: Path):
+    root = tmp_path / "saved-route-selection-boundary"
+    root.mkdir()
+    first = root / "first.kicad_pcb"
+    second = root / "second.kicad_pcb"
+    outside = tmp_path / "outside.kicad_pcb"
+
+    assert workflow._planned_route_board({"inputs": [{"path": str(first)}]}, root) == first.resolve()
+    assert workflow._planned_route_board({"inputs": [{"path": str(first)}, {"path": str(second)}]}, root) is None
+    assert workflow._planned_route_board({"inputs": [{"path": str(outside)}]}, root) is None
+
+
 def test_later_kicad_sidecars_do_not_invalidate_completed_validation(tmp_path: Path, monkeypatch):
     root = _project(tmp_path)
     monkeypatch.setattr(workflow, "_execute_stage", lambda r, s, o, p: ({"status": "ok"}, []))
