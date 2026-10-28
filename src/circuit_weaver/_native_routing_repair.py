@@ -324,6 +324,8 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
         isinstance(max_expanded_states, bool)
         or not isinstance(max_expanded_states, int)
         or max_expanded_states <= 0
+        or isinstance(grid_step_mm, bool)
+        or not isinstance(grid_step_mm, (int, float))
         or not math.isfinite(grid_step_mm)
         or grid_step_mm <= 0
     ):

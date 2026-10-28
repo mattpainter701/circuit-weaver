@@ -63,8 +63,10 @@ def test_repair_open_worker_forwards_search_profile_to_native_repair(
 
 @pytest.mark.parametrize(
     ("max_expanded_states", "grid_step_mm"),
-    [(0, 1.0), (1, 0.0)],
-    ids=("zero-state-budget", "zero-grid-step"),
+    [(0, 1.0), (1, 0.0), (1, True), (1, "0.25"), (1, None),
+     (1, float("nan")), (1, float("inf")), (1, -0.25)],
+    ids=("zero-state-budget", "zero-grid-step", "boolean-grid", "string-grid", "null-grid",
+         "nan-grid", "infinite-grid", "negative-grid"),
 )
 def test_forwarded_search_bounds_are_rejected_before_native_mutation(
     monkeypatch, max_expanded_states, grid_step_mm,
