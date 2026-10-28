@@ -1,6 +1,7 @@
 """Adversarial publication contracts for opt-in native routing recovery."""
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -79,6 +80,18 @@ def recovery(tmp_path, monkeypatch):
     monkeypatch.setattr(recovery_module, "_serialize_native_session", Mock(side_effect=serialize))
     monkeypatch.setattr(bridge, "run_kicad", Mock(side_effect=import_partial))
     monkeypatch.setattr(native, "recover_routing", repair_mock)
+    # Host-side fresh DRC and router-generated dangling normalization have
+    # focused behavioral tests in test_native_router_dangling_cleanup.py.
+    # Keep this API workflow fixture isolated from KiCad CLI and filesystem
+    # footprint-context staging.
+    def clean_partial(source_path, partial_path, **_options):
+        finding = SimpleNamespace(
+            rule_id="CW-DRC-002", severity="blocker", suppressed=False,
+        )
+        drc = SimpleNamespace(findings=(finding,), blocker_count=1)
+        return Path(partial_path), drc, {"status": "not_needed"}
+
+    monkeypatch.setattr(recovery_module, "_clean_router_dangling_tracks", clean_partial)
     monkeypatch.setattr(layout, "import_routing_session", accept_mock)
     monkeypatch.setattr(layout, "_prepare_settings", lambda *args: {})
     monkeypatch.setattr(layout, "_restore_settings", lambda *args: None)

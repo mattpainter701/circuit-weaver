@@ -487,6 +487,20 @@ a new hash-matched native report before any repair. Missing reports, other
 physical faults and ambiguous results remain errors. A failed native import
 always reports routing as incomplete, regardless of the router's statistics.
 
+Before opens-only recovery, the host records the complete fresh native DRC
+report. If the only additional findings are KiCad `track_dangling` warnings on
+router-generated tracks, quarantine may remove the warning-identified unlocked
+track objects, up to 64 total. Each UUID and reported endpoint must resolve to a
+single track absent from the original source board. The native worker verifies
+that original source copper remains an exact object-level subset and that no
+other copper, footprint/text state, source geometry, zones or layer stack
+changes. It reruns full native DRC after each bounded removal and retains both
+raw reports. Open and dangling-warning counts may not increase; every removed
+warning UUID must disappear. Unknown findings, ambiguous objects, source or
+locked copper, a worse DRC result, or exhausting the bound stops recovery.
+Recovery then requires an opens-only or clean report, and the ordinary final native DRC
+and publication gates remain unchanged.
+
 Directory discovery also stops at an unclaimed workflow-state boundary before
 considering unrelated circuits higher in the directory tree. A child such as
 `generated/` belongs to a project when its saved state records that output;

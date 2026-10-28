@@ -12,6 +12,247 @@ from pathlib import Path
 from typing import Any
 
 _NATIVE_DRC_REJECTION_MESSAGE = "Imported routing failed KiCad DRC; board was not published"
+_MAX_ROUTER_DANGLING_TRACK_CLEANUP = 64
+
+
+def _write_recovery_json(path: Path, payload: dict[str, Any]) -> None:
+    """Persist a recovery diagnostic atomically before evaluating its gate."""
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def _native_drc_evidence(result: Any) -> dict[str, Any]:
+    return {
+        "drc": result.to_dict(),
+        "raw_report": result.raw_report,
+        "board_sha256": result.board_sha256,
+    }
+
+
+def _router_dangling_warning_rows(result: Any) -> list[dict[str, Any]] | None:
+    """Accept only a complete DRC with open blockers and known dangling warnings."""
+    from .routing_recovery import _valid_report
+
+    raw = result.raw_report
+    if result.status != "ok" or not isinstance(raw, dict) or not _valid_report(result):
+        return None
+    if raw.get("schematic_parity"):
+        return None
+    opens = raw.get("unconnected_items")
+    violations = raw.get("violations")
+    findings = list(result.findings)
+    if not isinstance(opens, list) or not isinstance(violations, list) or len(findings) != len(opens) + len(violations):
+        return None
+    open_findings = [finding for finding in findings if finding.rule_id == "CW-DRC-002"]
+    warning_findings = [finding for finding in findings if finding.rule_id == "CW-DRC-841"]
+    if (
+        len(open_findings) != len(opens)
+        or len(warning_findings) != len(violations)
+        or any(f.severity != "blocker" or f.suppressed or f.is_confirmed_blocker is not True for f in open_findings)
+        or result.blocker_count != len(opens)
+        or any(f.severity != "major" or f.suppressed or f.level != "warning" for f in warning_findings)
+    ):
+        return None
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in violations:
+        if not isinstance(row, dict) or row.get("type") != "track_dangling" or row.get("severity") != "warning":
+            return None
+        items = row.get("items")
+        if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], dict):
+            return None
+        item = items[0]
+        uuid = item.get("uuid")
+        pos = item.get("pos")
+        if not isinstance(uuid, str) or not uuid or uuid in seen or not isinstance(pos, dict):
+            return None
+        if any(
+            isinstance(pos.get(axis), bool)
+            or not isinstance(pos.get(axis), (int, float))
+            or not math.isfinite(pos.get(axis))
+            for axis in ("x", "y")
+        ):
+            return None
+        seen.add(uuid)
+        rows.append(row)
+    return rows
+
+
+def _strict_native_route_drc(result: Any) -> bool:
+    """Whether a fresh report has only verified open connections or is clean."""
+    from .routing_recovery import _only_open_findings, _valid_report
+
+    if result.status != "ok" or not _valid_report(result):
+        return False
+    if _only_open_findings(result):
+        return True
+    raw = result.raw_report
+    return (
+        isinstance(raw, dict)
+        and not raw["violations"]
+        and not raw["unconnected_items"]
+        and not raw["schematic_parity"]
+        and not result.findings
+        and result.blocker_count == 0
+    )
+
+
+def _clean_router_dangling_tracks(
+    source: Path,
+    partial: Path,
+    *,
+    work: Path,
+    python: str | Path | None,
+    deadline: float,
+    source_snapshots: dict[Path, str | None],
+) -> tuple[Path, Any, dict[str, Any]]:
+    """Normalize only bounded, explicitly identified generated dangling tracks."""
+    from .drc_runner import run_drc
+    from .evidence import EvidenceLedger
+    from .kicad_bridge import run_kicad
+    from .pcb_layout import _check_snapshots, _prepare_settings, _restore_settings
+    from .routing_recovery import _open_count
+
+    root = work / "native-dangling-cleanup"
+    root.mkdir(parents=True)
+    steps: list[dict[str, Any]] = []
+    removed_total = 0
+    current = partial
+
+    def remaining(limit: int) -> int:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("Routing recovery budget expired during dangling-track cleanup")
+        return max(1, min(limit, math.ceil(left)))
+
+    def run_and_retain(board: Path, index: int, label: str):
+        result = run_drc(
+            board,
+            evidence_ledger=EvidenceLedger(),
+            timeout=remaining(240),
+            project_context=source.parent,
+        )
+        digest = hashlib.sha256(board.read_bytes()).hexdigest()
+        report_path = root / f"step-{index:02d}-{label}-drc.json"
+        _write_recovery_json(report_path, _native_drc_evidence(result))
+        if result.board_sha256 != digest:
+            raise ValueError("Fresh native DRC report does not match the exact partial board bytes")
+        return result, report_path, digest
+
+    before, before_path, before_sha = run_and_retain(current, 0, "before")
+    if _strict_native_route_drc(before):
+        return current, before, {
+            "status": "not_needed",
+            "steps": [],
+            "initial_drc": str(before_path),
+            "initial_board_sha256": before_sha,
+            "removed_track_count": 0,
+            "cap": _MAX_ROUTER_DANGLING_TRACK_CLEANUP,
+        }
+
+    while True:
+        warning_rows = _router_dangling_warning_rows(before)
+        if warning_rows is None:
+            raise ValueError(
+                "Imported router partial has native findings beyond complete open nets and recognized dangling tracks; "
+                f"see retained DRC {before_path}"
+            )
+        if not warning_rows:
+            raise ValueError(f"Native DRC is neither opens-only nor a recognized dangling cleanup state: {before_path}")
+        if removed_total + len(warning_rows) > _MAX_ROUTER_DANGLING_TRACK_CLEANUP:
+            raise ValueError(
+                f"Router dangling-track cleanup exceeded its {_MAX_ROUTER_DANGLING_TRACK_CLEANUP}-track bound; "
+                f"see retained DRC {before_path}"
+            )
+
+        index = len(steps) + 1
+        candidate = root / f"partial-cleaned-{index:02d}.kicad_pcb"
+        staged_settings = _prepare_settings(source, candidate)
+        _check_snapshots(source_snapshots)
+        cleanup = run_kicad(
+            "cleanup_router_dangling",
+            board=str(current),
+            output=str(candidate),
+            source_board=str(source),
+            expected_source_board_sha256=source_snapshots[source],
+            expected_board_sha256=before_sha,
+            warning_rows=warning_rows,
+            max_tracks=_MAX_ROUTER_DANGLING_TRACK_CLEANUP - removed_total,
+            python_path=python,
+            timeout=remaining(180),
+        )
+        _check_snapshots(source_snapshots)
+        if cleanup.get("status") != "ok" or not candidate.is_file():
+            message = cleanup.get("message", "candidate missing")
+            raise ValueError(f"Native router dangling-track cleanup failed: {message}")
+        _restore_settings(source, candidate, staged_settings)
+        if (
+            cleanup.get("router_dangling_cleanup", {}).get("status") != "candidate_only_requires_fresh_drc"
+            or cleanup.get("router_dangling_cleanup", {}).get("source_copper_exact_subset_preserved") is not True
+            or cleanup.get("router_dangling_cleanup", {}).get("saved_removed_tracks_verified") is not True
+        ):
+            raise ValueError(
+                "Native cleanup did not prove exact generated-track removal and source-copper preservation"
+            )
+        removed_rows = cleanup["router_dangling_cleanup"].get("removed_tracks")
+        if not isinstance(removed_rows, list) or len(removed_rows) != len(warning_rows):
+            raise ValueError("Native cleanup removal inventory does not match selected warning tracks")
+
+        after, after_path, after_sha = run_and_retain(candidate, index, "after")
+        after_warnings = _router_dangling_warning_rows(after)
+        if after_warnings is None:
+            raise ValueError(f"Dangling cleanup introduced or exposed an unrecognized native finding: {after_path}")
+        before_open_count = _open_count(before)
+        after_open_count = _open_count(after)
+        before_warning_count = len(warning_rows)
+        after_warning_count = len(after_warnings)
+        removed_ids = {row.get("uuid") for row in removed_rows if isinstance(row, dict)}
+        after_ids = {
+            row["items"][0]["uuid"] for row in after_warnings
+            if row.get("items") and isinstance(row["items"][0], dict)
+        }
+        if (
+            len(removed_ids) != len(removed_rows)
+            or removed_ids.intersection(after_ids)
+            or after_open_count > before_open_count
+            or after_warning_count > before_warning_count
+        ):
+            raise ValueError(f"Dangling cleanup failed bounded progress/no-regression checks: {after_path}")
+        steps.append({
+            "step": index,
+            "before_board_sha256": before_sha,
+            "before_drc": str(before_path),
+            "after_board_sha256": after_sha,
+            "after_drc": str(after_path),
+            "removed_tracks": removed_rows,
+            "open_count_before": before_open_count,
+            "open_count_after": after_open_count,
+            "warning_count_before": before_warning_count,
+            "warning_count_after": after_warning_count,
+            "source_copper_exact_subset_preserved": True,
+        })
+        removed_total += len(removed_rows)
+        current, before, before_path, before_sha = candidate, after, after_path, after_sha
+        if _strict_native_route_drc(before):
+            return current, before, {
+                "status": "cleaned",
+                "steps": steps,
+                "initial_drc": str(root / "step-00-before-drc.json"),
+                "final_drc": str(before_path),
+                "final_board_sha256": before_sha,
+                "removed_track_count": removed_total,
+                "cap": _MAX_ROUTER_DANGLING_TRACK_CLEANUP,
+                "source_copper_exact_subset_preserved": True,
+                "no_added_copper": True,
+                "open_count_nonincreasing": True,
+                "dangling_warning_count_nonincreasing": True,
+            }
+        if removed_total >= _MAX_ROUTER_DANGLING_TRACK_CLEANUP:
+            raise ValueError(
+                f"Router dangling-track cleanup reached its {_MAX_ROUTER_DANGLING_TRACK_CLEANUP}-track bound; "
+                f"see retained DRC {before_path}"
+            )
 
 
 def _eligible_native_open_rejection(initial: dict[str, Any], session_path: Path) -> bool:
@@ -257,9 +498,10 @@ def autoroute_with_recovery(
     from .kicad_bridge import run_kicad
     from .kicad_project_context import inspect_project_footprint_context
     from .pcb_layout import _check_snapshots, _prepare_settings, _restore_settings, import_routing_session
-    from .routing_recovery import recover_routing
+    from .routing_recovery import _open_count, recover_routing
 
     work: Path | None = None
+    dangling_cleanup: dict[str, Any] = {"status": "not_run"}
     try:
         source = Path(pcb_path).resolve()
         if source.suffix.lower() != ".kicad_pcb" or not source.is_file() or routed_board_path is None:
@@ -365,30 +607,51 @@ def autoroute_with_recovery(
             ):
                 raise ValueError("Validated private SES changed during native quarantine import")
             _restore_settings(source, partial, staged_settings)
-            repair = recover_routing(
+            partial, partial_drc, dangling_cleanup = _clean_router_dangling_tracks(
+                source,
                 partial,
-                work / "recovered.kicad_pcb",
-                kicad_python_path=python,
-                timeout_seconds=remaining(float(recovery_timeout_seconds)),
-                max_links=max_repair_links,
-                evidence_dir=work / "native-recovery",
+                work=work,
+                python=python,
+                deadline=deadline,
+                source_snapshots=snapshots,
             )
-            if repair.get("status") != "ok":
-                return {
-                    "status": repair.get("status", "error"),
-                    "message": repair.get("message", "Native recovery incomplete"),
-                    "routing_complete": False,
-                    "recovery": repair,
-                    "recovery_evidence_dir": str(work),
-                    "fabrication_ready": False,
-                    **({"recovery_trigger": recovery_trigger} if recovery_trigger else {}),
+            if _open_count(partial_drc) > 0:
+                repair = recover_routing(
+                    partial,
+                    work / "recovered.kicad_pcb",
+                    kicad_python_path=python,
+                    timeout_seconds=remaining(float(recovery_timeout_seconds)),
+                    max_links=max_repair_links,
+                    evidence_dir=work / "native-recovery",
+                )
+                if repair.get("status") != "ok":
+                    return {
+                        "status": repair.get("status", "error"),
+                        "message": repair.get("message", "Native recovery incomplete"),
+                        "routing_complete": False,
+                        "recovery": repair,
+                        "router_dangling_cleanup": dangling_cleanup,
+                        "recovery_evidence_dir": str(work),
+                        "fabrication_ready": False,
+                        **({"recovery_trigger": recovery_trigger} if recovery_trigger else {}),
+                    }
+                serialization_source = Path(repair["output_path"])
+            else:
+                # A native-clean partial needs no link repair, but is still
+                # serialized and submitted to the ordinary final import gate.
+                repair = {
+                    "used": True,
+                    "status": "not_needed_native_drc_clean",
+                    "output_path": str(partial),
+                    "router_dangling_cleanup": dangling_cleanup,
                 }
+                serialization_source = partial
             completed_session = work / "complete.ses"
             # The stock router serializes all copper with autorouter, fanout,
             # and optimizer explicitly disabled; complete-SES validation and
             # the ordinary native import/DRC gate remain mandatory.
             serialization = _serialize_native_session(
-                repair["output_path"], completed_session,
+                serialization_source, completed_session,
                 work_dir=work / "session-serialization",
                 freerouting_path=router_options.get("freerouting_path"),
                 kicad_cli_path=router_options.get("kicad_cli_path"),
@@ -401,6 +664,7 @@ def autoroute_with_recovery(
                     "message": serialization.get("message", "Stock Freerouting SES serialization failed"),
                     "routing_complete": False,
                     "recovery": repair,
+                    "router_dangling_cleanup": dangling_cleanup,
                     "serialization": serialization,
                     "recovery_evidence_dir": str(work),
                     "fabrication_ready": False,
@@ -426,11 +690,13 @@ def autoroute_with_recovery(
             return {**accepted, "routing_complete": False, "recovery": repair,
                     "serialization": serialization if repair.get("used") is not False else None,
                     "recovery_evidence_dir": str(work),
+                    "router_dangling_cleanup": dangling_cleanup,
                     **({"recovery_trigger": recovery_trigger} if recovery_trigger else {})}
         return {
             **accepted,
             "session_path": str(session),
             "recovery": repair,
+            "router_dangling_cleanup": dangling_cleanup,
             **({"serialization": serialization} if repair.get("used") is not False else {}),
             "recovery_evidence_dir": str(work),
             **({"recovery_trigger": recovery_trigger} if recovery_trigger else {}),
@@ -449,5 +715,6 @@ def autoroute_with_recovery(
             "message": str(exc),
             "routing_complete": False,
             "recovery_evidence_dir": str(work) if work is not None else None,
+            "router_dangling_cleanup": dangling_cleanup,
             "fabrication_ready": False,
         }

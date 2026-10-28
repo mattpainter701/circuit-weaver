@@ -130,6 +130,13 @@ def test_recovery_rejects_invalid_or_ambiguous_initial_drc(tmp_path, monkeypatch
     result = recover_routing(source, destination)
     assert result["status"] == "error"
     assert not destination.exists()
+    retained = Path(result["evidence_dir"])
+    inventory = json.loads((retained / "initial-drc.json").read_text())
+    expected = _drc(source, **bad)
+    assert inventory["raw_report"] == expected.raw_report
+    assert inventory["drc"]["status"] == expected.status
+    assert inventory["board_sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert (retained / "input-partial.kicad_pcb").read_bytes() == source.read_bytes()
 
 
 def test_recovery_keeps_existing_output_when_candidate_drc_regresses(tmp_path, monkeypatch):

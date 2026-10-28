@@ -1507,6 +1507,8 @@ def execute(request):
     plane_cleanup = None
     ground_plane = None
     plane_stitching = None
+    router_dangling_cleanup = None
+    dangling_removed_items = []
     cleanup_removed_items = []
     plane_cleanup_removed_items = []
     original_copper = None
@@ -1685,6 +1687,87 @@ def execute(request):
         plane_cleanup["locked_copper_preserved"] = True
         plane_cleanup["original_geometry_preserved"] = True
         plane_cleanup["original_board_geometry_preserved"] = True
+    elif operation == "cleanup_router_dangling":
+        try:
+            from ._native_router_dangling_cleanup import remove_reported_tracks
+        except ImportError:  # Standalone execution by KiCad's bundled Python.
+            from _native_router_dangling_cleanup import remove_reported_tracks
+
+        source_path = Path(request.get("source_board", "")).resolve()
+        expected_source = request.get("expected_source_board_sha256")
+        expected_board = request.get("expected_board_sha256")
+        if (not source_path.is_file() or not isinstance(expected_source, str) or len(expected_source) != 64
+                or hashlib.sha256(source_path.read_bytes()).hexdigest() != expected_source):
+            raise ValueError("Original source board is missing or changed before dangling-track cleanup")
+        if (not isinstance(expected_board, str) or len(expected_board) != 64
+                or hashlib.sha256(Path(request["board"]).read_bytes()).hexdigest() != expected_board):
+            raise ValueError("Fresh DRC does not match the loaded partial board bytes")
+        source_board = pcbnew.LoadBoard(str(source_path))
+        if source_board is None:
+            raise ValueError("KiCad could not load the immutable original source board")
+        original_copper = _copper_state(board)
+        source_copper = _copper_state(source_board)
+        original_layout = _fixed_layout_state(board)
+        original_board_geometry = _ground_plane_source_geometry_state(board, pcbnew)
+        original_stack = _native_stack_state(board, pcbnew)
+        original_zone_definitions = _zone_definition_state(board, pcbnew)
+        original_zone_fills = _zone_fill_state(board, pcbnew)
+        if source_copper - original_copper:
+            raise ValueError("SES partial does not preserve every original source copper object exactly")
+        if (_identity(source_board) != identity
+                or _fixed_layout_state(source_board) != original_layout
+                or _ground_plane_source_geometry_state(source_board, pcbnew) != original_board_geometry
+                or _native_stack_state(source_board, pcbnew) != original_stack
+                or _zone_definition_state(source_board, pcbnew) != original_zone_definitions):
+            raise ValueError("Imported partial changed source identity, layout, geometry, zones or copper stack")
+        router_dangling_cleanup = remove_reported_tracks(
+            board,
+            pcbnew,
+            request.get("warning_rows"),
+            max_tracks=request.get("max_tracks", 64),
+            enabled_copper_layer_ids={row["id"] for row in original_stack["layers"]},
+        )
+        dangling_removed_items = router_dangling_cleanup.pop("_native_removed_items", [])
+        removed_rows = router_dangling_cleanup.get("removed_tracks")
+        if not isinstance(removed_rows, list) or not removed_rows:
+            raise ValueError("Dangling-track cleanup did not identify exact removed native tracks")
+        removed_uuids = [row.get("uuid") for row in removed_rows if isinstance(row, dict)]
+        if len(removed_uuids) != len(removed_rows) or len(set(removed_uuids)) != len(removed_uuids):
+            raise ValueError("Dangling-track cleanup returned duplicate or malformed UUIDs")
+        source_track_uuids = {
+            item.m_Uuid.AsString() for item in source_board.GetTracks()
+            if type(item).__name__ == "PCB_TRACK"
+        }
+        if source_track_uuids.intersection(removed_uuids):
+            raise ValueError("Dangling-track cleanup selected copper present in the original source")
+        selected = set(removed_uuids)
+        removed_state = Counter(
+            raw for raw in original_copper
+            if json.loads(raw).get("uuid") in selected
+            and json.loads(raw).get("type") == "PCB_TRACK"
+            and json.loads(raw).get("locked") is False
+        )
+        if sum(removed_state.values()) != len(selected):
+            raise ValueError("Selected dangling UUIDs do not identify only unlocked source-absent tracks")
+        if (_copper_state(board) - original_copper
+                or original_copper - _copper_state(board) != removed_state):
+            raise ValueError("Dangling-track cleanup changed copper beyond the exact selected tracks")
+        if (source_copper - _copper_state(board)
+                or _identity(board) != identity
+                or original_layout != _fixed_layout_state(board)
+                or original_board_geometry != _ground_plane_source_geometry_state(board, pcbnew)
+                or original_stack != _native_stack_state(board, pcbnew)
+                or original_zone_definitions != _zone_definition_state(board, pcbnew)
+                or original_zone_fills != _zone_fill_state(board, pcbnew)):
+            raise ValueError("Dangling-track cleanup changed original copper or non-routing geometry")
+        router_dangling_cleanup.update({
+            "source_identity_preserved": True,
+            "source_layout_preserved": True,
+            "source_geometry_preserved": True,
+            "source_copper_exact_subset_preserved": True,
+            "nonselected_copper_preserved": True,
+            "zones_and_stack_preserved": True,
+        })
     elif operation == "repair_open":
         from _native_routing_repair import repair_one
 
@@ -1852,6 +1935,31 @@ def execute(request):
                        "original_footprints_and_text_preserved": True,
                        "original_board_geometry_preserved": True,
                        "existing_copper_preserved": True})
+    if router_dangling_cleanup is not None:
+        saved_copper = _copper_state(reloaded)
+        selected_uuids = {row["uuid"] for row in router_dangling_cleanup["removed_tracks"]}
+        expected_removed = Counter(
+            raw for raw in original_copper
+            if json.loads(raw).get("uuid") in selected_uuids
+            and json.loads(raw).get("type") == "PCB_TRACK"
+            and json.loads(raw).get("locked") is False
+        )
+        if (len(selected_uuids) != router_dangling_cleanup["removed_count"]
+                or saved_copper - original_copper
+                or original_copper - saved_copper != expected_removed
+                or source_copper - saved_copper
+                or _identity(reloaded) != identity
+                or original_layout != _fixed_layout_state(reloaded)
+                or original_board_geometry != _ground_plane_source_geometry_state(reloaded, pcbnew)
+                or original_stack != _native_stack_state(reloaded, pcbnew)
+                or original_zone_definitions != _zone_definition_state(reloaded, pcbnew)
+                or original_zone_fills != _zone_fill_state(reloaded, pcbnew)):
+            raise ValueError("Saved dangling cleanup failed exact copper or source-geometry preservation")
+        router_dangling_cleanup.update({
+            "saved_removed_tracks_verified": True,
+            "saved_source_copper_exact_subset_preserved": True,
+            "saved_zones_and_stack_preserved": True,
+        })
     result = {"status": "ok", "version": pcbnew.Version(), **_inspect(reloaded, pcbnew)}
     if zone_refill is not None:
         result["zone_refill"] = zone_refill
@@ -1887,6 +1995,9 @@ def execute(request):
         cleanup_removed_items.clear()
     if operation == "repair_open":
         result["route_repair"] = repair
+    if router_dangling_cleanup is not None:
+        result["router_dangling_cleanup"] = router_dangling_cleanup
+        dangling_removed_items.clear()
     if ground_plane is not None:
         from _native_ground_plane import verify as verify_ground_plane_after_reload
 

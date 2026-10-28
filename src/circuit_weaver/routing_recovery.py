@@ -228,10 +228,9 @@ def recover_routing(
                 current, evidence_ledger=EvidenceLedger(), timeout=_remaining(deadline), project_context=source.parent
             )
             _check_snapshots(snapshots)
-            if before.board_sha256 != _sha256(current) or not _only_open_findings(before):
-                raise ValueError("Input must have only complete, fresh CW-DRC-002 open-net blockers")
-            initial_open = _open_count(before)
-            remaining_open = initial_open
+            # Retain the rejected inventory as well as accepted opens-only
+            # inventories. A generic precondition error must not discard the
+            # native findings needed to diagnose a router-generated partial.
             shutil.copy2(current, evidence_root / "input-partial.kicad_pcb")
             for suffix in (".kicad_pro", ".kicad_dru"):
                 sidecar = current.with_suffix(suffix)
@@ -249,6 +248,10 @@ def recover_routing(
                     "board_sha256": _sha256(current),
                 },
             )
+            if before.board_sha256 != _sha256(current) or not _only_open_findings(before):
+                raise ValueError("Input must have only complete, fresh CW-DRC-002 open-net blockers")
+            initial_open = _open_count(before)
+            remaining_open = initial_open
             failed_pairs: set[tuple[str, str, str]] = set()
             attempt_budget = max_links * max_pair_attempts
             _write_json(

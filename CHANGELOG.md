@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Before opens-only recovery, retain fresh native DRC and allow bounded removal
+  of only warning-identified, unlocked router-generated dangling tracks. Verify
+  original source copper and board state, rerun DRC after each removal, and keep
+  strict zero-finding publication checks.
+
 - Add a bounded coarse first pass for long native routing repairs, retaining
   fine-grid fallbacks, the shared search-state cap and native collision checks.
 
