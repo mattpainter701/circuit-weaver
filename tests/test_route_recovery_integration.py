@@ -221,6 +221,82 @@ def test_zero_router_incomplete_with_verified_native_open_rejection_enters_priva
     assert ses.read_text(encoding="utf-8") == "complete session"
 
 
+def test_verified_native_via_dangling_rejection_enters_private_recovery(recovery):
+    source, ses, dest, state, route, repair, accept, _ = recovery
+
+    def initial_error(path):
+        return _initial_native_open_rejection(
+            path,
+            drc={
+                "status": "ok",
+                "passed": False,
+                "blocker_count": 0,
+                "findings": [{
+                    "rule_id": "CW-DRC-893",
+                    "severity": "major",
+                    "level": "warning",
+                    "detection_confidence": "verified",
+                    "suppressed": False,
+                    "confirmed_blocker": False,
+                    "message": "Via is not connected or connected on only one layer",
+                }],
+            },
+        )
+
+    state["initial_error_factory"] = initial_error
+    result = autoroute_with_recovery(source, ses, routed_board_path=dest)
+
+    assert result["status"] == "ok"
+    assert result["recovery_trigger"]["kind"] == "native_dangling_drc_after_router_reported_zero_incomplete"
+    assert result["recovery_trigger"]["native_drc"]["dangling_warning_count"] == 1
+    assert result["recovery_trigger"]["native_drc"]["dangling_track_warning_count"] == 0
+    assert result["recovery_trigger"]["native_drc"]["dangling_via_warning_count"] == 1
+    route.assert_called_once()
+    repair.assert_called_once()
+    accept.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("row_type", "rule_id", "confidence", "confirmed", "accepted"),
+    [
+        ("track_dangling", "CW-DRC-841", "verified", False, True),
+        ("via_dangling", "CW-DRC-893", "verified", False, True),
+        ("track_dangling", "CW-DRC-893", "verified", False, False),
+        ("via_dangling", "CW-DRC-841", "verified", False, False),
+        ("track_dangling", "CW-DRC-841", "single_source", False, False),
+        ("via_dangling", "CW-DRC-893", "verified", True, False),
+    ],
+)
+def test_fresh_dangling_warning_requires_exact_verified_type_rule_mapping(
+    row_type, rule_id, confidence, confirmed, accepted,
+):
+    raw = {
+        "violations": [{
+            "type": row_type,
+            "severity": "warning",
+            "items": [{"uuid": "selected-copper", "pos": {"x": 12.5, "y": 8.0}}],
+        }],
+        "unconnected_items": [],
+        "schematic_parity": [],
+    }
+    finding = SimpleNamespace(
+        rule_id=rule_id,
+        severity="major",
+        suppressed=False,
+        level="warning",
+        detection_confidence=confidence,
+        is_confirmed_blocker=confirmed,
+    )
+    report = DrcResult("ok", "fresh.kicad_pcb", findings=(finding,), raw_report=raw)
+
+    rows = autoroute_recovery._router_dangling_warning_rows(report)
+
+    if accepted:
+        assert rows == raw["violations"]
+    else:
+        assert rows is None
+
+
 def test_zero_router_incomplete_with_known_dangling_warning_enters_fresh_cleanup_and_recovery(recovery):
     source, ses, dest, state, route, repair, accept, _ = recovery
 
@@ -259,7 +335,7 @@ def test_zero_router_incomplete_with_known_dangling_warning_enters_fresh_cleanup
     assert result["routing_complete"] is True
     trigger = result["recovery_trigger"]
     assert trigger["kind"] == "native_open_and_dangling_drc_after_router_reported_zero_incomplete"
-    assert "dangling-track warnings" in trigger["message"]
+    assert "dangling-copper warnings" in trigger["message"]
     assert trigger["native_drc"]["blocker_count"] == 1
     assert trigger["native_drc"]["finding_count"] == 2
     assert trigger["native_drc"]["dangling_warning_count"] == 1
@@ -473,7 +549,8 @@ def test_ambiguous_initial_import_error_never_enters_recovery(recovery, mutate):
     assert not ses.exists()
 
 
-def test_dangling_cleanup_uses_fresh_local_library_stage_for_each_pass(tmp_path, monkeypatch):
+@pytest.mark.parametrize("omit_track_count", [False, True])
+def test_dangling_cleanup_uses_fresh_local_library_stage_for_each_pass(tmp_path, monkeypatch, omit_track_count):
     project = tmp_path / "project"
     library = project / "libraries" / "Local.pretty"
     library.mkdir(parents=True)
@@ -491,12 +568,17 @@ def test_dangling_cleanup_uses_fresh_local_library_stage_for_each_pass(tmp_path,
     work = tmp_path / "work"
     work.mkdir()
     source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
-    warning_sequence = iter(("stub-1", "stub-2", None))
+    warning_sequence = iter((
+        ("track_dangling", "stub-1"),
+        ("via_dangling", "stub-2"),
+        None,
+    ))
 
     def drc(board, **_kwargs):
-        warning_id = next(warning_sequence)
-        violations = [] if warning_id is None else [{
-            "type": "track_dangling",
+        warning = next(warning_sequence)
+        warning_id = warning[1] if warning is not None else None
+        violations = [] if warning is None else [{
+            "type": warning[0],
             "severity": "warning",
             "items": [{"uuid": warning_id, "pos": {"x": 10.0, "y": 0.0}}],
         }]
@@ -507,10 +589,11 @@ def test_dangling_cleanup_uses_fresh_local_library_stage_for_each_pass(tmp_path,
             )
             for index in range(2)
         ]
-        if warning_id is not None:
+        if warning is not None:
+            warning_rule = "CW-DRC-841" if warning[0] == "track_dangling" else "CW-DRC-893"
             findings.append(ValidationIssue(
-                "CW-DRC-841", level="warning", message="Track has unconnected end",
-                severity="major", detection_confidence="verified", rule_id="CW-DRC-841",
+                warning_rule, level="warning", message="Dangling copper item",
+                severity="major", detection_confidence="verified", rule_id=warning_rule,
             ))
         raw = {
             "violations": violations,
@@ -530,19 +613,44 @@ def test_dangling_cleanup_uses_fresh_local_library_stage_for_each_pass(tmp_path,
         assert (output.parent / "fp-lib-table").read_bytes() == (project / "fp-lib-table").read_bytes()
         assert (output.parent / "libraries" / "Local.pretty" / "Part.kicad_mod").is_file()
         output.write_bytes(b"candidate " + str(len(staged_parents)).encode())
-        uuid = kwargs["warning_rows"][0]["items"][0]["uuid"]
-        return {
+        warning = kwargs["warning_rows"][0]
+        uuid = warning["items"][0]["uuid"]
+        track = warning["type"] == "track_dangling"
+        report = {
             "status": "ok",
             "router_dangling_cleanup": {
                 "status": "candidate_only_requires_fresh_drc",
-                "removed_tracks": [{"uuid": uuid}],
+                "removed_count": int(track),
+                "removed_tracks": [{"uuid": uuid}] if track else [],
+                "removed_via_count": int(not track),
+                "removed_vias": [] if track else [{"uuid": uuid}],
+                "removed_item_count": 1,
                 "source_copper_exact_subset_preserved": True,
                 "saved_removed_tracks_verified": True,
+                "saved_removed_vias_verified": True,
+                "saved_removed_copper_items_verified": True,
             },
         }
+        if not omit_track_count:
+            report["router_dangling_cleanup"]["removed_track_count"] = int(track)
+        return report
 
     monkeypatch.setattr("circuit_weaver.drc_runner.run_drc", drc)
     monkeypatch.setattr("circuit_weaver.kicad_bridge.run_kicad", cleanup)
+    if omit_track_count:
+        with pytest.raises(ValueError, match="removal inventory"):
+            autoroute_recovery._clean_router_dangling_tracks(
+                source,
+                partial,
+                work=work,
+                python=None,
+                deadline=time.monotonic() + 60,
+                source_snapshots={source: source_hash},
+            )
+        assert len(staged_parents) == 1
+        assert source.read_bytes() == b"immutable authored board"
+        return
+
     result, final_drc, summary = autoroute_recovery._clean_router_dangling_tracks(
         source,
         partial,
@@ -560,7 +668,9 @@ def test_dangling_cleanup_uses_fresh_local_library_stage_for_each_pass(tmp_path,
     assert len(set(staged_parents)) == 2
     assert all((parent / "fp-lib-table").is_file() for parent in staged_parents)
     assert final_drc.blocker_count == 2
-    assert summary["removed_track_count"] == 2
+    assert summary["removed_track_count"] == 1
+    assert summary["removed_via_count"] == 1
+    assert summary["removed_item_count"] == 2
     assert source.read_bytes() == b"immutable authored board"
 
 

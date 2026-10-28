@@ -13,6 +13,10 @@ from typing import Any
 
 _NATIVE_DRC_REJECTION_MESSAGE = "Imported routing failed KiCad DRC; board was not published"
 _MAX_ROUTER_DANGLING_TRACK_CLEANUP = 64
+_ROUTER_DANGLING_RULES = {
+    "track_dangling": "CW-DRC-841",
+    "via_dangling": "CW-DRC-893",
+}
 
 
 def _write_recovery_json(path: Path, payload: dict[str, Any]) -> None:
@@ -45,19 +49,33 @@ def _router_dangling_warning_rows(result: Any) -> list[dict[str, Any]] | None:
     if not isinstance(opens, list) or not isinstance(violations, list) or len(findings) != len(opens) + len(violations):
         return None
     open_findings = [finding for finding in findings if finding.rule_id == "CW-DRC-002"]
-    warning_findings = [finding for finding in findings if finding.rule_id == "CW-DRC-841"]
+    warning_findings = [finding for finding in findings if finding.rule_id in _ROUTER_DANGLING_RULES.values()]
     if (
         len(open_findings) != len(opens)
         or len(warning_findings) != len(violations)
         or any(f.severity != "blocker" or f.suppressed or f.is_confirmed_blocker is not True for f in open_findings)
         or result.blocker_count != len(opens)
-        or any(f.severity != "major" or f.suppressed or f.level != "warning" for f in warning_findings)
+        or any(
+            f.severity != "major"
+            or f.suppressed
+            or f.level != "warning"
+            or f.detection_confidence != "verified"
+            or f.is_confirmed_blocker is not False
+            for f in warning_findings
+        )
     ):
         return None
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
+    row_counts = {rule_id: 0 for rule_id in _ROUTER_DANGLING_RULES.values()}
     for row in violations:
-        if not isinstance(row, dict) or row.get("type") != "track_dangling" or row.get("severity") != "warning":
+        if not isinstance(row, dict) or row.get("severity") != "warning":
+            return None
+        warning_type = row.get("type")
+        if not isinstance(warning_type, str):
+            return None
+        rule_id = _ROUTER_DANGLING_RULES.get(warning_type)
+        if rule_id is None:
             return None
         items = row.get("items")
         if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], dict):
@@ -74,8 +92,14 @@ def _router_dangling_warning_rows(result: Any) -> list[dict[str, Any]] | None:
             for axis in ("x", "y")
         ):
             return None
+        row_counts[rule_id] += 1
         seen.add(uuid)
         rows.append(row)
+    finding_counts = {rule_id: 0 for rule_id in _ROUTER_DANGLING_RULES.values()}
+    for finding in warning_findings:
+        finding_counts[finding.rule_id] += 1
+    if row_counts != finding_counts:
+        return None
     return rows
 
 
@@ -162,7 +186,7 @@ def _clean_router_dangling_tracks(
             raise ValueError(f"Native DRC is neither opens-only nor a recognized dangling cleanup state: {before_path}")
         if removed_total + len(warning_rows) > _MAX_ROUTER_DANGLING_TRACK_CLEANUP:
             raise ValueError(
-                f"Router dangling-track cleanup exceeded its {_MAX_ROUTER_DANGLING_TRACK_CLEANUP}-track bound; "
+                f"Router dangling cleanup exceeded its {_MAX_ROUTER_DANGLING_TRACK_CLEANUP}-item bound; "
                 f"see retained DRC {before_path}"
             )
 
@@ -192,17 +216,50 @@ def _clean_router_dangling_tracks(
             message = cleanup.get("message", "candidate missing")
             raise ValueError(f"Native router dangling-track cleanup failed: {message}")
         _restore_settings(source, candidate, staged_settings)
+        cleanup_report = cleanup.get("router_dangling_cleanup")
+        if not isinstance(cleanup_report, dict):
+            raise ValueError("Native cleanup did not return a structured copper-removal report")
+        expected_tracks = {
+            row["items"][0]["uuid"] for row in warning_rows if row.get("type") == "track_dangling"
+        }
+        expected_vias = {
+            row["items"][0]["uuid"] for row in warning_rows if row.get("type") == "via_dangling"
+        }
         if (
-            cleanup.get("router_dangling_cleanup", {}).get("status") != "candidate_only_requires_fresh_drc"
-            or cleanup.get("router_dangling_cleanup", {}).get("source_copper_exact_subset_preserved") is not True
-            or cleanup.get("router_dangling_cleanup", {}).get("saved_removed_tracks_verified") is not True
+            cleanup_report.get("status") != "candidate_only_requires_fresh_drc"
+            or cleanup_report.get("source_copper_exact_subset_preserved") is not True
+            or (expected_tracks and cleanup_report.get("saved_removed_tracks_verified") is not True)
+            or (expected_vias and cleanup_report.get("saved_removed_vias_verified") is not True)
+            or (expected_vias and cleanup_report.get("saved_removed_copper_items_verified") is not True)
         ):
             raise ValueError(
-                "Native cleanup did not prove exact generated-track removal and source-copper preservation"
+                "Native cleanup did not prove exact generated copper removal and source-copper preservation"
             )
-        removed_rows = cleanup["router_dangling_cleanup"].get("removed_tracks")
-        if not isinstance(removed_rows, list) or len(removed_rows) != len(warning_rows):
-            raise ValueError("Native cleanup removal inventory does not match selected warning tracks")
+        removed_tracks = cleanup_report.get("removed_tracks")
+        removed_vias = cleanup_report.get("removed_vias", [])
+        if not isinstance(removed_tracks, list) or not isinstance(removed_vias, list):
+            raise ValueError("Native cleanup removal inventory is missing track or via rows")
+        track_uuids = [row.get("uuid") for row in removed_tracks if isinstance(row, dict)]
+        via_uuids = [row.get("uuid") for row in removed_vias if isinstance(row, dict)]
+        total_removed = len(removed_tracks) + len(removed_vias)
+        if (
+            len(track_uuids) != len(removed_tracks)
+            or len(set(track_uuids)) != len(track_uuids)
+            or set(track_uuids) != expected_tracks
+            or len(via_uuids) != len(removed_vias)
+            or len(set(via_uuids)) != len(via_uuids)
+            or set(via_uuids) != expected_vias
+            or type(cleanup_report.get("removed_count")) is not int
+            or cleanup_report["removed_count"] != len(removed_tracks)
+            or type(cleanup_report.get("removed_track_count")) is not int
+            or cleanup_report["removed_track_count"] != len(removed_tracks)
+            or type(cleanup_report.get("removed_via_count")) is not int
+            or cleanup_report["removed_via_count"] != len(removed_vias)
+            or type(cleanup_report.get("removed_item_count")) is not int
+            or cleanup_report["removed_item_count"] != total_removed
+            or total_removed != len(warning_rows)
+        ):
+            raise ValueError("Native cleanup removal inventory does not match selected dangling copper items")
 
         after, after_path, after_sha = run_and_retain(candidate, index, "after")
         after_warnings = _router_dangling_warning_rows(after)
@@ -212,13 +269,13 @@ def _clean_router_dangling_tracks(
         after_open_count = _open_count(after)
         before_warning_count = len(warning_rows)
         after_warning_count = len(after_warnings)
-        removed_ids = {row.get("uuid") for row in removed_rows if isinstance(row, dict)}
+        removed_ids = set(track_uuids) | set(via_uuids)
         after_ids = {
             row["items"][0]["uuid"] for row in after_warnings
             if row.get("items") and isinstance(row["items"][0], dict)
         }
         if (
-            len(removed_ids) != len(removed_rows)
+            len(removed_ids) != total_removed
             or removed_ids.intersection(after_ids)
             or after_open_count > before_open_count
             or after_warning_count > before_warning_count
@@ -230,14 +287,18 @@ def _clean_router_dangling_tracks(
             "before_drc": str(before_path),
             "after_board_sha256": after_sha,
             "after_drc": str(after_path),
-            "removed_tracks": removed_rows,
+            "removed_tracks": removed_tracks,
+            "removed_vias": removed_vias,
+            "removed_track_count": len(removed_tracks),
+            "removed_via_count": len(removed_vias),
+            "removed_item_count": total_removed,
             "open_count_before": before_open_count,
             "open_count_after": after_open_count,
             "warning_count_before": before_warning_count,
             "warning_count_after": after_warning_count,
             "source_copper_exact_subset_preserved": True,
         })
-        removed_total += len(removed_rows)
+        removed_total += total_removed
         current, before, before_path, before_sha = candidate, after, after_path, after_sha
         if _strict_native_route_drc(before):
             return current, before, {
@@ -246,7 +307,9 @@ def _clean_router_dangling_tracks(
                 "initial_drc": str(root / "step-00-before-drc.json"),
                 "final_drc": str(before_path),
                 "final_board_sha256": before_sha,
-                "removed_track_count": removed_total,
+                "removed_track_count": sum(len(step["removed_tracks"]) for step in steps),
+                "removed_via_count": sum(len(step["removed_vias"]) for step in steps),
+                "removed_item_count": removed_total,
                 "cap": _MAX_ROUTER_DANGLING_TRACK_CLEANUP,
                 "source_copper_exact_subset_preserved": True,
                 "no_added_copper": True,
@@ -255,7 +318,7 @@ def _clean_router_dangling_tracks(
             }
         if removed_total >= _MAX_ROUTER_DANGLING_TRACK_CLEANUP:
             raise ValueError(
-                f"Router dangling-track cleanup reached its {_MAX_ROUTER_DANGLING_TRACK_CLEANUP}-track bound; "
+                f"Router dangling cleanup reached its {_MAX_ROUTER_DANGLING_TRACK_CLEANUP}-item bound; "
                 f"see retained DRC {before_path}"
             )
 
@@ -295,7 +358,7 @@ def _eligible_native_open_rejection(initial: dict[str, Any], session_path: Path)
     open_findings = [finding for finding in findings if isinstance(finding, dict)
                      and finding.get("rule_id") == "CW-DRC-002"]
     dangling_findings = [finding for finding in findings if isinstance(finding, dict)
-                         and finding.get("rule_id") == "CW-DRC-841"]
+                         and finding.get("rule_id") in _ROUTER_DANGLING_RULES.values()]
     if (blockers != len(open_findings)
             or not (open_findings or dangling_findings)
             or len(findings) != len(open_findings) + len(dangling_findings)):
@@ -581,9 +644,13 @@ def autoroute_with_recovery(
             private_session_sha256 = hashlib.sha256(initial_session.read_bytes()).hexdigest()
             native_drc = initial["board_import"]["drc"]
             native_findings = native_drc["findings"]
-            dangling_warning_count = sum(
-                finding.get("rule_id") == "CW-DRC-841" for finding in native_findings
+            dangling_track_warning_count = sum(
+                finding.get("rule_id") == _ROUTER_DANGLING_RULES["track_dangling"] for finding in native_findings
             )
+            dangling_via_warning_count = sum(
+                finding.get("rule_id") == _ROUTER_DANGLING_RULES["via_dangling"] for finding in native_findings
+            )
+            dangling_warning_count = dangling_track_warning_count + dangling_via_warning_count
             warning_triggered = dangling_warning_count > 0
             mixed_triggered = warning_triggered and native_drc["blocker_count"] > 0
             recovery_trigger = {
@@ -595,11 +662,11 @@ def autoroute_with_recovery(
                     else "native_open_drc_after_router_reported_zero_incomplete"
                 ),
                 "message": (
-                    "Native DRC found verified open connections and recognized router dangling-track warnings "
+                    "Native DRC found verified open connections and recognized router dangling-copper warnings "
                     "despite a zero-incomplete router statistic; the validated private SES is being re-imported "
                     "into quarantine for fresh-DRC cleanup and recovery."
                     if mixed_triggered
-                    else "Native DRC found recognized router dangling-track warnings despite a zero-incomplete "
+                    else "Native DRC found recognized router dangling-copper warnings despite a zero-incomplete "
                     "router statistic; the validated private SES is being re-imported into quarantine for "
                     "fresh-DRC cleanup and strict final validation."
                     if warning_triggered
@@ -614,6 +681,8 @@ def autoroute_with_recovery(
                     "blocker_count": native_drc["blocker_count"],
                     "finding_count": len(native_findings),
                     "dangling_warning_count": dangling_warning_count,
+                    "dangling_track_warning_count": dangling_track_warning_count,
+                    "dangling_via_warning_count": dangling_via_warning_count,
                     "findings": [
                         {
                             key: finding.get(key)

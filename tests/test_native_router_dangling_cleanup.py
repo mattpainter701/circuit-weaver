@@ -50,6 +50,40 @@ class PCB_TRACK:
         return "NET_A"
 
 
+class PCB_VIA:
+    def __init__(self, uuid="router-via", *, locked=False, position=(5_000_000, 6_000_000),
+                 top=0, bottom=31, widths=(600_000, 600_000), drill=300_000):
+        self.m_Uuid = _Uuid(uuid)
+        self.locked = locked
+        self.position = SimpleNamespace(x=position[0], y=position[1])
+        self.top, self.bottom = top, bottom
+        self.widths, self.drill = widths, drill
+
+    def IsLocked(self):
+        return self.locked
+
+    def GetPosition(self):
+        return self.position
+
+    def TopLayer(self):
+        return self.top
+
+    def BottomLayer(self):
+        return self.bottom
+
+    def GetWidth(self, layer):
+        return self.widths[0] if layer == self.top else self.widths[1]
+
+    def GetDrillValue(self):
+        return self.drill
+
+    def GetViaType(self):
+        return 0
+
+    def GetNetname(self):
+        return "NET_A"
+
+
 class _Board:
     def __init__(self, tracks):
         self.tracks = list(tracks)
@@ -58,8 +92,7 @@ class _Board:
         return list(self.tracks)
 
     def GetLayerName(self, layer):
-        assert layer == 0
-        return "F.Cu"
+        return {0: "F.Cu", 31: "B.Cu"}[layer]
 
     def Remove(self, item):
         self.tracks.remove(item)
@@ -82,6 +115,14 @@ def _warning(uuid="router-track", pos=(10.0, 0.0)):
     }
 
 
+def _via_warning(uuid="router-via", pos=(5.0, 6.0)):
+    return {
+        "type": "via_dangling",
+        "severity": "warning",
+        "items": [{"uuid": uuid, "pos": {"x": pos[0], "y": pos[1]}}],
+    }
+
+
 def test_native_cleanup_removes_exact_reported_track_only():
     keep = PCB_TRACK("keep", start=(0, 1_000_000), end=(10_000_000, 1_000_000))
     target = PCB_TRACK()
@@ -98,6 +139,49 @@ def test_native_cleanup_removes_exact_reported_track_only():
     assert board.GetTracks() == [keep]
 
 
+def test_native_cleanup_removes_exact_reported_via_and_returns_type_counts():
+    keep = PCB_TRACK("keep")
+    target = PCB_VIA()
+    board = _Board([keep, target])
+
+    result = remove_reported_tracks(board, None, [_via_warning()], enabled_copper_layer_ids={0, 31})
+
+    assert result["status"] == "candidate_only_requires_fresh_drc"
+    assert result["removed_count"] == 0
+    assert result["removed_track_count"] == 0
+    assert result["removed_via_count"] == result["removed_item_count"] == 1
+    assert result["removed_tracks"] == []
+    assert result["removed_vias"] == [{
+        "uuid": "router-via", "net": "NET_A", "layer": "F.Cu-B.Cu",
+        "position_iu": [5_000_000, 6_000_000], "top_layer_id": 0, "bottom_layer_id": 31,
+        "top_layer": "F.Cu", "bottom_layer": "B.Cu", "widths_iu": [600_000, 600_000],
+        "drill_iu": 300_000, "via_type": 0, "locked": False,
+    }]
+    assert board.GetTracks() == [keep]
+
+
+def test_native_cleanup_supports_via_width_accessor_without_layer_argument():
+    no_layer_width_type = type("PCB_VIA", (PCB_VIA,), {"GetWidth": lambda self: self.widths[0]})
+    via = no_layer_width_type()
+    board = _Board([via])
+
+    result = remove_reported_tracks(board, None, [_via_warning()], enabled_copper_layer_ids={0, 31})
+
+    assert result["removed_vias"][0]["widths_iu"] == [600_000, 600_000]
+    assert board.GetTracks() == []
+
+
+def test_native_cleanup_supports_mixed_tracks_and_vias_under_shared_cap():
+    board = _Board([PCB_TRACK(), PCB_VIA()])
+    result = remove_reported_tracks(
+        board, None, [_warning(), _via_warning()], max_tracks=2, enabled_copper_layer_ids={0, 31},
+    )
+    assert result["removed_count"] == result["removed_track_count"] == 1
+    assert result["removed_via_count"] == 1
+    assert result["removed_item_count"] == 2
+    assert board.GetTracks() == []
+
+
 def test_native_cleanup_uses_native_copper_inventory_not_display_layer_name():
     track = PCB_TRACK(layer=0)
     board = _Board([track])
@@ -111,7 +195,7 @@ def test_native_cleanup_rejects_layer_outside_native_copper_inventory():
     track = PCB_TRACK(layer=99)
     board = _Board([track])
     board.GetLayerName = lambda _layer: "Auxiliary"
-    with pytest.raises(ValueError, match="not on a copper layer"):
+    with pytest.raises(ValueError, match="not on an enabled copper layer"):
         remove_reported_tracks(board, None, [_warning()], enabled_copper_layer_ids={0})
     assert board.GetTracks() == [track]
 
@@ -143,6 +227,24 @@ def test_native_cleanup_rejects_duplicate_ids_and_out_of_bound_requests():
     assert len(board.GetTracks()) == 1
 
 
+@pytest.mark.parametrize(
+    "warning,via,error",
+    [
+        (_via_warning(pos=(9, 6)), PCB_VIA(), "position does not match"),
+        (_via_warning(), PCB_VIA(locked=True), "locked router-generated"),
+        (_via_warning(), PCB_VIA(bottom=99), "enabled copper layers"),
+        (_via_warning(), PCB_VIA(drill=600_000), "annular width or drill"),
+        (_via_warning(), PCB_TRACK("router-via"), "ordinary PCB_VIA"),
+        (_warning(), PCB_VIA("router-track"), "ordinary PCB_TRACK"),
+    ],
+)
+def test_native_cleanup_rejects_unsafe_via_selection(warning, via, error):
+    board = _Board([via])
+    with pytest.raises(ValueError, match=error):
+        remove_reported_tracks(board, None, [warning], enabled_copper_layer_ids={0, 31})
+    assert board.GetTracks() == [via]
+
+
 def _worker_board(tracks):
     board = _Board(tracks)
     board.GetCopperLayerCount = lambda: 2
@@ -151,7 +253,8 @@ def _worker_board(tracks):
     return board
 
 
-def _run_cleanup_worker(monkeypatch, tmp_path, warning_uuid="router-track"):
+def _run_cleanup_worker(monkeypatch, tmp_path, warning_uuid="router-track", *,
+                         warning_rows=None, source_objects=None, generated_objects=None):
     from circuit_weaver import _kicad_worker as worker
 
     source = tmp_path / "source.kicad_pcb"
@@ -160,9 +263,12 @@ def _run_cleanup_worker(monkeypatch, tmp_path, warning_uuid="router-track"):
     board_path.write_bytes(b"partial input")
     output = tmp_path / "cleaned.kicad_pcb"
     source_track = PCB_TRACK("source-track", start=(0, 1_000_000), end=(10_000_000, 1_000_000))
-    generated = PCB_TRACK("router-track")
-    source_board = _worker_board([source_track])
-    partial_board = _worker_board([copy.deepcopy(source_track), generated])
+    if source_objects is None:
+        source_objects = [source_track]
+    if generated_objects is None:
+        generated_objects = [PCB_TRACK("router-track")]
+    source_board = _worker_board(source_objects)
+    partial_board = _worker_board([*(copy.deepcopy(item) for item in source_objects), *generated_objects])
     saved_boards = {str(source.resolve()): source_board, str(board_path.resolve()): partial_board}
 
     class _Pcbnew:
@@ -198,7 +304,7 @@ def _run_cleanup_worker(monkeypatch, tmp_path, warning_uuid="router-track"):
         "source_board": str(source),
         "expected_source_board_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
         "expected_board_sha256": hashlib.sha256(board_path.read_bytes()).hexdigest(),
-        "warning_rows": [_warning(warning_uuid)],
+        "warning_rows": warning_rows if warning_rows is not None else [_warning(warning_uuid)],
         "max_tracks": 64,
     }
     return worker, request, source, output, saved_boards
@@ -213,8 +319,32 @@ def test_native_worker_cleanup_saves_only_selected_generated_track(monkeypatch, 
     proof = result["router_dangling_cleanup"]
     assert proof["source_copper_exact_subset_preserved"] is True
     assert proof["saved_removed_tracks_verified"] is True
+    assert proof["saved_removed_vias_verified"] is True
+    assert proof["saved_removed_copper_items_verified"] is True
     assert proof["saved_source_copper_exact_subset_preserved"] is True
     assert [track.m_Uuid.AsString() for track in saved[str(output.resolve())].GetTracks()] == ["source-track"]
+    assert source.read_bytes() == b"immutable source"
+    assert output.is_file()
+
+
+def test_native_worker_cleanup_saves_only_selected_generated_via(monkeypatch, tmp_path):
+    worker, request, source, output, saved = _run_cleanup_worker(
+        monkeypatch, tmp_path, warning_rows=[_via_warning()], generated_objects=[PCB_VIA()],
+    )
+
+    result = worker.execute(request)
+
+    assert result["status"] == "ok"
+    proof = result["router_dangling_cleanup"]
+    assert proof["removed_count"] == 0
+    assert proof["removed_track_count"] == 0
+    assert proof["removed_via_count"] == proof["removed_item_count"] == 1
+    assert proof["source_copper_exact_subset_preserved"] is True
+    assert proof["saved_removed_tracks_verified"] is True
+    assert proof["saved_removed_vias_verified"] is True
+    assert proof["saved_removed_copper_items_verified"] is True
+    assert proof["saved_source_copper_exact_subset_preserved"] is True
+    assert [type(item).__name__ for item in saved[str(output.resolve())].GetTracks()] == ["PCB_TRACK"]
     assert source.read_bytes() == b"immutable source"
     assert output.is_file()
 
@@ -224,6 +354,20 @@ def test_native_worker_refuses_warning_that_selects_original_source_copper(monke
         monkeypatch, tmp_path, warning_uuid="source-track",
     )
     request["warning_rows"] = [_warning("source-track", pos=(10.0, 1.0))]
+
+    with pytest.raises(ValueError, match="present in the original source"):
+        worker.execute(request)
+
+    assert source.read_bytes() == b"immutable source"
+    assert not output.exists()
+
+
+def test_native_worker_refuses_warning_that_selects_original_source_via(monkeypatch, tmp_path):
+    source_via = PCB_VIA("source-via")
+    worker, request, source, output, _saved = _run_cleanup_worker(
+        monkeypatch, tmp_path, warning_rows=[_via_warning("source-via")],
+        source_objects=[PCB_TRACK("source-track"), source_via], generated_objects=[],
+    )
 
     with pytest.raises(ValueError, match="present in the original source"):
         worker.execute(request)
@@ -265,6 +409,25 @@ def _drc(board: Path, warning_ids=(), *, open_count=2, extra_violation=None):
     return DrcResult("ok", str(board), board_sha256=digest, findings=tuple(findings), raw_report=raw)
 
 
+def _cleanup_report(removed_tracks, **updates):
+    removed_tracks = list(removed_tracks)
+    report = {
+        "status": "candidate_only_requires_fresh_drc",
+        "removed_count": len(removed_tracks),
+        "removed_track_count": len(removed_tracks),
+        "removed_via_count": 0,
+        "removed_item_count": len(removed_tracks),
+        "removed_tracks": removed_tracks,
+        "removed_vias": [],
+        "source_copper_exact_subset_preserved": True,
+        "saved_removed_tracks_verified": True,
+        "saved_removed_vias_verified": True,
+        "saved_removed_copper_items_verified": True,
+    }
+    report.update(updates)
+    return report
+
+
 def test_host_cleanup_iterates_dead_stub_chain_without_regressing_open_count(tmp_path, monkeypatch):
     source = tmp_path / "source.kicad_pcb"
     source.write_bytes(b"source board")
@@ -286,12 +449,9 @@ def test_host_cleanup_iterates_dead_stub_chain_without_regressing_open_count(tmp
         Path(kwargs["output"]).write_bytes(f"cleaned-{len(calls)}".encode())
         return {
             "status": "ok",
-            "router_dangling_cleanup": {
-                "status": "candidate_only_requires_fresh_drc",
-                "removed_tracks": [{"uuid": kwargs["warning_rows"][0]["items"][0]["uuid"]}],
-                "source_copper_exact_subset_preserved": True,
-                "saved_removed_tracks_verified": True,
-            },
+            "router_dangling_cleanup": _cleanup_report(
+                [{"uuid": kwargs["warning_rows"][0]["items"][0]["uuid"]}]
+            ),
         }
 
     monkeypatch.setattr("circuit_weaver.drc_runner.run_drc", run_drc)
@@ -368,15 +528,7 @@ def test_host_cleanup_rejects_increased_open_count_after_removal(tmp_path, monke
 
     def run_kicad(_operation, **kwargs):
         Path(kwargs["output"]).write_bytes(b"cleaned")
-        return {
-            "status": "ok",
-            "router_dangling_cleanup": {
-                "status": "candidate_only_requires_fresh_drc",
-                "removed_tracks": [{"uuid": "stub-1"}],
-                "source_copper_exact_subset_preserved": True,
-                "saved_removed_tracks_verified": True,
-            },
-        }
+        return {"status": "ok", "router_dangling_cleanup": _cleanup_report([{"uuid": "stub-1"}])}
 
     _install_host_mocks(monkeypatch, lambda p, **_k: next(queue)(Path(p)), run_kicad)
     monkeypatch.setattr("circuit_weaver.pcb_layout._check_snapshots", lambda *_args: None)
@@ -407,7 +559,7 @@ def test_host_cleanup_stops_at_bounded_track_cap(tmp_path, monkeypatch):
 
     _install_host_mocks(monkeypatch, lambda p, **_k: _drc(Path(p), warnings), run_kicad)
     monkeypatch.setattr("circuit_weaver.pcb_layout._check_snapshots", lambda *_args: None)
-    with pytest.raises(ValueError, match="exceeded its 64-track bound"):
+    with pytest.raises(ValueError, match="exceeded its 64-item bound"):
         autoroute_recovery._clean_router_dangling_tracks(
             source, partial, work=tmp_path / "work", python=None,
             deadline=autoroute_recovery.time.monotonic() + 60,
@@ -449,12 +601,9 @@ def test_host_cleanup_rejects_worker_that_does_not_claim_native_preservation(tmp
         Path(kwargs["output"]).write_bytes(b"candidate")
         return {
             "status": "ok",
-            "router_dangling_cleanup": {
-                "status": "candidate_only_requires_fresh_drc",
-                "removed_tracks": [{"uuid": "stub-1"}],
-                "source_copper_exact_subset_preserved": False,
-                "saved_removed_tracks_verified": True,
-            },
+            "router_dangling_cleanup": _cleanup_report(
+                [{"uuid": "stub-1"}], source_copper_exact_subset_preserved=False,
+            ),
         }
 
     _install_host_mocks(monkeypatch, lambda p, **_k: _drc(Path(p), ("stub-1",)), run_kicad)

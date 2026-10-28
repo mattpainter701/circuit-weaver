@@ -1742,23 +1742,33 @@ def execute(request):
             enabled_copper_layer_ids={row["id"] for row in original_stack["layers"]},
         )
         dangling_removed_items = router_dangling_cleanup.pop("_native_removed_items", [])
-        removed_rows = router_dangling_cleanup.get("removed_tracks")
-        if not isinstance(removed_rows, list) or not removed_rows:
-            raise ValueError("Dangling-track cleanup did not identify exact removed native tracks")
+        removed_tracks = router_dangling_cleanup.get("removed_tracks")
+        removed_vias = router_dangling_cleanup.get("removed_vias")
+        if (not isinstance(removed_tracks, list) or not isinstance(removed_vias, list)
+                or not (removed_tracks or removed_vias)):
+            raise ValueError("Dangling cleanup did not identify exact removed native tracks or vias")
+        removed_rows = [*removed_tracks, *removed_vias]
         removed_uuids = [row.get("uuid") for row in removed_rows if isinstance(row, dict)]
-        if len(removed_uuids) != len(removed_rows) or len(set(removed_uuids)) != len(removed_uuids):
-            raise ValueError("Dangling-track cleanup returned duplicate or malformed UUIDs")
-        source_track_uuids = {
+        if (len(removed_uuids) != len(removed_rows) or len(set(removed_uuids)) != len(removed_uuids)
+                or len(dangling_removed_items) != len(removed_rows)
+                or router_dangling_cleanup.get("removed_count") != len(removed_tracks)
+                or router_dangling_cleanup.get("removed_track_count") != len(removed_tracks)
+                or router_dangling_cleanup.get("removed_via_count") != len(removed_vias)
+                or router_dangling_cleanup.get("removed_item_count") != len(removed_rows)):
+            raise ValueError("Dangling cleanup returned duplicate, malformed or inconsistent removal counts")
+        source_copper_uuids = {
             item.m_Uuid.AsString() for item in source_board.GetTracks()
-            if type(item).__name__ == "PCB_TRACK"
+            if type(item).__name__ in {"PCB_TRACK", "PCB_VIA"}
         }
-        if source_track_uuids.intersection(removed_uuids):
-            raise ValueError("Dangling-track cleanup selected copper present in the original source")
+        if source_copper_uuids.intersection(removed_uuids):
+            raise ValueError("Dangling cleanup selected copper present in the original source")
         selected = set(removed_uuids)
+        expected_types = ({row["uuid"]: "PCB_TRACK" for row in removed_tracks}
+                          | {row["uuid"]: "PCB_VIA" for row in removed_vias})
         removed_state = Counter(
             raw for raw in original_copper
             if json.loads(raw).get("uuid") in selected
-            and json.loads(raw).get("type") == "PCB_TRACK"
+            and json.loads(raw).get("type") == expected_types.get(json.loads(raw).get("uuid"))
             and json.loads(raw).get("locked") is False
         )
         if sum(removed_state.values()) != len(selected):
@@ -1781,6 +1791,7 @@ def execute(request):
             "source_copper_exact_subset_preserved": True,
             "nonselected_copper_preserved": True,
             "zones_and_stack_preserved": True,
+            "removed_copper_item_count": len(removed_rows),
         })
     elif operation == "repair_open":
         from _native_routing_repair import repair_one
@@ -1951,14 +1962,23 @@ def execute(request):
                        "existing_copper_preserved": True})
     if router_dangling_cleanup is not None:
         saved_copper = _copper_state(reloaded)
-        selected_uuids = {row["uuid"] for row in router_dangling_cleanup["removed_tracks"]}
+        removed_tracks = router_dangling_cleanup["removed_tracks"]
+        removed_vias = router_dangling_cleanup["removed_vias"]
+        selected_uuids = {row["uuid"] for row in [*removed_tracks, *removed_vias]}
+        expected_types = ({row["uuid"]: "PCB_TRACK" for row in removed_tracks}
+                          | {row["uuid"]: "PCB_VIA" for row in removed_vias})
         expected_removed = Counter(
             raw for raw in original_copper
             if json.loads(raw).get("uuid") in selected_uuids
-            and json.loads(raw).get("type") == "PCB_TRACK"
+            and json.loads(raw).get("type") == expected_types.get(json.loads(raw).get("uuid"))
             and json.loads(raw).get("locked") is False
         )
-        if (len(selected_uuids) != router_dangling_cleanup["removed_count"]
+        if (router_dangling_cleanup["removed_count"] != len(removed_tracks)
+                or len(selected_uuids) != router_dangling_cleanup["removed_item_count"]
+                or router_dangling_cleanup.get("removed_track_count") != len(removed_tracks)
+                or router_dangling_cleanup.get("removed_via_count") != len(removed_vias)
+                or router_dangling_cleanup.get("removed_item_count") != len(selected_uuids)
+                or len(dangling_removed_items) != len(selected_uuids)
                 or saved_copper - original_copper
                 or original_copper - saved_copper != expected_removed
                 or source_copper - saved_copper
@@ -1971,6 +1991,8 @@ def execute(request):
             raise ValueError("Saved dangling cleanup failed exact copper or source-geometry preservation")
         router_dangling_cleanup.update({
             "saved_removed_tracks_verified": True,
+            "saved_removed_vias_verified": True,
+            "saved_removed_copper_items_verified": True,
             "saved_source_copper_exact_subset_preserved": True,
             "saved_zones_and_stack_preserved": True,
         })

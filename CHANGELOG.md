@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Stage each native dangling-track cleanup pass in its own private project
+- Stage each native dangling-copper cleanup pass in its own private project
   directory so repeated passes preserve footprint libraries without collisions.
 - Carry KiCad's project-backed copper-to-edge minimum into native-board
   autorouting and radius-aware repair checks. Reject unsupported custom edge
@@ -16,8 +16,9 @@
   and the original design name used for session correlation.
 
 - Before opens-only recovery, retain fresh native DRC and allow bounded removal
-  of only warning-identified, unlocked router-generated dangling tracks. Verify
-  original source copper and board state, rerun DRC after each removal, and keep
+  of only warning-identified, unlocked router-generated dangling tracks and
+  vias, sharing a 64-item cap. Verify original source copper and board state,
+  rerun DRC after each removal, and keep
   strict zero-finding publication checks. Also handle validated private sessions
   rejected for recognized dangling warnings after the router reports completion.
 

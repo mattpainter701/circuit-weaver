@@ -481,7 +481,7 @@ These diagnostics do not change the error status or populate the requested
 session output; reported zero opens cannot override an invalid session.
 
 When the router reports zero opens but native import finds open connections or
-recognized dangling-track warnings, opt-in recovery can continue only from the
+recognized dangling-track or dangling-via warnings, opt-in recovery can continue only from the
 validated private session and a complete native rejection with those findings.
 It requires verified, unsuppressed findings and consistent blocker counts, then
 reimports into quarantine for a new hash-matched full native report. Missing
@@ -490,10 +490,13 @@ native import always reports routing as incomplete until recovery and the final
 native gate pass, regardless of the router's statistics.
 
 Before opens-only recovery, the host records the complete fresh native DRC
-report. If the only additional findings are KiCad `track_dangling` warnings on
-router-generated tracks, quarantine may remove the warning-identified unlocked
-track objects, up to 64 total. Each UUID and reported endpoint must resolve to a
-single track absent from the original source board. The native worker verifies
+report. If the only additional findings are KiCad `track_dangling` or
+`via_dangling` warnings on router-generated copper, quarantine may remove the
+warning-identified unlocked objects, sharing a 64-item cap across tracks and
+vias. Each UUID and reported endpoint or via position must resolve to a single
+object of the reported type, absent from the original source board. Each pass
+uses a separate private project directory to retain its footprint context.
+The native worker verifies
 that original source copper remains an exact object-level subset and that no
 other copper, footprint/text state, source geometry, zones or layer stack
 changes. It reruns full native DRC after each bounded removal and retains both
