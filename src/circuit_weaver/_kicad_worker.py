@@ -1522,6 +1522,8 @@ def execute(request):
     ground_plane = None
     plane_stitching = None
     router_dangling_cleanup = None
+    generated_route_repair = None
+    generated_removed_items = []
     dangling_removed_items = []
     cleanup_removed_items = []
     plane_cleanup_removed_items = []
@@ -1800,6 +1802,121 @@ def execute(request):
             "zones_and_stack_preserved": True,
             "removed_copper_item_count": len(removed_rows),
         })
+    elif operation in {"repair_generated_widths", "prune_generated_width_clearances"}:
+        try:
+            from _native_generated_route_repair import (
+                prune_generated_width_clearances,
+                repair_generated_widths,
+            )
+        except ImportError:
+            from ._native_generated_route_repair import (
+                prune_generated_width_clearances,
+                repair_generated_widths,
+            )
+
+        current_path = Path(request["board"]).resolve()
+        source_path = Path(request["source_board"]).resolve()
+        output_path = Path(request["output"]).resolve()
+        if (current_path == source_path or output_path in {current_path, source_path}
+                or output_path.exists()):
+            raise ValueError("Generated route repair requires separate fresh candidate paths")
+        project_sha = request.get("expected_source_project_sha256")
+        generated_protected_files = {
+            current_path: request.get("expected_board_sha256"),
+            source_path: request.get("expected_source_board_sha256"),
+            current_path.with_suffix(".kicad_pro"): project_sha,
+            source_path.with_suffix(".kicad_pro"): project_sha,
+        }
+
+        def verify_generated_input_files():
+            for path, expected in generated_protected_files.items():
+                if (not isinstance(expected, str) or len(expected) != 64 or not path.is_file()
+                        or hashlib.sha256(path.read_bytes()).hexdigest() != expected):
+                    raise ValueError("Generated route repair input/project hash does not match its source")
+
+        verify_generated_input_files()
+        # Native SaveBoard/LoadBoard may normalize the output project's schema.
+        # The host restores the authored sidecar before obtaining fresh DRC;
+        # source and input project bytes remain protected throughout this call.
+        output_project = output_path.with_suffix(".kicad_pro")
+        if (not output_project.is_file()
+                or hashlib.sha256(output_project.read_bytes()).hexdigest() != project_sha):
+            raise ValueError("Generated route repair output project was not staged from its source")
+        source_board = pcbnew.LoadBoard(str(source_path))
+        if source_board is None or list(source_board.GetTracks()):
+            raise ValueError("Generated route repair requires an original source without authored copper")
+        stack, complete = _native_copper_layer_stack(board, pcbnew)
+        source_stack, source_complete = _native_copper_layer_stack(source_board, pcbnew)
+        if (not complete or not source_complete or len(stack) != 2 or stack != source_stack
+                or list(board.Zones()) or list(source_board.Zones())):
+            raise ValueError("Generated fanout repair supports only verified two-layer boards without zones")
+        if any(type(item).__name__ not in {"PCB_TRACK", "PCB_VIA"} for item in board.GetTracks()):
+            raise ValueError("Generated fanout repair does not support curved or unknown copper")
+
+        def generated_fixed_state(candidate):
+            return (
+                _identity(candidate), _fixed_layout_state(candidate),
+                _ground_plane_source_geometry_state(candidate, pcbnew),
+                _native_stack_state(candidate, pcbnew), _zone_definition_state(candidate, pcbnew),
+                _zone_fill_state(candidate, pcbnew),
+            )
+
+        generated_original_fixed = generated_fixed_state(board)
+        original_copper = _copper_state(board)
+        original_rows = {json.loads(raw)["uuid"]: raw for raw in original_copper}
+        if (len(original_rows) != len(original_copper)
+                or any(count != 1 for count in original_copper.values())):
+            raise ValueError("Generated copper UUIDs are not unique")
+        generated_expected_copper = original_copper.copy()
+        if operation == "repair_generated_widths":
+            generated_route_repair = repair_generated_widths(
+                board, source_board, pcbnew, max_tracks=request.get("max_tracks", 4096),
+            )
+            changed = generated_route_repair.get("changed_tracks", [])
+            if generated_route_repair.get("changed_track_count") != len(changed):
+                raise ValueError("Generated width repair returned inconsistent change counts")
+            selected_uuids = set()
+            for change in changed:
+                uuid = change.get("uuid")
+                if uuid in selected_uuids or uuid not in original_rows:
+                    raise ValueError("Generated width repair returned an unknown or duplicate track UUID")
+                selected_uuids.add(uuid)
+                old_raw = original_rows[uuid]
+                row = json.loads(old_raw)
+                old, new = change.get("before_width_iu"), change.get("after_width_iu")
+                if (row["type"] != "PCB_TRACK" or row["locked"] or row["net"] != change.get("net")
+                        or isinstance(old, bool) or not isinstance(old, int)
+                        or isinstance(new, bool) or not isinstance(new, int)
+                        or row["width"] != old or not 0 < old < new):
+                    raise ValueError("Generated repair may only increase identified unlocked track widths")
+                del generated_expected_copper[old_raw]
+                row["width"] = new
+                generated_expected_copper[json.dumps(row, sort_keys=True)] += 1
+        else:
+            generated_route_repair = prune_generated_width_clearances(
+                board, source_board, pcbnew, request.get("drc_report"),
+                request.get("width_repair_report"), max_items=request.get("max_items", 64),
+            )
+            generated_removed_items = generated_route_repair.pop("_native_removed_items", [])
+            removed = generated_route_repair.get("removed_tracks", [])
+            selected_uuids = {row.get("uuid") for row in removed}
+            if (len(selected_uuids) != len(removed) or len(generated_removed_items) != len(removed)
+                    or generated_route_repair.get("removed_track_count") != len(removed)):
+                raise ValueError("Generated clearance repair returned inconsistent removal counts")
+            for uuid in selected_uuids:
+                if uuid not in original_rows:
+                    raise ValueError("Generated clearance repair selected absent copper")
+                raw = original_rows[uuid]
+                row = json.loads(raw)
+                if row["type"] != "PCB_TRACK" or row["locked"]:
+                    raise ValueError("Generated clearance repair selected unsupported or locked copper")
+                del generated_expected_copper[raw]
+        if (generated_route_repair.get("status") != "candidate_only_requires_fresh_drc"
+                or generated_route_repair.get("source_copper_item_count") != 0
+                or generated_fixed_state(board) != generated_original_fixed
+                or _copper_state(board) != generated_expected_copper):
+            raise ValueError("Generated route repair changed copper or geometry outside its report")
+        verify_generated_input_files()
     elif operation == "repair_open":
         from _native_routing_repair import repair_one
 
@@ -1892,6 +2009,20 @@ def execute(request):
         raise ValueError("Saved board failed pad/net identity verification")
     if zone_refill is not None:
         zone_refill = _verify_saved_imported_zones(reloaded, pcbnew, zone_refill)
+    if generated_route_repair is not None:
+        if (generated_fixed_state(reloaded) != generated_original_fixed
+                or _copper_state(reloaded) != generated_expected_copper):
+            raise ValueError("Saved generated-route candidate failed exact copper and source-state verification")
+        verify_generated_input_files()
+        generated_route_repair.update({
+            "input_board_sha256": generated_protected_files[current_path],
+            "source_board_sha256": generated_protected_files[source_path],
+            "source_project_sha256": project_sha,
+            "board_sha256": hashlib.sha256(output_path.read_bytes()).hexdigest(),
+            "saved_copper_verified": True,
+            "saved_source_identity_layout_geometry_verified": True,
+            "saved_zones_and_stack_preserved": True,
+        })
     if plane_stitching is not None:
         saved_copper = _copper_state(reloaded)
         if (original_copper - saved_copper or _identity(reloaded) != identity
@@ -2007,6 +2138,9 @@ def execute(request):
             "saved_zones_and_stack_preserved": True,
         })
     result = {"status": "ok", "version": pcbnew.Version(), **_inspect(reloaded, pcbnew)}
+    if generated_route_repair is not None:
+        result["generated_route_repair"] = generated_route_repair
+        generated_removed_items.clear()
     if zone_refill is not None:
         result["zone_refill"] = zone_refill
     if plane_stitching is not None:

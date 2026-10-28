@@ -19,6 +19,13 @@ _ROUTER_DANGLING_RULES = {
 }
 
 
+def _remaining_generated_route_cleanup_items(pruned_track_count: int) -> int:
+    if (isinstance(pruned_track_count, bool) or not isinstance(pruned_track_count, int)
+            or not 0 <= pruned_track_count <= _MAX_ROUTER_DANGLING_TRACK_CLEANUP):
+        raise ValueError("Generated width pruning count must be an integer from 0 through 64")
+    return _MAX_ROUTER_DANGLING_TRACK_CLEANUP - pruned_track_count
+
+
 def _write_recovery_json(path: Path, payload: dict[str, Any]) -> None:
     """Persist a recovery diagnostic atomically before evaluating its gate."""
     temporary = path.with_name(path.name + ".tmp")
@@ -122,7 +129,98 @@ def _strict_native_route_drc(result: Any) -> bool:
     )
 
 
-def _clean_router_dangling_tracks(
+def _eligible_bounded_fanout_candidate(initial: dict[str, Any], session_path: Path) -> bool:
+    """Gate generated-copper repair to a selected, eligible bounded-fanout SES candidate."""
+    status = initial.get("status")
+    if status not in {"error", "partial", "review_required"}:
+        return False
+    if initial.get("routing_profile") != "bounded_fanout":
+        return False
+    search = initial.get("search")
+    if not isinstance(search, dict) or search.get("routing_profile") != "bounded_fanout":
+        return False
+    canonicalization = search.get("native_dsn_canonicalization")
+    if (not isinstance(canonicalization, dict)
+            or canonicalization.get("bounded_fanout_input_eligible") is not True):
+        return False
+    selected = search.get("selected_attempt")
+    attempts = search.get("attempts")
+    if type(selected) is not int or selected < 1 or not isinstance(attempts, list) or selected > len(attempts):
+        return False
+    selected_row = attempts[selected - 1]
+    if (not isinstance(selected_row, dict) or selected_row.get("routing_profile") != "bounded_fanout"
+            or selected_row.get("placement_order_strategy") != "ascending"):
+        return False
+    try:
+        if Path(initial.get("output_path", "")).resolve() != session_path.resolve():
+            return False
+        if Path(initial["artifact"]["path"]).resolve() != session_path.resolve():
+            return False
+    except (KeyError, TypeError, ValueError, OSError):
+        return False
+    artifact = initial.get("artifact")
+    stats = initial.get("stats")
+    if (not isinstance(artifact, dict) or artifact.get("valid") is not True or artifact.get("kind") != "ses"
+            or not isinstance(stats, dict) or type(stats.get("incomplete")) is not int
+            or stats["incomplete"] < 0):
+        return False
+    if status == "partial":
+        return stats["incomplete"] > 0 and initial.get("routing_complete") is False and "board_import" not in initial
+    if status == "review_required":
+        return stats["incomplete"] == 0 and initial.get("routing_complete") is True and "board_import" not in initial
+    if stats["incomplete"] != 0:
+        return False
+    imported = initial.get("board_import")
+    drc = imported.get("drc") if isinstance(imported, dict) else None
+    return bool(
+        isinstance(imported, dict)
+        and imported.get("status") == "error"
+        and imported.get("message") == _NATIVE_DRC_REJECTION_MESSAGE
+        and isinstance(drc, dict)
+        and drc.get("status") == "ok"
+        and drc.get("passed") is False
+    )
+
+
+def _generated_width_drc_findings_allowed(result: Any, *, allow_clearance: bool) -> bool:
+    """Require a complete fresh DRC containing only clearance and open findings."""
+    from .routing_recovery import _valid_report
+
+    raw = result.raw_report
+    if (result.status != "ok" or result.diagnostics_complete is not True
+            or not isinstance(raw, dict) or not _valid_report(result)):
+        return False
+    violations = raw["violations"]
+    opens = raw["unconnected_items"]
+    if raw["schematic_parity"]:
+        return False
+    if not allow_clearance:
+        return _router_dangling_warning_rows(result) is not None
+    if any(
+        not isinstance(row, dict)
+        or row.get("type") != "clearance"
+        or row.get("severity") != "error"
+        for row in violations
+    ):
+        return False
+    findings = list(result.findings)
+    clearance_findings = [finding for finding in findings if finding.rule_id == "CW-DRC-001"]
+    open_findings = [finding for finding in findings if finding.rule_id == "CW-DRC-002"]
+    if (len(findings) != len(violations) + len(opens)
+            or len(clearance_findings) != len(violations)
+            or len(open_findings) != len(opens)
+            or result.blocker_count != len(violations) + len(opens)):
+        return False
+    def verified_blocker(finding: Any) -> bool:
+        return (
+            finding.severity == "blocker" and finding.level == "error" and not finding.suppressed
+            and finding.detection_confidence == "verified" and finding.is_confirmed_blocker is True
+        )
+
+    return all(verified_blocker(finding) for finding in findings)
+
+
+def _repair_generated_fanout_widths(
     source: Path,
     partial: Path,
     *,
@@ -131,12 +229,172 @@ def _clean_router_dangling_tracks(
     deadline: float,
     source_snapshots: dict[Path, str | None],
 ) -> tuple[Path, Any, dict[str, Any]]:
+    """Widen a source-empty bounded-fanout candidate and prune only cleared generated tracks."""
+    from .drc_runner import run_drc
+    from .evidence import EvidenceLedger
+    from .kicad_bridge import run_kicad
+    from .pcb_layout import _check_snapshots, _prepare_settings, _restore_settings
+
+    root = work / "generated-route-repair"
+    root.mkdir(parents=True)
+    project_sha = source_snapshots.get(source.with_suffix(".kicad_pro"))
+    source_sha = source_snapshots.get(source)
+    if (not isinstance(source_sha, str) or len(source_sha) != 64
+            or not isinstance(project_sha, str) or len(project_sha) != 64):
+        raise ValueError("Generated route repair requires exact source board and project hashes")
+
+    def remaining(limit: int) -> int:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("Routing recovery budget expired during generated-route repair")
+        return max(1, min(limit, math.ceil(left)))
+
+    def run_and_retain(board: Path, label: str):
+        _check_snapshots(source_snapshots)
+        result = run_drc(
+            board,
+            evidence_ledger=EvidenceLedger(),
+            timeout=remaining(240),
+            project_context=source.parent,
+        )
+        digest = hashlib.sha256(board.read_bytes()).hexdigest()
+        report_path = root / f"{label}-drc.json"
+        _write_recovery_json(report_path, _native_drc_evidence(result))
+        _check_snapshots(source_snapshots)
+        if result.board_sha256 != digest:
+            raise ValueError("Fresh generated-route DRC does not match the exact candidate board bytes")
+        return result, report_path, digest
+
+    def run_worker(operation: str, current: Path, label: str, *, expected_sha: str, **extra):
+        candidate_dir = root / label
+        candidate_dir.mkdir()
+        candidate = candidate_dir / "candidate.kicad_pcb"
+        settings = _prepare_settings(source, candidate)
+        _check_snapshots(source_snapshots)
+        response = run_kicad(
+            operation,
+            board=str(current),
+            output=str(candidate),
+            source_board=str(source),
+            expected_board_sha256=expected_sha,
+            expected_source_board_sha256=source_sha,
+            expected_source_project_sha256=project_sha,
+            python_path=python,
+            timeout=remaining(180),
+            **extra,
+        )
+        _check_snapshots(source_snapshots)
+        if response.get("status") != "ok" or not candidate.is_file():
+            raise ValueError(f"Native {operation} failed: {response.get('message', 'candidate missing')}")
+        _restore_settings(source, candidate, settings)
+        _check_snapshots(source_snapshots)
+        report = response.get("generated_route_repair")
+        if not isinstance(report, dict):
+            raise ValueError(f"Native {operation} did not return a generated-route repair report")
+        candidate_sha = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        if (report.get("status") != "candidate_only_requires_fresh_drc"
+                or report.get("source_copper_item_count") != 0
+                or report.get("source_identity_preserved") is not True
+                or report.get("source_layout_preserved") is not True
+                or report.get("source_geometry_preserved") is not True
+                or report.get("other_copper_preserved") is not True
+                or report.get("source_copper_exact_subset_preserved") is not True
+                or report.get("input_board_sha256") != expected_sha
+                or report.get("source_board_sha256") != source_sha
+                or report.get("source_project_sha256") != project_sha
+                or report.get("board_sha256") != candidate_sha
+                or report.get("saved_copper_verified") is not True
+                or report.get("saved_source_identity_layout_geometry_verified") is not True
+                or report.get("saved_zones_and_stack_preserved") is not True):
+            raise ValueError(f"Native {operation} report failed source, save, or hash verification")
+        return candidate, report, candidate_sha
+
+    initial_sha = hashlib.sha256(partial.read_bytes()).hexdigest()
+    widened, width_report, widened_sha = run_worker(
+        "repair_generated_widths", partial, "width-repaired", expected_sha=initial_sha, max_tracks=4096,
+    )
+    changed = width_report.get("changed_tracks")
+    changed_count = width_report.get("changed_track_count")
+    if (not isinstance(changed, list) or type(changed_count) is not int
+            or changed_count != len(changed) or changed_count > 4096):
+        raise ValueError("Native generated width repair returned an invalid changed-track inventory")
+    changed_uuids = [row.get("uuid") for row in changed if isinstance(row, dict)]
+    if len(changed_uuids) != len(changed) or len(set(changed_uuids)) != len(changed_uuids):
+        raise ValueError("Native generated width repair returned malformed or duplicate track UUIDs")
+
+    after_width, after_width_path, after_width_sha = run_and_retain(widened, "after-width")
+    if not _generated_width_drc_findings_allowed(after_width, allow_clearance=True):
+        raise ValueError(f"Fresh after-width DRC contains incomplete or unknown findings: {after_width_path}")
+
+    prune_report: dict[str, Any] = {"status": "not_needed", "removed_track_count": 0, "removed_tracks": []}
+    current, final_drc, final_drc_path, final_sha = widened, after_width, after_width_path, after_width_sha
+    if after_width.raw_report["violations"]:
+        current, prune_report, pruned_sha = run_worker(
+            "prune_generated_width_clearances", widened, "clearance-pruned",
+            expected_sha=widened_sha,
+            drc_report=dict(after_width.raw_report),
+            width_repair_report=width_report,
+            max_items=64,
+        )
+        removed = prune_report.get("removed_tracks")
+        removed_count = prune_report.get("removed_track_count")
+        removed_uuids = (
+            [row.get("uuid") for row in removed if isinstance(row, dict)]
+            if isinstance(removed, list)
+            else []
+        )
+        if (not isinstance(removed, list) or type(removed_count) is not int
+                or removed_count != len(removed) or removed_count > 64
+                or len(removed_uuids) != len(removed) or len(set(removed_uuids)) != len(removed_uuids)
+                or not set(removed_uuids).issubset(changed_uuids)):
+            raise ValueError("Native generated clearance pruning returned an invalid removal inventory")
+        final_drc, final_drc_path, final_sha = run_and_retain(current, "after-prune")
+        if not _generated_width_drc_findings_allowed(final_drc, allow_clearance=False):
+            raise ValueError(
+                "Fresh after-prune DRC contains remaining clearance or unknown findings: "
+                f"{final_drc_path}"
+            )
+        prune_report["fresh_drc"] = str(final_drc_path)
+        prune_report["fresh_drc_board_sha256"] = final_sha
+        prune_report["input_board_sha256"] = widened_sha
+        prune_report["output_board_sha256"] = pruned_sha
+
+    summary = {
+        "used": True,
+        "status": "fresh_drc_verified",
+        "width_repair": width_report,
+        "after_width_drc": str(after_width_path),
+        "after_width_board_sha256": after_width_sha,
+        "clearance_prune": prune_report,
+        "final_drc": str(final_drc_path),
+        "final_board_sha256": final_sha,
+        "pruned_track_count": prune_report.get("removed_track_count", 0),
+        "combined_removal_cap": _MAX_ROUTER_DANGLING_TRACK_CLEANUP,
+        "source_board_sha256": source_sha,
+        "source_project_sha256": project_sha,
+    }
+    return current, final_drc, summary
+
+
+def _clean_router_dangling_tracks(
+    source: Path,
+    partial: Path,
+    *,
+    work: Path,
+    python: str | Path | None,
+    deadline: float,
+    source_snapshots: dict[Path, str | None],
+    max_items: int = _MAX_ROUTER_DANGLING_TRACK_CLEANUP,
+) -> tuple[Path, Any, dict[str, Any]]:
     """Normalize only bounded, explicitly identified generated dangling tracks."""
     from .drc_runner import run_drc
     from .evidence import EvidenceLedger
     from .kicad_bridge import run_kicad
     from .pcb_layout import _check_snapshots, _prepare_settings, _restore_settings
     from .routing_recovery import _open_count
+
+    if isinstance(max_items, bool) or not isinstance(max_items, int) or not 0 <= max_items <= 64:
+        raise ValueError("max_items must be an integer from 0 through 64")
 
     root = work / "native-dangling-cleanup"
     root.mkdir(parents=True)
@@ -172,7 +430,7 @@ def _clean_router_dangling_tracks(
             "initial_drc": str(before_path),
             "initial_board_sha256": before_sha,
             "removed_track_count": 0,
-            "cap": _MAX_ROUTER_DANGLING_TRACK_CLEANUP,
+            "cap": max_items,
         }
 
     while True:
@@ -184,9 +442,9 @@ def _clean_router_dangling_tracks(
             )
         if not warning_rows:
             raise ValueError(f"Native DRC is neither opens-only nor a recognized dangling cleanup state: {before_path}")
-        if removed_total + len(warning_rows) > _MAX_ROUTER_DANGLING_TRACK_CLEANUP:
+        if removed_total + len(warning_rows) > max_items:
             raise ValueError(
-                f"Router dangling cleanup exceeded its {_MAX_ROUTER_DANGLING_TRACK_CLEANUP}-item bound; "
+                f"Router dangling cleanup exceeded its {max_items}-item bound; "
                 f"see retained DRC {before_path}"
             )
 
@@ -207,7 +465,7 @@ def _clean_router_dangling_tracks(
             expected_source_board_sha256=source_snapshots[source],
             expected_board_sha256=before_sha,
             warning_rows=warning_rows,
-            max_tracks=_MAX_ROUTER_DANGLING_TRACK_CLEANUP - removed_total,
+            max_tracks=max_items - removed_total,
             python_path=python,
             timeout=remaining(180),
         )
@@ -310,15 +568,15 @@ def _clean_router_dangling_tracks(
                 "removed_track_count": sum(len(step["removed_tracks"]) for step in steps),
                 "removed_via_count": sum(len(step["removed_vias"]) for step in steps),
                 "removed_item_count": removed_total,
-                "cap": _MAX_ROUTER_DANGLING_TRACK_CLEANUP,
+                "cap": max_items,
                 "source_copper_exact_subset_preserved": True,
                 "no_added_copper": True,
                 "open_count_nonincreasing": True,
                 "dangling_warning_count_nonincreasing": True,
             }
-        if removed_total >= _MAX_ROUTER_DANGLING_TRACK_CLEANUP:
+        if removed_total >= max_items:
             raise ValueError(
-                f"Router dangling cleanup reached its {_MAX_ROUTER_DANGLING_TRACK_CLEANUP}-item bound; "
+                f"Router dangling cleanup reached its {max_items}-item bound; "
                 f"see retained DRC {before_path}"
             )
 
@@ -589,6 +847,7 @@ def autoroute_with_recovery(
 
     work: Path | None = None
     dangling_cleanup: dict[str, Any] = {"status": "not_run"}
+    generated_route_repair: dict[str, Any] = {"used": False}
     try:
         source = Path(pcb_path).resolve()
         if source.suffix.lower() != ".kicad_pcb" or not source.is_file() or routed_board_path is None:
@@ -625,22 +884,53 @@ def autoroute_with_recovery(
         work = Path(tempfile.mkdtemp(prefix=".cw-route-recovery-", dir=destination.parent))
         initial_session = work / "initial.ses"
         python = router_options.get("kicad_python_path")
+        initial_router_options = dict(router_options)
+        initial_router_options.update(_allow_partial_nets=True, _native_fanout_profile=True)
         initial = autoroute_pcb(
             source,
             str(initial_session),
             routed_board_path=work / "initial-complete.kicad_pcb",
-            _allow_partial_nets=True,
-            **router_options,
+            **initial_router_options,
         )
         _check_snapshots(snapshots)
         native_open_rejection = _eligible_native_open_rejection(initial, initial_session)
+        native_generated_rejection = _eligible_bounded_fanout_candidate(initial, initial_session)
         if (
-            initial.get("status") not in {"ok", "partial", "review_required"} and not native_open_rejection
+            initial.get("status") not in {"ok", "partial", "review_required"}
+            and not native_open_rejection and not native_generated_rejection
         ) or not initial_session.is_file():
-            return {**initial, "recovery_evidence_dir": str(work), "routing_complete": False}
+            return {
+                **initial,
+                "recovery_evidence_dir": str(work),
+                "routing_complete": False,
+                "generated_route_repair": generated_route_repair,
+            }
         recovery_trigger = None
         private_session_sha256 = None
-        if native_open_rejection:
+        if native_generated_rejection:
+            private_session_sha256 = hashlib.sha256(initial_session.read_bytes()).hexdigest()
+            recovery_trigger = {
+                "kind": (
+                    "bounded_native_fanout_import_rejected"
+                    if initial.get("status") == "error"
+                    else "bounded_native_fanout_partial_session"
+                ),
+                "message": (
+                    "The selected bounded-fanout native portfolio candidate did not pass its initial native route "
+                    "gate; "
+                    "the validated SES is quarantined for source-bound width repair and fresh native DRC."
+                ),
+                "routing_profile": "bounded_fanout",
+                "session_path": str(initial_session),
+                "session_sha256": private_session_sha256,
+                "router_incomplete": initial["stats"]["incomplete"],
+                "native_drc": (
+                    initial.get("board_import", {}).get("drc")
+                    if isinstance(initial.get("board_import"), dict)
+                    else None
+                ),
+            }
+        elif native_open_rejection:
             private_session_sha256 = hashlib.sha256(initial_session.read_bytes()).hexdigest()
             native_drc = initial["board_import"]["drc"]
             native_findings = native_drc["findings"]
@@ -720,11 +1010,24 @@ def autoroute_with_recovery(
             if imported.get("status") != "ok" or not partial.is_file():
                 raise ValueError("Could not import the partial session into private native quarantine")
             if (
-                native_open_rejection
+                (native_open_rejection or native_generated_rejection)
                 and hashlib.sha256(initial_session.read_bytes()).hexdigest() != private_session_sha256
             ):
                 raise ValueError("Validated private SES changed during native quarantine import")
             _restore_settings(source, partial, staged_settings)
+            max_dangling_items = _MAX_ROUTER_DANGLING_TRACK_CLEANUP
+            if native_generated_rejection:
+                partial, partial_drc, generated_route_repair = _repair_generated_fanout_widths(
+                    source,
+                    partial,
+                    work=work,
+                    python=python,
+                    deadline=deadline,
+                    source_snapshots=snapshots,
+                )
+                max_dangling_items = _remaining_generated_route_cleanup_items(
+                    generated_route_repair["pruned_track_count"]
+                )
             partial, partial_drc, dangling_cleanup = _clean_router_dangling_tracks(
                 source,
                 partial,
@@ -732,7 +1035,22 @@ def autoroute_with_recovery(
                 python=python,
                 deadline=deadline,
                 source_snapshots=snapshots,
+                max_items=max_dangling_items,
             )
+            if generated_route_repair.get("used"):
+                dangling_removed = dangling_cleanup.get("removed_item_count")
+                if dangling_removed is None:
+                    dangling_removed = (
+                        dangling_cleanup.get("removed_track_count", 0)
+                        + dangling_cleanup.get("removed_via_count", 0)
+                    )
+                generated_route_repair["dangling_cleanup_removed_item_count"] = dangling_removed
+                generated_route_repair["combined_removed_item_count"] = (
+                    generated_route_repair["pruned_track_count"] + dangling_removed
+                )
+                generated_route_repair["combined_removal_cap"] = _MAX_ROUTER_DANGLING_TRACK_CLEANUP
+                if generated_route_repair["combined_removed_item_count"] > _MAX_ROUTER_DANGLING_TRACK_CLEANUP:
+                    raise ValueError("Generated width pruning and dangling cleanup exceeded the combined 64-item cap")
             if _open_count(partial_drc) > 0:
                 repair = recover_routing(
                     partial,
@@ -749,6 +1067,7 @@ def autoroute_with_recovery(
                         "routing_complete": False,
                         "recovery": repair,
                         "router_dangling_cleanup": dangling_cleanup,
+                        "generated_route_repair": generated_route_repair,
                         "recovery_evidence_dir": str(work),
                         "fabrication_ready": False,
                         **({"recovery_trigger": recovery_trigger} if recovery_trigger else {}),
@@ -762,6 +1081,7 @@ def autoroute_with_recovery(
                     "status": "not_needed_native_drc_clean",
                     "output_path": str(partial),
                     "router_dangling_cleanup": dangling_cleanup,
+                    "generated_route_repair": generated_route_repair,
                 }
                 serialization_source = partial
             completed_session = work / "complete.ses"
@@ -809,12 +1129,14 @@ def autoroute_with_recovery(
                     "serialization": serialization if repair.get("used") is not False else None,
                     "recovery_evidence_dir": str(work),
                     "router_dangling_cleanup": dangling_cleanup,
+                    "generated_route_repair": generated_route_repair,
                     **({"recovery_trigger": recovery_trigger} if recovery_trigger else {})}
         return {
             **accepted,
             "session_path": str(session),
             "recovery": repair,
             "router_dangling_cleanup": dangling_cleanup,
+            "generated_route_repair": generated_route_repair,
             **({"serialization": serialization} if repair.get("used") is not False else {}),
             "recovery_evidence_dir": str(work),
             **({"recovery_trigger": recovery_trigger} if recovery_trigger else {}),
@@ -834,5 +1156,6 @@ def autoroute_with_recovery(
             "routing_complete": False,
             "recovery_evidence_dir": str(work) if work is not None else None,
             "router_dangling_cleanup": dangling_cleanup,
+            "generated_route_repair": generated_route_repair,
             "fabrication_ready": False,
         }

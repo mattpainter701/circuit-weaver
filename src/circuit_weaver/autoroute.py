@@ -1584,6 +1584,30 @@ def _freerouting_v25_or_newer(capability_probe: dict[str, Any] | None) -> bool:
     return bool(match and tuple(map(int, match.groups())) >= (2, 5))
 
 
+def _native_fanout_input_eligible(canonicalization: dict[str, Any]) -> bool:
+    """Prove the native DSN is a copper-empty, zone-free two-copper-layer board."""
+    semantic = canonicalization.get("semantic")
+    untouched = semantic.get("untouched_sections") if isinstance(semantic, dict) else None
+    structure = untouched.get("structure") if isinstance(untouched, dict) else None
+    if not isinstance(structure, str) or not _sexpr_is_balanced(structure):
+        return False
+    layers = list(_iter_sexpr_blocks(structure, "layer"))
+    layer_names = [_first_payload_token(layer, "layer") for layer in layers]
+    if len(layers) != 2 or any(not name or not name.casefold().endswith(".cu") for name in layer_names):
+        return False
+    if len({name.casefold() for name in layer_names}) != 2:
+        return False
+    if any(list(_iter_sexpr_blocks(structure, keyword)) for keyword in ("plane", "copper", "zone")):
+        return False
+    wiring = untouched.get("wiring")
+    if wiring is not None:
+        if not isinstance(wiring, str) or not _sexpr_is_balanced(wiring):
+            return False
+        if any(list(_iter_sexpr_blocks(wiring, keyword)) for keyword in ("wire", "via", "arc")):
+            return False
+    return True
+
+
 def _modern_router(capability_probe: dict[str, Any] | None) -> bool:
     match = re.match(r"(\d+)\.(\d+)", str((capability_probe or {}).get("version") or ""))
     return bool(match and tuple(map(int, match.groups())) >= (2, 4))
@@ -1790,6 +1814,7 @@ def _route_specctra(
     logs_root: Path | None = None,
     allow_partial_nets: bool = False,
     cooperative_partial_timeout: bool = False,
+    native_fanout_profile: bool = False,
 ) -> dict[str, Any]:
     prepare_error = _prepare_destination(ses_path, overwrite=overwrite)
     if prepare_error:
@@ -1825,10 +1850,24 @@ def _route_specctra(
             [
                 "--router.automatic_neckdown=false",
                 "--router.neck_width_um=0",
-                "--router.fanout.enabled=false",
+                f"--router.fanout.enabled={'true' if native_fanout_profile else 'false'}",
             ]
         )
     v25_or_newer = _freerouting_v25_or_newer(capability_probe)
+    if native_fanout_profile and not v25_or_newer:
+        _remove_staging_file(staging)
+        return _result_error("Bounded native fanout profile requires Freerouting 2.5.0 or newer")
+    if native_fanout_profile:
+        routing_command.extend(
+            [
+                "--router.fanout.max_passes=1",
+                "--router.fanout.max_milliseconds_per_pin=50",
+                "--router.fanout.min_escape_length_mm=1.0",
+                "--router.fanout.max_escape_length_mm=3.0",
+                "--router.fanout.fallback_to_board_vias=false",
+                "--router.fanout.ripup_allowed=false",
+            ]
+        )
     timeout_budget = _partial_route_timeout_budget(
         timeout_seconds,
         capability_probe=capability_probe,
@@ -2213,6 +2252,7 @@ def _route_candidates(
     overwrite: bool,
     seed: int | None,
     native_placement_portfolio: bool = False,
+    native_fanout_profile: bool = False,
     logs_root: Path | None = None,
     **options: Any,
 ) -> dict[str, Any]:
@@ -2242,14 +2282,22 @@ def _route_candidates(
     winner_path: Path | None = None
     winner_index: int | None = None
     supports_seed = bool((options.get("capability_probe") or {}).get("seed"))
+    use_fanout_profile = bool(
+        native_fanout_profile and native_placement_portfolio and attempts >= 3
+        and options.get("allow_partial_nets")
+        and _freerouting_v25_or_newer(options.get("capability_probe"))
+    )
     base_seed = (0 if seed is None else seed) if supports_seed else None
     try:
         input_snapshot = dsn_path.read_bytes()
         input_hash = hashlib.sha256(input_snapshot).hexdigest()
         native_dsn_text = None
         native_dsn_canonicalization = None
+        fanout_input_eligible = False
         if native_placement_portfolio:
             native_dsn_text, canonicalization = canonicalize_native_dsn(input_snapshot.decode("utf-8"))
+            fanout_input_eligible = _native_fanout_input_eligible(canonicalization)
+            use_fanout_profile = use_fanout_profile and fanout_input_eligible
             native_dsn_canonicalization = {
                 "source_sha256": canonicalization["source_sha256"],
                 "canonical_sha256": canonicalization["canonical_sha256"],
@@ -2259,6 +2307,7 @@ def _route_candidates(
                 "image_alias_count": len(canonicalization["image_alias_map"]),
                 "placement_count": len(canonicalization["semantic"]["placements"]),
                 "net_count": len(canonicalization["semantic"]["net_membership"]),
+                "bounded_fanout_input_eligible": fanout_input_eligible,
             }
         # Same filesystem as the destination allows atomic final publication.
         # The context also cleans up losing sessions and interrupted attempts.
@@ -2269,13 +2318,20 @@ def _route_candidates(
                     break
                 path = Path(temporary) / f"candidate-{index + 1}.ses"
                 attempt_options = dict(options)
+                attempt_profile = "bounded_fanout" if use_fanout_profile and index == attempts - 1 else "standard"
+                if attempt_profile == "bounded_fanout":
+                    attempt_options["native_fanout_profile"] = True
                 attempt_seed = base_seed + index if base_seed is not None else None
                 route_dsn = dsn_path
                 placement_order = None
                 candidate_hash = None
                 placement_order_kind = None
                 if native_placement_portfolio:
-                    if index == 0:
+                    if attempt_profile == "bounded_fanout":
+                        # The bounded profile is calibrated against the ascending
+                        # placement variant, so rerun that exact ordering.
+                        placement_order_kind = "ascending"
+                    elif index == 0:
                         placement_order_kind = "ascending"
                     elif index == 1:
                         placement_order_kind = "descending"
@@ -2341,6 +2397,7 @@ def _route_candidates(
                     "optimizer_strategy": attempt_options.get("optimizer_strategy"),
                     "status": result["status"],
                     "timeout_seconds": allowance,
+                    "routing_profile": attempt_profile,
                 }
                 if options.get("cooperative_partial_timeout"):
                     row["timeout_budget"] = _partial_route_timeout_budget(
@@ -2391,6 +2448,9 @@ def _route_candidates(
                 ):
                     winner, winner_path, winner_index = result, path, index + 1
             search = {
+                "routing_profile": (
+                    attempt_rows[winner_index - 1]["routing_profile"] if winner_index else "standard"
+                ),
                 "requested_attempts": attempts,
                 "completed_attempts": len(attempt_rows),
                 "selected_attempt": winner_index,
@@ -2420,7 +2480,7 @@ def _route_candidates(
             if error:
                 return _result_error(error, search=search)
             winner["artifact"]["path"] = str(ses_path)
-            return {**winner, "search": search}
+            return {**winner, "search": search, "routing_profile": search["routing_profile"]}
     except (ValueError, UnicodeDecodeError) as exc:
         return _result_error(f"Cannot prepare native routing-order variant: {exc}", attempts=attempt_rows)
     except OSError as exc:
@@ -2451,6 +2511,7 @@ def autoroute_pcb(
     recovery_timeout_seconds: float = 600,
     max_repair_links: int = 256,
     _allow_partial_nets: bool = False,
+    _native_fanout_profile: bool = False,
 ) -> dict[str, Any]:
     """Route a real KiCad board or a user-supplied DSN with Freerouting.
 
@@ -2461,6 +2522,8 @@ def autoroute_pcb(
     """
     if not isinstance(repair_open_connections, bool):
         return _result_error("repair_open_connections must be a boolean")
+    if not isinstance(_native_fanout_profile, bool):
+        return _result_error("_native_fanout_profile must be a boolean")
     if repair_open_connections:
         from .autoroute_recovery import autoroute_with_recovery
 
@@ -2680,6 +2743,12 @@ def autoroute_pcb(
         optimizer_improvement_threshold=optimizer_improvement_threshold,
         seed=seed,
         native_placement_portfolio=source_suffix == ".kicad_pcb",
+        # Width repair must bind the authored project rules to every native
+        # candidate. A standalone board keeps its ordinary portfolio instead.
+        native_fanout_profile=(
+            _native_fanout_profile and source_suffix == ".kicad_pcb"
+            and source.with_suffix(".kicad_pro").is_file()
+        ),
         logs_root=ses_path.parent / ".circuit-weaver-router-logs",
         capability_probe=capability_probe,
         clearance_baseline=clearance_baseline,
@@ -2732,6 +2801,7 @@ def autoroute_pcb(
         "stats": stats,
         "router": route_result["router"],
         "verification": route_result["verification"],
+        **({"routing_profile": route_result["routing_profile"]} if "routing_profile" in route_result else {}),
         "routing_complete": incomplete == 0,
         "fabrication_ready": False,
         "requires_kicad_drc": True,

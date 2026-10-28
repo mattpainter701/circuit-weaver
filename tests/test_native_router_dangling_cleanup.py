@@ -409,6 +409,49 @@ def _drc(board: Path, warning_ids=(), *, open_count=2, extra_violation=None):
     return DrcResult("ok", str(board), board_sha256=digest, findings=tuple(findings), raw_report=raw)
 
 
+def _generated_route_drc(board: Path, *, clearance_count=0, open_count=0, track_warnings=0, via_warnings=0,
+                         unknown_type=None, diagnostics_complete=True, clearance_severity="blocker",
+                         clearance_suppressed=False, clearance_confidence="verified"):
+    violations = [
+        {"type": "clearance", "severity": "error", "items": [{"uuid": f"widened-{index}"}]}
+        for index in range(clearance_count)
+    ]
+    violations.extend(_warning(f"dangling-track-{index}") for index in range(track_warnings))
+    violations.extend(_via_warning(f"dangling-via-{index}") for index in range(via_warnings))
+    if unknown_type:
+        violations.append({"type": unknown_type, "severity": "error", "items": []})
+    raw = {
+        "violations": violations,
+        "unconnected_items": [{"items": [{"uuid": f"open-{index}"}]} for index in range(open_count)],
+        "schematic_parity": [],
+    }
+    findings = [
+        ValidationIssue(
+            "CW-DRC-001", level="error" if clearance_severity == "blocker" else "warning",
+            message="clearance", severity=clearance_severity,
+            detection_confidence=clearance_confidence, rule_id="CW-DRC-001",
+            suppressed=clearance_suppressed,
+            suppression_id="explicit-test-suppression" if clearance_suppressed else None,
+        )
+        for _ in range(clearance_count)
+    ]
+    findings.extend(_open_finding(index) for index in range(open_count))
+    findings.extend(_dangling_finding() for _ in range(track_warnings))
+    findings.extend(
+        ValidationIssue(
+            "CW-DRC-893", level="warning", message="via dangling", severity="major",
+            detection_confidence="verified", rule_id="CW-DRC-893",
+        )
+        for _ in range(via_warnings)
+    )
+    if unknown_type:
+        findings.append(ValidationIssue("CW-DRC-003", level="error", message="unknown", rule_id="CW-DRC-003"))
+    return DrcResult(
+        "ok", str(board), board_sha256=hashlib.sha256(board.read_bytes()).hexdigest(),
+        findings=tuple(findings), raw_report=raw, diagnostics_complete=diagnostics_complete,
+    )
+
+
 def _cleanup_report(removed_tracks, **updates):
     removed_tracks = list(removed_tracks)
     report = {
@@ -567,6 +610,233 @@ def test_host_cleanup_stops_at_bounded_track_cap(tmp_path, monkeypatch):
         )
     assert not called
     assert (tmp_path / "work" / "native-dangling-cleanup" / "step-00-before-drc.json").is_file()
+
+
+def test_host_cleanup_uses_remaining_combined_generated_removal_cap(tmp_path, monkeypatch):
+    source = tmp_path / "source.kicad_pcb"
+    source.write_bytes(b"source")
+    partial = tmp_path / "partial.kicad_pcb"
+    partial.write_bytes(b"partial")
+    warnings = tuple(f"stub-{index}" for index in range(14))
+    worker_calls = []
+
+    def run_kicad(_operation, **kwargs):
+        worker_calls.append(kwargs["max_tracks"])
+        Path(kwargs["output"]).write_bytes(b"cleaned")
+        return {"status": "ok", "router_dangling_cleanup": _cleanup_report(
+            [{"uuid": uuid} for uuid in warnings]
+        )}
+
+    drc_calls = []
+
+    def run_drc(board, **_kwargs):
+        drc_calls.append(Path(board))
+        return _drc(Path(board), warnings if len(drc_calls) == 1 else (), open_count=5)
+
+    _install_host_mocks(monkeypatch, run_drc, run_kicad)
+    monkeypatch.setattr("circuit_weaver.pcb_layout._check_snapshots", lambda *_args: None)
+    _board, _drc_result, summary = autoroute_recovery._clean_router_dangling_tracks(
+        source, partial, work=tmp_path / "work", python=None,
+        deadline=autoroute_recovery.time.monotonic() + 60,
+        source_snapshots={source: hashlib.sha256(source.read_bytes()).hexdigest()},
+        max_items=14,
+    )
+    assert worker_calls == [14]
+    assert summary["cap"] == 14
+
+
+def test_host_cleanup_accepts_zero_remaining_cap_when_no_dangling_items(tmp_path, monkeypatch):
+    source = tmp_path / "source.kicad_pcb"
+    source.write_bytes(b"source")
+    partial = tmp_path / "partial.kicad_pcb"
+    partial.write_bytes(b"partial")
+    _install_host_mocks(
+        monkeypatch,
+        lambda board, **_kwargs: _drc(Path(board), open_count=0),
+        lambda *_args, **_kwargs: pytest.fail("no cleanup should run for a clean candidate"),
+    )
+    summary_board, report, summary = autoroute_recovery._clean_router_dangling_tracks(
+        source, partial, work=tmp_path / "work", python=None,
+        deadline=autoroute_recovery.time.monotonic() + 60,
+        source_snapshots={source: hashlib.sha256(source.read_bytes()).hexdigest()},
+        max_items=0,
+    )
+    assert summary_board == partial
+    assert report.passed
+    assert summary["cap"] == 0
+    assert summary["removed_track_count"] == 0
+
+
+def test_generated_and_dangling_removals_share_the_64_item_cap():
+    assert autoroute_recovery._remaining_generated_route_cleanup_items(8) == 56
+    assert autoroute_recovery._remaining_generated_route_cleanup_items(50) == 14
+    assert autoroute_recovery._remaining_generated_route_cleanup_items(64) == 0
+
+
+def test_generated_width_repair_accepts_real_clearance_and_post_prune_dangling_states(tmp_path):
+    board = tmp_path / "candidate.kicad_pcb"
+    board.write_bytes(b"candidate")
+    after_width = _generated_route_drc(board, clearance_count=8, open_count=5)
+    after_prune = _generated_route_drc(board, open_count=5, track_warnings=4, via_warnings=3)
+    assert autoroute_recovery._generated_width_drc_findings_allowed(after_width, allow_clearance=True)
+    assert autoroute_recovery._generated_width_drc_findings_allowed(after_prune, allow_clearance=False)
+    assert len(autoroute_recovery._router_dangling_warning_rows(after_prune)) == 7
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        "unknown",
+        "truncated",
+        "nonblocker-clearance",
+        "suppressed-clearance",
+    ],
+)
+def test_generated_width_drc_rejects_unknown_or_incomplete_findings(tmp_path, result):
+    board = tmp_path / "candidate.kicad_pcb"
+    board.write_bytes(b"candidate")
+    options = {"clearance_count": 1, "open_count": 1}
+    if result == "unknown":
+        options["unknown_type"] = "track_width"
+    elif result == "truncated":
+        options["diagnostics_complete"] = False
+    elif result == "nonblocker-clearance":
+        options["clearance_severity"] = "major"
+    else:
+        options["clearance_suppressed"] = True
+    report = _generated_route_drc(board, **options)
+    assert not autoroute_recovery._generated_width_drc_findings_allowed(report, allow_clearance=True)
+
+
+def test_host_generated_width_repair_sequences_hashed_worker_steps_and_full_drc(tmp_path, monkeypatch):
+    source = tmp_path / "source.kicad_pcb"
+    source.write_bytes(b"source-board")
+    source.with_suffix(".kicad_pro").write_bytes(b"source-project")
+    partial = tmp_path / "partial.kicad_pcb"
+    partial.write_bytes(b"imported-partial")
+    source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+    project_sha = hashlib.sha256(source.with_suffix(".kicad_pro").read_bytes()).hexdigest()
+    snapshots = {
+        source: source_sha,
+        source.with_suffix(".kicad_pro"): project_sha,
+        source.with_suffix(".kicad_dru"): None,
+    }
+    operations = []
+    changed_tracks = [
+        {"uuid": f"generated-{index}", "net": "NET_A", "before_width_iu": 100,
+         "after_width_iu": 200}
+        for index in range(8)
+    ]
+
+    def run_kicad(operation, **kwargs):
+        operations.append((operation, kwargs))
+        input_sha = hashlib.sha256(Path(kwargs["board"]).read_bytes()).hexdigest()
+        output = Path(kwargs["output"])
+        output.write_bytes(b"width-repaired" if operation == "repair_generated_widths" else b"clearance-pruned")
+        report = {
+            "status": "candidate_only_requires_fresh_drc",
+            "source_copper_item_count": 0,
+            "source_identity_preserved": True,
+            "source_layout_preserved": True,
+            "source_geometry_preserved": True,
+            "other_copper_preserved": True,
+            "source_copper_exact_subset_preserved": True,
+            "input_board_sha256": input_sha,
+            "source_board_sha256": source_sha,
+            "source_project_sha256": project_sha,
+            "board_sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
+            "saved_copper_verified": True,
+            "saved_source_identity_layout_geometry_verified": True,
+            "saved_zones_and_stack_preserved": True,
+        }
+        if operation == "repair_generated_widths":
+            report.update({"changed_tracks": changed_tracks, "changed_track_count": 8})
+        else:
+            report.update({"removed_tracks": [{"uuid": row["uuid"]} for row in changed_tracks],
+                           "removed_track_count": 8})
+        return {"status": "ok", "generated_route_repair": report}
+
+    def run_drc(board, **_kwargs):
+        board = Path(board)
+        if board.read_bytes() == b"width-repaired":
+            return _generated_route_drc(board, clearance_count=8, open_count=5)
+        return _generated_route_drc(board, open_count=5, track_warnings=4, via_warnings=3)
+
+    monkeypatch.setattr("circuit_weaver.drc_runner.run_drc", run_drc)
+    monkeypatch.setattr("circuit_weaver.kicad_bridge.run_kicad", run_kicad)
+    monkeypatch.setattr("circuit_weaver.pcb_layout._prepare_settings", lambda *_args: {})
+    monkeypatch.setattr("circuit_weaver.pcb_layout._restore_settings", lambda *_args: None)
+    candidate, final_drc, summary = autoroute_recovery._repair_generated_fanout_widths(
+        source, partial, work=tmp_path / "work", python=None,
+        deadline=autoroute_recovery.time.monotonic() + 60,
+        source_snapshots=snapshots,
+    )
+    assert [operation for operation, _ in operations] == [
+        "repair_generated_widths", "prune_generated_width_clearances"
+    ]
+    assert operations[0][1]["max_tracks"] == 4096
+    assert operations[1][1]["max_items"] == 64
+    assert operations[0][1]["expected_source_board_sha256"] == source_sha
+    assert operations[0][1]["expected_source_project_sha256"] == project_sha
+    assert Path(operations[0][1]["output"]).parent != Path(operations[1][1]["output"]).parent
+    assert candidate.read_bytes() == b"clearance-pruned"
+    assert final_drc.blocker_count == 5
+    assert summary["status"] == "fresh_drc_verified"
+    assert summary["pruned_track_count"] == 8
+    assert summary["combined_removal_cap"] == 64
+    assert summary["after_width_board_sha256"] == hashlib.sha256(
+        Path(operations[0][1]["output"]).read_bytes()
+    ).hexdigest()
+
+
+def test_host_generated_width_repair_rejects_worker_output_hash_mismatch(tmp_path, monkeypatch):
+    source = tmp_path / "source.kicad_pcb"
+    source.write_bytes(b"source-board")
+    source.with_suffix(".kicad_pro").write_bytes(b"source-project")
+    partial = tmp_path / "partial.kicad_pcb"
+    partial.write_bytes(b"imported-partial")
+    source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+    project_sha = hashlib.sha256(source.with_suffix(".kicad_pro").read_bytes()).hexdigest()
+    snapshots = {source: source_sha, source.with_suffix(".kicad_pro"): project_sha}
+
+    def run_kicad(_operation, **kwargs):
+        output = Path(kwargs["output"])
+        output.write_bytes(b"tampered-report-target")
+        return {
+            "status": "ok",
+            "generated_route_repair": {
+                "status": "candidate_only_requires_fresh_drc",
+                "source_copper_item_count": 0,
+                "source_identity_preserved": True,
+                "source_layout_preserved": True,
+                "source_geometry_preserved": True,
+                "other_copper_preserved": True,
+                "source_copper_exact_subset_preserved": True,
+                "input_board_sha256": kwargs["expected_board_sha256"],
+                "source_board_sha256": source_sha,
+                "source_project_sha256": project_sha,
+                "board_sha256": "0" * 64,
+                "saved_copper_verified": True,
+                "saved_source_identity_layout_geometry_verified": True,
+                "saved_zones_and_stack_preserved": True,
+                "changed_tracks": [],
+                "changed_track_count": 0,
+            },
+        }
+
+    monkeypatch.setattr("circuit_weaver.kicad_bridge.run_kicad", run_kicad)
+    monkeypatch.setattr("circuit_weaver.pcb_layout._prepare_settings", lambda *_args: {})
+    monkeypatch.setattr("circuit_weaver.pcb_layout._restore_settings", lambda *_args: None)
+    monkeypatch.setattr(
+        "circuit_weaver.drc_runner.run_drc",
+        lambda *_args, **_kwargs: pytest.fail("bad worker hash must fail before DRC"),
+    )
+    with pytest.raises(ValueError, match="report failed source, save, or hash verification"):
+        autoroute_recovery._repair_generated_fanout_widths(
+            source, partial, work=tmp_path / "work", python=None,
+            deadline=autoroute_recovery.time.monotonic() + 60,
+            source_snapshots=snapshots,
+        )
 
 
 def test_host_cleanup_rechecks_source_snapshot_after_worker_mutation(tmp_path, monkeypatch):

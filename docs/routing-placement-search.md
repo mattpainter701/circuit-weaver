@@ -26,7 +26,8 @@ Install [Freerouting](https://github.com/freerouting/freerouting/releases) and i
 required Java runtime. Set `CIRCUIT_WEAVER_FREEROUTING` to the JAR or launcher and
 `CIRCUIT_WEAVER_JAVA` to Java when it is not on PATH. A portable installation may
 instead use `~/.freerouting/freerouting.jar` and `~/.freerouting/runtime/bin/java`
-(`java.exe` on Windows). CI pins Freerouting 2.4.1 with Java 25.
+(`java.exe` on Windows). CI pins Freerouting 2.4.1 for the general corpus and
+2.5.0 for unseen scale workflows, using Java 25.
 
 ## Supported scope
 
@@ -232,6 +233,40 @@ returned `search` object explains the selection and failed attempts. The final
 artifact is a Specctra session by default. `--routed-board` performs the import
 and native DRC automatically when the input is a real PCB. No fabrication
 readiness or controlled-impedance guarantee is inferred.
+
+### Bounded native recovery
+
+The opt-in open-connection recovery workflow retains rejected candidates in
+private quarantine. Ordinary recovery runs first. If it stalls, bidirectional
+search tries 0.5, 0.25 and 0.125 mm grids within the existing shared deadline,
+link limits and 150,000-state cap per native request. Each accepted proposal
+must preserve source copper, placement, labels and geometry, acknowledge the
+requested search bounds, and reduce opens under fresh full native DRC.
+
+For a fresh two-layer board with an authored `.kicad_pro` and without zones or
+authored routing, recovery can
+use a bounded fanout profile in the last existing portfolio attempt when
+Freerouting 2.5+ is available and at least three attempts were requested. The
+first two declaration-order attempts retain their ordinary behavior. Four-layer
+boards, source wiring and ambiguous exports disable this profile. It adds no
+portfolio attempt or extra routing budget; evidence identifies the selected
+profile and its actual launch settings.
+
+Freerouting's fanout can generate narrower tracks even with automatic neckdown
+disabled. Quarantine repair inventories the actual native copper and widens
+only unlocked generated straight tracks to the board/net-class minimum. It
+does not lower rules or alter source copper. A fresh complete DRC may authorize
+removal of widened generated tracks implicated in clearance errors; these
+removals and subsequent dangling-track/via cleanup share one 64-item cap.
+Unknown faults reject the candidate. Recovery must then close every remaining
+connection, serialize the result with routing disabled, and pass the ordinary
+session import and full native DRC before publication.
+
+Native reports include diagnostic completeness. KiCad caps findings per error
+code, even when all-track-errors reporting is requested. A report reaching a
+known cap remains useful failure evidence, but cannot authorize clearance
+pruning or establish acceptance. Width repair uses native track inventory
+rather than treating the capped diagnostic list as a complete inventory.
 
 Native placement also reserves nearby reference-label space with a bounded
 soft preference. It uses the actual horizontal text bounds and courtyard

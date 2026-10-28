@@ -252,8 +252,104 @@ def test_verified_native_via_dangling_rejection_enters_private_recovery(recovery
     assert result["recovery_trigger"]["native_drc"]["dangling_track_warning_count"] == 0
     assert result["recovery_trigger"]["native_drc"]["dangling_via_warning_count"] == 1
     route.assert_called_once()
+    assert route.call_args.kwargs["_native_fanout_profile"] is True
     repair.assert_called_once()
     accept.assert_called_once()
+
+
+def test_bounded_fanout_candidate_requires_selected_eligible_ascending_profile(tmp_path):
+    session = tmp_path / "candidate.ses"
+    base = _initial_native_open_rejection(
+        session,
+        drc={"status": "ok", "passed": False, "blocker_count": 8, "findings": []},
+        routing_profile="bounded_fanout",
+        search={
+            "routing_profile": "bounded_fanout",
+            "selected_attempt": 3,
+            "attempts": [
+                {"routing_profile": "standard", "placement_order_strategy": "ascending"},
+                {"routing_profile": "standard", "placement_order_strategy": "descending"},
+                {"routing_profile": "bounded_fanout", "placement_order_strategy": "ascending"},
+            ],
+            "native_dsn_canonicalization": {"bounded_fanout_input_eligible": True},
+        },
+    )
+    assert autoroute_recovery._eligible_bounded_fanout_candidate(base, session)
+    for change in (
+        {"routing_profile": "standard"},
+        {"search": {**base["search"], "native_dsn_canonicalization": {"bounded_fanout_input_eligible": False}}},
+        {"search": {**base["search"], "attempts": [*base["search"]["attempts"][:2],
+            {"routing_profile": "bounded_fanout", "placement_order_strategy": "original"}]}},
+    ):
+        candidate = {**base, **change}
+        assert not autoroute_recovery._eligible_bounded_fanout_candidate(candidate, session)
+    partial = {
+        **base,
+        "status": "partial",
+        "routing_complete": False,
+        "stats": {"incomplete": 5},
+    }
+    partial.pop("board_import")
+    assert autoroute_recovery._eligible_bounded_fanout_candidate(partial, session)
+    for stats, complete in (({"incomplete": 0}, False), ({"incomplete": 5}, True), ({"incomplete": -1}, False)):
+        incoherent = {**partial, "stats": stats, "routing_complete": complete}
+        assert not autoroute_recovery._eligible_bounded_fanout_candidate(incoherent, session)
+
+
+@pytest.mark.parametrize("pruned, dangling", [(8, 42), (50, 0), (64, 0), (8, 57)])
+def test_bounded_fanout_partial_uses_generated_repair_and_remaining_shared_cap(
+    recovery, monkeypatch, pruned, dangling,
+):
+    source, ses, dest, state, route, _repair, accept, _context = recovery
+    state["initial_error_factory"] = lambda path: {
+        "status": "partial",
+        "output_kind": "specctra_session",
+        "output_path": str(path),
+        "routing_complete": False,
+        "routing_profile": "bounded_fanout",
+        "stats": {"incomplete": 5},
+        "artifact": {"valid": True, "kind": "ses", "path": str(path)},
+        "search": {
+            "routing_profile": "bounded_fanout",
+            "selected_attempt": 3,
+            "attempts": [
+                {"routing_profile": "standard", "placement_order_strategy": "ascending"},
+                {"routing_profile": "standard", "placement_order_strategy": "descending"},
+                {"routing_profile": "bounded_fanout", "placement_order_strategy": "ascending"},
+            ],
+            "native_dsn_canonicalization": {"bounded_fanout_input_eligible": True},
+        },
+    }
+    clean_drc = DrcResult(
+        "ok", str(source), findings=(),
+        raw_report={"violations": [], "unconnected_items": [], "schematic_parity": []},
+    )
+    generated = Mock(return_value=(
+        source, clean_drc, {"used": True, "pruned_track_count": pruned, "status": "fresh_drc_verified"},
+    ))
+    cleanup = Mock(return_value=(
+        source, clean_drc, {
+            "status": "ok", "removed_track_count": dangling, "removed_via_count": 0,
+            "removed_item_count": dangling,
+        },
+    ))
+    monkeypatch.setattr(autoroute_recovery, "_repair_generated_fanout_widths", generated)
+    monkeypatch.setattr(autoroute_recovery, "_clean_router_dangling_tracks", cleanup)
+
+    result = autoroute_with_recovery(source, ses, routed_board_path=dest)
+
+    if pruned + dangling > 64:
+        assert result["status"] == "error"
+        assert "combined 64-item cap" in result["message"]
+        accept.assert_not_called()
+        return
+    assert result["status"] == "ok"
+    assert route.call_args.kwargs["_native_fanout_profile"] is True
+    generated.assert_called_once()
+    assert cleanup.call_args.kwargs["max_items"] == 64 - pruned
+    assert result["generated_route_repair"]["combined_removed_item_count"] == pruned + dangling
+    assert result["generated_route_repair"]["combined_removal_cap"] == 64
+    assert result["recovery_trigger"]["kind"] == "bounded_native_fanout_partial_session"
 
 
 @pytest.mark.parametrize(
