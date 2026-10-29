@@ -265,8 +265,8 @@ cat demo_jlcpcb/README.txt
 
 ```bash
 # Clone repo
-git clone https://github.com/mattpainter701/kicad_automations.git
-cd kicad_automations
+git clone https://github.com/mattpainter701/circuit-weaver.git
+cd circuit-weaver
 
 # Install (development)
 pip install -e ".[dev]"
