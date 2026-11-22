@@ -17,6 +17,10 @@ from .dispatcher import main as mvp_main  # noqa: E402
 
 
 def main() -> None:
+    if len(sys.argv) == 1:
+        from .workflow_cli import welcome
+
+        raise SystemExit(welcome())
     if len(sys.argv) > 1 and sys.argv[1] == "--version":
         print(__version__)
         return

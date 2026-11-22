@@ -151,8 +151,13 @@ def initialize_workflow_project(output: Path, *, cwd: Path, env: dict) -> None:
     process = subprocess.run(
         [sys.executable, "-c",
          "from pathlib import Path; import sys; "
-         "from circuit_weaver.project_state import ensure_project_state, save_project_state; "
-         "root=Path(sys.argv[1]); save_project_state(root, ensure_project_state(root))", str(output)],
+        "from circuit_weaver.project_state import ensure_project_state, save_project_state; "
+        "root=Path(sys.argv[1]); state=ensure_project_state(root); "
+         "generate=state.workflow.get('generate'); "
+         "generate=generate if isinstance(generate, dict) else {}; "
+         "generate['output_dir']=str((root / 'generated').resolve()); "
+         "state.workflow['generate']=generate; "
+        "save_project_state(root, state)", str(output)],
         cwd=cwd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
     )
     if process.returncode:
@@ -867,8 +872,13 @@ async def mcp_smoke(spec: Path, output: Path, env: dict) -> dict:
                 await session.initialize()
                 inventory = await session.list_tools()
                 names = sorted(tool.name for tool in inventory.tools)
-                require(set(names) == {"generate_artifacts", "validate_design", "discover_projects",
-                                       "research_component", "manufacturing_readiness"}, "MCP inventory mismatch")
+                required_tools = {
+                    "generate_artifacts", "validate_design", "discover_projects",
+                    "research_component", "manufacturing_readiness", "runtime_info",
+                    "start_project", "open_project", "plan_workflow", "run_workflow",
+                    "workflow_status", "resume_workflow", "cancel_workflow",
+                }
+                require(required_tools <= set(names), "MCP inventory is missing required tools")
                 spec_json = json.dumps(yaml.safe_load(spec.read_text(encoding="utf-8")))
                 for name, arguments in (
                     ("validate_design", {"spec_json": spec_json}),

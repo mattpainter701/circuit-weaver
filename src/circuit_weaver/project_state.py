@@ -192,32 +192,84 @@ def write_json_atomic(path: str | Path, payload: dict[str, Any]) -> None:
     _atomic_write_json(Path(path), payload)
 
 
-def _has_project_marker(directory: Path) -> bool:
-    if project_state_path(directory).is_file() or (directory / "design.yaml").is_file():
+def _has_strong_circuit_boundary(directory: Path) -> bool:
+    """Identify an explicit spec or native KiCad project boundary."""
+    if (directory / "design.yaml").is_file():
         return True
     try:
-        return any(directory.glob("*.kicad_pro"))
+        return any(path.is_file() for path in directory.glob("*.kicad_pro"))
     except OSError:
         return False
+
+
+def _has_local_circuit_boundary(directory: Path) -> bool:
+    """Identify a directly rooted circuit, excluding state manifests alone."""
+    if _has_strong_circuit_boundary(directory):
+        return True
+    for pattern in ("*.kicad_pcb", "*.kicad_sch"):
+        try:
+            if any(path.is_file() for path in directory.glob(pattern)):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def resolve_project_root(target: str | Path = ".") -> Path:
     """Resolve a file or directory to its nearest Circuit Weaver project root.
 
-    Existing manifests win, followed by ``design.yaml`` and KiCad project
-    markers.  If no marker exists, a directory resolves to itself and a file
-    resolves to its parent.  The latter makes the function useful while a new
-    import project is being initialized.
+    Exact manifests and manifests with recorded ownership win. A direct
+    circuit boundary then takes precedence over unrelated ancestor manifests.
+    If no marker exists, a directory resolves to itself and a file resolves
+    to its parent.
     """
 
     candidate = _absolute(target)
     start = candidate.parent if candidate.is_file() or (not candidate.exists() and candidate.suffix) else candidate
 
-    for directory in (start, *start.parents):
-        if project_state_path(directory).is_file():
+    if project_state_path(start).is_file():
+        return start
+
+    # A parent can own native files under output/ or another directory, but
+    # only when its durable state names the requested path as a source,
+    # artifact, or checkpoint input/output.
+    for directory in start.parents:
+        if not project_state_path(directory).is_file():
+            continue
+        state = _load_project_state_file(project_state_path(directory))
+        if state is not None and _state_matches_lookup_target(
+            directory, state, candidate if candidate.is_file() else start, is_file=candidate.is_file()
+        ):
             return directory
-    for directory in (start, *start.parents):
-        if _has_project_marker(directory):
+
+    # The conventional generated ``output/`` directory belongs to its parent
+    # project when that parent has state or a canonical design spec. Do not
+    # apply this convention to arbitrary child directories.
+    if (
+        start.name.casefold() == "output"
+        and not project_state_path(start).exists()
+        and not (start / "design.yaml").is_file()
+        and (
+            project_state_path(start.parent).is_file()
+            or (start.parent / "design.yaml").is_file()
+        )
+    ):
+        return start.parent
+
+    # An explicitly selected direct circuit boundary wins over unclaimed
+    # ancestor markers. A parent state may still own it through the recorded
+    # source/artifact/checkpoint evidence checked above.
+    if _has_local_circuit_boundary(start):
+        return start
+
+    # Do not resolve through an unrelated state-bearing project. If the
+    # nearest manifest did not claim this path above, it is a durable project
+    # boundary; circuit files farther up may belong to an unrelated aggregate
+    # or validation workspace.
+    for directory in start.parents:
+        if project_state_path(directory).is_file():
+            break
+        if _has_strong_circuit_boundary(directory) or _has_local_circuit_boundary(directory):
             return directory
     return start
 
@@ -277,9 +329,7 @@ def _load_project_state_file(path: Path) -> ProjectState | None:
         raise ValueError(f"Project state at {path} must be a JSON object")
     version = int(payload.get("schema_version", 0) or 0)
     if version > STATE_SCHEMA_VERSION:
-        raise ValueError(
-            f"Project state schema {version} is newer than supported schema {STATE_SCHEMA_VERSION}"
-        )
+        raise ValueError(f"Project state schema {version} is newer than supported schema {STATE_SCHEMA_VERSION}")
     return ProjectState.from_dict(payload)
 
 
@@ -325,18 +375,33 @@ def _descendant_project_state_roots(start: Path) -> list[Path]:
     return sorted(found, key=lambda root: str(root).casefold())
 
 
-def _state_source_paths(root: Path, state: ProjectState) -> set[Path]:
-    """Return normalized generation-source paths referenced by one manifest."""
+def _state_owned_paths(root: Path, state: ProjectState) -> set[Path]:
+    """Return normalized source/artifact/checkpoint paths in one manifest."""
 
     values: set[str] = set()
     workflow_source = str((state.workflow.get("generate") or {}).get("source", "")).strip()
     if workflow_source:
         values.add(workflow_source)
     for record in state.sources:
-        if record.get("role") == "generation_source":
-            value = str(record.get("path", "")).strip()
-            if value:
-                values.add(value)
+        value = str(record.get("path", "")).strip()
+        if value:
+            values.add(value)
+    for record in state.artifacts:
+        value = str(record.get("path", "")).strip()
+        if value:
+            values.add(value)
+
+    runner = state.workflow.get("runner") or {}
+    for checkpoint in (runner.get("stages") or {}).values():
+        for group in ("inputs", "outputs"):
+            for record in checkpoint.get(group, []):
+                value = str(record.get("path", "")).strip()
+                if value:
+                    values.add(value)
+
+    generated_output = str((state.workflow.get("generate") or {}).get("output_dir", "")).strip()
+    if generated_output:
+        values.add(generated_output)
 
     resolved: set[Path] = set()
     for value in values:
@@ -348,10 +413,10 @@ def _state_source_paths(root: Path, state: ProjectState) -> set[Path]:
 
 
 def _state_matches_lookup_target(root: Path, state: ProjectState, target: Path, *, is_file: bool) -> bool:
-    sources = _state_source_paths(root, state)
+    owned_paths = _state_owned_paths(root, state)
     if is_file:
-        return target in sources
-    return any(source.parent == target for source in sources)
+        return target in owned_paths
+    return any(path == target or path.parent == target for path in owned_paths)
 
 
 def _ambiguous_state_error(target: Path, roots: list[Path]) -> AmbiguousProjectStateError:
@@ -379,6 +444,13 @@ def resolve_project_state_root(target: str | Path = ".") -> Path:
 
     if project_state_path(start).is_file():
         return start
+
+    # An explicit directory with its own supported circuit input must not be
+    # redirected into a generated child merely because that child's source
+    # happens to live in this directory. Resolve canonical ``output/`` and
+    # recorded ancestor ownership through the shared root resolver.
+    if not is_file and _has_local_circuit_boundary(start):
+        return resolve_project_root(start)
 
     descendants = _descendant_project_state_roots(start)
     if descendants:
@@ -409,7 +481,13 @@ def resolve_project_state_root(target: str | Path = ".") -> Path:
         # the only saved project below the same parent.
 
     for directory in start.parents:
-        if project_state_path(directory).is_file():
+        manifest = project_state_path(directory)
+        if not manifest.is_file():
+            continue
+        state = _load_project_state_file(manifest)
+        if state is not None and _state_matches_lookup_target(
+            directory, state, candidate if is_file else start, is_file=is_file
+        ):
             return directory
     return resolve_project_root(candidate)
 
@@ -516,12 +594,22 @@ def record_generation_state(
     if phase not in {"running", "generated", "failed"}:
         raise ValueError(f"Unsupported generation phase: {phase}")
 
-    root = _absolute(project_root) if project_root is not None else resolve_project_root(project_dir)
     output = _absolute(output_dir)
+    spec = _absolute(spec_path) if spec_path is not None else None
+    root = _absolute(project_root) if project_root is not None else resolve_project_root(project_dir)
+    if (
+        project_root is None
+        and spec is not None
+        and output.is_relative_to(spec.parent)
+        and (
+            project_state_path(spec.parent).is_file()
+            or (spec.parent / "design.yaml").is_file()
+        )
+    ):
+        root = spec.parent
     if project_root is not None and not output.is_relative_to(root):
         raise ValueError("Generation output must be inside its explicit project root")
     state = ensure_project_state(root, name=project_name)
-    spec = _absolute(spec_path) if spec_path is not None else None
 
     if spec is not None:
         source_record = _portable_file_record(root, spec, kind="design_spec")
@@ -555,9 +643,7 @@ def record_generation_state(
             pass
 
     placement_record = (
-        _portable_file_record(root, placement_review, kind="placement_review")
-        if placement_review is not None
-        else None
+        _portable_file_record(root, placement_review, kind="placement_review") if placement_review is not None else None
     )
     if placement_record is not None:
         workflow["placement_review"] = placement_record["path"]
@@ -595,9 +681,7 @@ def record_generation_state(
         state.current_phase = "generating"
         state.last_error = ""
         retry = f"circuit-weaver generate {quoted_spec} -o {quoted_output}" if quoted_spec else ""
-        state.next_actions = [
-            action for action in (f"circuit-weaver status {quoted_root}", retry) if action
-        ]
+        state.next_actions = [action for action in (f"circuit-weaver status {quoted_root}", retry) if action]
     elif phase == "failed":
         state.status = "generation_failed"
         state.current_phase = "generation_failed"
@@ -672,9 +756,7 @@ def _inventory(root: Path) -> dict[str, Any]:
     }
 
 
-def _merge_recorded_source_inventory(
-    inventory: dict[str, Any], state: ProjectState | None
-) -> dict[str, Any]:
+def _merge_recorded_source_inventory(inventory: dict[str, Any], state: ProjectState | None) -> dict[str, Any]:
     """Include non-copied external import sources in user-facing file counts."""
     if state is None:
         return inventory
@@ -843,9 +925,7 @@ def _recovery_actions(root: Path, state: ProjectState, status: str) -> list[str]
         if status == "source_missing":
             import_source = str((state.workflow.get("import") or {}).get("source", ""))
             if import_source:
-                return [
-                    f'circuit-weaver import-design "{import_source}" --project-dir {quoted_root} --force'
-                ]
+                return [f'circuit-weaver import-design "{import_source}" --project-dir {quoted_root} --force']
             return [f"circuit-weaver status {quoted_root}"]
         return [f"circuit-weaver analyze-design {quoted_root} --force"]
     if source and output:
@@ -907,6 +987,93 @@ def _next_actions(root: Path, kind: str, status: str) -> list[str]:
     return [f"circuit-weaver status {quoted}", f'circuit-weaver validate "{spec}"']
 
 
+def _workflow_projection(root: Path, state: ProjectState | None) -> dict[str, Any]:
+    """Project native checkpoints onto status without inventing completion."""
+    if state is None or not isinstance(state.workflow.get("runner"), dict):
+        return {}
+    run = state.workflow["runner"]
+    generation_updated = str((state.workflow.get("generate") or {}).get("updated_at", ""))
+    if generation_updated and generation_updated > str(run.get("updated_at", "")):
+        return {}
+    stages = run.get("stages", {})
+    stage = run.get("current_stage") or run.get("last_completed_stage")
+    if not stage:
+        stage = next(
+            (
+                key
+                for key in reversed(("validate", "generate", "build", "place", "route", "preview"))
+                if stages.get(key, {}).get("status") == "completed"
+            ),
+            None,
+        )
+    status = run.get("status", "idle")
+    quoted = f'"{root}"'
+    actions = [f"circuit-weaver workflow status {quoted}"]
+    if status == "running":
+        actions.append(f"circuit-weaver workflow cancel {quoted}")
+        return {
+            "status": "cancellation_requested" if run.get("cancel_requested") else "in_progress",
+            "current_phase": str(stage or "workflow_running"),
+            "next_actions": actions,
+            "last_error": "",
+        }
+    invalidated = []
+    for key, checkpoint in stages.items():
+        if checkpoint.get("status") != "completed":
+            continue
+        for item in [*checkpoint.get("inputs", []), *checkpoint.get("outputs", [])]:
+            path = Path(item.get("path", ""))
+            if not path.is_absolute():
+                path = root / path
+            try:
+                exists = path.is_file()
+                if exists != item.get("exists", True) or (
+                    exists and (path.stat().st_size != item.get("size") or file_sha256(path) != item.get("sha256"))
+                ):
+                    invalidated.append(key)
+                    break
+            except OSError:
+                invalidated.append(key)
+                break
+    if invalidated:
+        return {
+            "status": "workflow_stale",
+            "current_phase": "checkpoint_invalidated",
+            "last_error": "Checkpoint inputs or artifacts changed: " + ", ".join(sorted(set(invalidated))),
+            "next_actions": [*actions, f"circuit-weaver workflow plan {quoted}"],
+        }
+    if status == "failed":
+        error = run.get("last_error") or stages.get(stage, {}).get("error") or "Workflow stage failed"
+        return {
+            "status": "workflow_failed",
+            "current_phase": f"{stage or 'workflow'}_failed",
+            "last_error": str(error.get("message", error)) if isinstance(error, dict) else str(error),
+            "next_actions": [*actions, f"circuit-weaver workflow resume {quoted}"],
+        }
+    if status == "cancelled":
+        return {
+            "status": "cancelled",
+            "current_phase": "workflow_cancelled",
+            "last_error": "",
+            "next_actions": [*actions, f"circuit-weaver workflow resume {quoted}"],
+        }
+    if status == "planned":
+        return {
+            "status": "ready",
+            "current_phase": "workflow_planned",
+            "last_error": "",
+            "next_actions": [*actions, f"circuit-weaver workflow run {quoted}"],
+        }
+    if stage:
+        return {
+            "status": "workflow_completed" if status == "completed" else "stage_completed",
+            "current_phase": f"{stage}_completed",
+            "last_error": "",
+            "next_actions": actions,
+        }
+    return {}
+
+
 def get_project_state_summary(target: str | Path) -> dict[str, Any]:
     """Return reconciled state without requiring a manifest to already exist."""
 
@@ -920,20 +1087,16 @@ def get_project_state_summary(target: str | Path) -> dict[str, Any]:
     state = _load_project_state_file(project_state_path(root))
     inventory = _merge_recorded_source_inventory(_inventory(root), state)
     validation = _read_validation_state(root)
-    kind = state.kind if state is not None else (
-        "circuit_weaver" if inventory["design_specs"] else "kicad_native"
-    )
+    kind = state.kind if state is not None else ("circuit_weaver" if inventory["design_specs"] else "kicad_native")
     reconciliation = _reconciliation(root, state)
     status = _reconciled_status(_derived_status(state, inventory, validation), state, reconciliation)
     if state is not None and reconciliation["dirty"]:
         actions = _recovery_actions(root, state, status)
     else:
         actions = (
-            list(state.next_actions)
-            if state is not None and state.next_actions
-            else _next_actions(root, kind, status)
+            list(state.next_actions) if state is not None and state.next_actions else _next_actions(root, kind, status)
         )
-    return {
+    summary = {
         "project_root": str(root),
         "state_file": str(project_state_path(root)),
         "has_manifest": state is not None,
@@ -952,6 +1115,9 @@ def get_project_state_summary(target: str | Path) -> dict[str, Any]:
         "last_error": state.last_error if state is not None else "",
         "next_actions": actions,
     }
+    if not reconciliation["dirty"]:
+        summary.update(_workflow_projection(root, state))
+    return summary
 
 
 def resume_project(target: str | Path) -> dict[str, Any]:

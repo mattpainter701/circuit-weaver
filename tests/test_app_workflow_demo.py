@@ -33,7 +33,9 @@ def test_workflow_cases_keep_private_state_below_an_existing_parent_project(tmp_
         case.mkdir()
         _demo.initialize_workflow_project(case, cwd=tmp_path, env=os.environ.copy())
         local = case / ".circuit-weaver" / "project.json"
-        ids.append(json.loads(local.read_text(encoding="utf-8"))["project_id"])
+        payload = json.loads(local.read_text(encoding="utf-8"))
+        ids.append(payload["project_id"])
+        assert payload["workflow"]["generate"]["output_dir"] == str((case / "generated").resolve())
         assert resolve_project_root(case / "generated") == case
     assert len(set(ids)) == 2
     assert parent_state.read_bytes() == original
