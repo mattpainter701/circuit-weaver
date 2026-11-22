@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -290,6 +291,7 @@ def require_export_authorized(
     *,
     evidence_records: Iterable[dict[str, Any]] = (),
     override: ManufacturingReadinessOverride | None = None,
+    board_sha256: str | None = None,
     now: datetime | None = None,
 ) -> None:
     if readiness.state is ManufacturingReadinessState.FABRICATION_READY:
@@ -315,6 +317,23 @@ def require_export_authorized(
                 raise EvidencePolicyError(
                     "fabrication_ready evidence IDs do not cover the T244.4 gate results"
                 )
+            if board_sha256 is not None:
+                if not re.fullmatch(r"[a-fA-F0-9]{64}", board_sha256):
+                    raise EvidencePolicyError("export board SHA-256 is invalid")
+                drc_claim = backing["tool:drc"].get("claim")
+                try:
+                    claim = json.loads(drc_claim) if isinstance(drc_claim, str) else None
+                except json.JSONDecodeError:
+                    claim = None
+                if not isinstance(claim, Mapping) or claim.get("board_sha256") != board_sha256:
+                    raise EvidencePolicyError(
+                        "fabrication-ready DRC evidence does not match the exact board bytes being exported"
+                    )
+                source = backing["tool:drc"].get("source")
+                if not isinstance(source, Mapping) or source.get("content_hash") != board_sha256:
+                    raise EvidencePolicyError(
+                        "fabrication-ready DRC evidence does not bind its source hash to the exported board"
+                    )
             return
         except EvidencePolicyError as exc:
             if override is None:

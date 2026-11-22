@@ -23,6 +23,8 @@ def _record(record_id: str, subject: str, kind: str = "tool_result") -> dict:
     return {
         "id": record_id,
         "subject_ref": subject,
+        "claim": json.dumps({"board_sha256": "a" * 64}) if subject == "tool:drc" else "verified",
+        "source": {"content_hash": "a" * 64} if subject == "tool:drc" else {},
         "kind": kind,
         "confidence": "verified",
         "conflicts": [],
@@ -35,6 +37,54 @@ def _fabrication_evidence() -> tuple[dict, ...]:
         _record("EV-TOOL_RESULT-000000000002", "tool:pcb_handoff"),
         _record("EV-TOOL_RESULT-000000000003", "tool:drc"),
     )
+
+
+def test_fabrication_export_requires_the_exact_drc_board_hash_unless_overridden() -> None:
+    records = _fabrication_evidence()
+    readiness = ManufacturingReadiness.from_dict(
+        {
+            "state": "fabrication_ready",
+            "blockers": [],
+            "evidence_ids": sorted(record["id"] for record in records),
+            "next_actions": [],
+            "blocked_reason": None,
+        }
+    )
+
+    require_export_authorized(readiness, evidence_records=records, board_sha256="a" * 64)
+    with pytest.raises(ReadinessContractError, match="does not match the exact board bytes"):
+        require_export_authorized(readiness, evidence_records=records, board_sha256="b" * 64)
+
+    explicit_override = ManufacturingReadinessOverride(
+        id="OVR-TEST-001",
+        reason="User approved export of the changed board",
+        expires_at="2030-01-01T00:00:00+00:00",
+    )
+    require_export_authorized(
+        readiness,
+        evidence_records=records,
+        board_sha256="b" * 64,
+        override=explicit_override,
+        now=datetime(2029, 1, 1, tzinfo=timezone.utc),
+    )
+
+
+def test_fabrication_export_requires_drc_source_hash_to_match_the_board() -> None:
+    records = [dict(record) for record in _fabrication_evidence()]
+    drc = next(record for record in records if record["subject_ref"] == "tool:drc")
+    drc["source"] = {"content_hash": "b" * 64}
+    readiness = ManufacturingReadiness.from_dict(
+        {
+            "state": "fabrication_ready",
+            "blockers": [],
+            "evidence_ids": sorted(record["id"] for record in records),
+            "next_actions": [],
+            "blocked_reason": None,
+        }
+    )
+
+    with pytest.raises(ReadinessContractError, match="does not bind its source hash"):
+        require_export_authorized(readiness, evidence_records=records, board_sha256="a" * 64)
 
 
 def test_central_assessor_walks_the_one_ordered_vocabulary() -> None:

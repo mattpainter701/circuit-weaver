@@ -7,6 +7,7 @@ Tests verify that CLI subcommands work end-to-end:
 - Error cases produce helpful messages
 """
 
+import hashlib
 import io
 import json
 import subprocess
@@ -123,6 +124,66 @@ def test_gerber_export_rejects_forged_ready_state_with_empty_evidence_ids(tmp_pa
     response = json.loads(result.stdout)
     assert response["status"] == "blocked"
     assert "evidence IDs" in response["message"]
+    assert not output.exists()
+
+
+def test_gerber_export_rejects_board_that_differs_from_approved_drc_bytes(tmp_path):
+    board = tmp_path / "board.kicad_pcb"
+    approved_bytes = b"approved board bytes"
+    board.write_bytes(b"different board bytes")
+    approved_hash = hashlib.sha256(approved_bytes).hexdigest()
+    ledger = EvidenceLedger()
+    records = [
+        ledger.record(
+            subject_ref="comp:U1",
+            claim="verified component identity",
+            kind="datasheet",
+            source=EvidenceSource(doc_id="component-identity", extraction_method="test"),
+            confidence="verified",
+            freshness="current",
+        ),
+        ledger.record(
+            subject_ref="tool:pcb_handoff",
+            claim="verified pad-bearing board provenance",
+            kind="tool_result",
+            source=EvidenceSource(doc_id="pcb-handoff", extraction_method="test"),
+            confidence="verified",
+            freshness="current",
+        ),
+        ledger.record(
+            subject_ref="tool:drc",
+            claim=json.dumps({"board_sha256": approved_hash, "kicad_version": "test"}),
+            kind="tool_result",
+            source=EvidenceSource(
+                doc_id="kicad-cli-test",
+                content_hash=approved_hash,
+                extraction_method="kicad-cli-pcb-drc-json",
+            ),
+            confidence="verified",
+            freshness="current",
+        ),
+    ]
+    (tmp_path / "manufacturing_readiness.json").write_text(
+        json.dumps(
+            {
+                "state": "fabrication_ready",
+                "blockers": [],
+                "evidence_ids": sorted(records),
+                "next_actions": [],
+                "blocked_reason": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    ledger.write(tmp_path)
+    output = tmp_path / "gerbers"
+
+    result = _run(["export-gerbers", str(board), "--output", str(output)])
+
+    assert result.returncode == 1
+    response = json.loads(result.stdout)
+    assert response["status"] == "blocked"
+    assert "does not match the exact board bytes" in response["message"]
     assert not output.exists()
 
 

@@ -35,13 +35,13 @@ def _get_thermal_params(comp: ComponentDef, ic_thermal: dict, metadata: dict) ->
     api = ic_thermal.get(mpn, {})
 
     def _float(v: object) -> float:
-        if isinstance(v, (int, float)):
-            return float(v)
         if isinstance(v, str):
             try:
-                return float(v.split()[0])
+                v = float(v.split()[0])
             except (ValueError, IndexError):
-                pass
+                return 0.0
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v):
+            return float(v)
         return 0.0
 
     theta_ja = _float(meta.get("theta_ja")) or _float(api.get("theta_ja"))
@@ -159,7 +159,9 @@ def analyze_thermal(
         )
     if total_power > 5.0:
         recommendations.append(f"Total board power {total_power:.1f}W \u2014 consider airflow or heatsink")
-    if not recommendations:
+    if not results:
+        recommendations.append("Supply component power dissipation data to assess junction temperatures.")
+    elif not recommendations:
         recommendations.append("Thermal design looks adequate at current ambient temperature")
 
     summary = (

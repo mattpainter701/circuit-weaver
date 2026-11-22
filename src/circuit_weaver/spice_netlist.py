@@ -240,6 +240,7 @@ def export_spice_netlist(
 
     # Control section
     lines.append(".control")
+    lines.append("set filetype=ascii")
     lines.append("run")
     lines.append("write results.raw")
     lines.append(".endc")

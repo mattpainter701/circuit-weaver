@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Electrical validation detects a supply pin shorted to ground, including a regulator whose output and ground pins share a net.
+- Gerber export checks the PCB against its approved DRC evidence and builds the fabrication ZIP from the current export, including copper, board outline and drill files.
+- DFM reads track and via dimensions in millimetres and reports missing or unreadable boards as errors. The confidence report shows unavailable checks and the number of components assessed for temperature.
+- Simulation scores require measurements from the current ngspice run. A failed run or stale output can no longer earn a passing grade.
+
 ## [0.37.0] - 2026-10-20
 
 ### Physical sample inventory and workflow scale

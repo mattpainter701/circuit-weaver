@@ -656,26 +656,37 @@ _I2C_SDA_PATTERN = re.compile(r"(SDA|I2C.*DAT)", re.IGNORECASE)
 _SPI_CS_PATTERN = re.compile(r"(CS|CSN|CS_N|CSB|SS|SSN|NSS)", re.IGNORECASE)
 _UART_TX_PATTERN = re.compile(r"(TXD?|UART.*TX)", re.IGNORECASE)
 _UART_RX_PATTERN = re.compile(r"(RXD?|UART.*RX)", re.IGNORECASE)
+_GROUND_PIN_NAME_PATTERN = re.compile(
+    r"^(?:GND|AGND|DGND|PGND|GNDA|GNDD)(?:\d+|[_-].*)?$", re.IGNORECASE
+)
+_POSITIVE_SUPPLY_PIN_NAME_PATTERN = re.compile(
+    r"^(?:VDD|VCC|VBUS|VIN|VDDA|VCCAUX|VBAT|VSYS|VCCO|VAUX|AVDD|DVDD|PVDD|VREG|VOUT|VPOS|VPLUS)"
+    r"(?:\d+|[_-].*)?$",
+    re.IGNORECASE,
+)
 
 
-def _build_net_pin_map(components: list[ComponentDef]) -> dict[str, list[tuple[str, str, str]]]:
-    """Build net_name → [(component_ref, pin_num, pin_type)] mapping.
+def _build_net_pin_map(components: list[ComponentDef]) -> dict[str, list[tuple[str, str, str, str, bool]]]:
+    """Build net_name → [(ref, pin_num, pin_type, pin_name, power_assignment)] mapping.
 
     Also counts bypass_caps and straps as connections (they wire to nets
     even though they don't appear in pin_nets/power_pins of the parent IC).
     """
-    net_map: dict[str, list[tuple[str, str, str]]] = {}
+    net_map: dict[str, list[tuple[str, str, str, str, bool]]] = {}
     for comp in components:
         ref = comp.source_ref or comp.ref_prefix
         pin_types = {p.number: p.electrical_type for p in comp.pins}
+        pin_names = {p.number: p.name for p in comp.pins}
         for pin_num, net in comp.pin_nets.items():
             if net:
                 ptype = pin_types.get(pin_num, "unspecified")
-                net_map.setdefault(net, []).append((ref, pin_num, ptype))
+                pin_name = pin_names.get(pin_num, "")
+                net_map.setdefault(net, []).append((ref, pin_num, ptype, pin_name, False))
         for pin_num, net in comp.power_pins.items():
             if net:
                 ptype = pin_types.get(pin_num, "power_in")
-                net_map.setdefault(net, []).append((ref, pin_num, ptype))
+                pin_name = pin_names.get(pin_num, "")
+                net_map.setdefault(net, []).append((ref, pin_num, ptype, pin_name, True))
         # Bypass caps connect two nets (net ↔ gnd_net). Each cap is a
         # 2-terminal element — record BOTH terminals under each net so
         # a standalone cap contributes two endpoints to net continuity,
@@ -683,21 +694,21 @@ def _build_net_pin_map(components: list[ComponentDef]) -> dict[str, list[tuple[s
         for bc in comp.bypass_caps:
             cap_id = f"C_{ref}_{bc.pin}"
             if bc.net:
-                net_map.setdefault(bc.net, []).append((ref, bc.pin, "passive"))
-                net_map[bc.net].append((cap_id, "1", "passive"))
+                net_map.setdefault(bc.net, []).append((ref, bc.pin, "passive", "", False))
+                net_map[bc.net].append((cap_id, "1", "passive", "", False))
             if bc.gnd_net:
-                net_map.setdefault(bc.gnd_net, []).append((ref, bc.pin, "passive"))
-                net_map[bc.gnd_net].append((cap_id, "2", "passive"))
+                net_map.setdefault(bc.gnd_net, []).append((ref, bc.pin, "passive", "", False))
+                net_map[bc.gnd_net].append((cap_id, "2", "passive", "", False))
         # Straps connect pin to rail. Also 2-terminal: both the signal
         # net and the rail net see the strap resistor as an endpoint.
         for strap in comp.straps:
             strap_id = f"R_{ref}_{strap.pin}"
             if strap.net:
-                net_map.setdefault(strap.net, []).append((ref, strap.pin, "passive"))
-                net_map[strap.net].append((strap_id, "1", "passive"))
+                net_map.setdefault(strap.net, []).append((ref, strap.pin, "passive", "", False))
+                net_map[strap.net].append((strap_id, "1", "passive", "", False))
             if strap.rail:
-                net_map.setdefault(strap.rail, []).append((ref, strap.pin, "passive"))
-                net_map[strap.rail].append((strap_id, "2", "passive"))
+                net_map.setdefault(strap.rail, []).append((ref, strap.pin, "passive", "", False))
+                net_map[strap.rail].append((strap_id, "2", "passive", "", False))
     return net_map
 
 
@@ -714,7 +725,7 @@ def _validate_net_connectivity(components: list[ComponentDef]) -> list[Validatio
             continue
 
         if len(pins) == 1:
-            ref, pin_num, ptype = pins[0]
+            ref, pin_num, ptype, _pin_name, _power_assignment = pins[0]
             issues.append(
                 _issue(
                     _find_comp(components, ref),
@@ -728,10 +739,11 @@ def _validate_net_connectivity(components: list[ComponentDef]) -> list[Validatio
         # Passive connections count as drivers — feedback dividers, pull-ups,
         # and bootstrap caps are passive-driven networks by design.
         has_driver = any(
-            ptype in ("output", "bidirectional", "tri_state", "power_out", "passive") for _, _, ptype in pins
+            ptype in ("output", "bidirectional", "tri_state", "power_out", "passive")
+            for _, _, ptype, _pin_name, _power_assignment in pins
         )
         if not has_driver:
-            refs = ", ".join(f"{ref}:{pnum}" for ref, pnum, _ in pins)
+            refs = ", ".join(f"{ref}:{pnum}" for ref, pnum, _, _, _ in pins)
             issues.append(
                 _issue(
                     _find_comp(components, pins[0][0]),
@@ -740,24 +752,59 @@ def _validate_net_connectivity(components: list[ComponentDef]) -> list[Validatio
                 )
             )
 
-    # Check for power-to-ground shorts within a single net
-    _vdd_like = {"VDD", "VCC", "VBUS", "VIN", "VDDA", "VBAT", "VSYS", "MGT", "VCCO", "VAUX"}
-    _gnd_like = {"GND", "AGND", "DGND", "PGND", "VSS", "GNDA", "GNDD"}
+    # Detect actual power/ground pin collisions, rather than requiring one net
+    # label to simultaneously have both a supply and ground prefix.  The latter
+    # is impossible for ordinary labels and missed assignments like a regulator
+    # OUT pin and its GND pin both mapped to "GND".
     for net, pins in net_map.items():
-        upper = net.upper()
-        is_vdd = upper in _vdd_like or any(upper.startswith(f"{p}_") for p in _vdd_like)
-        is_gnd = upper in _gnd_like or any(upper.startswith(f"{p}_") for p in _gnd_like)
-        if is_vdd and is_gnd:
-            refs = ", ".join(f"{ref}:{pnum}" for ref, pnum, _ in pins)
+        has_ground_endpoint = _is_ground_net(net) or any(
+            _GROUND_PIN_NAME_PATTERN.fullmatch(pin_name.strip())
+            for _ref, _pin_num, _ptype, pin_name, _power_assignment in pins
+            if pin_name
+        )
+        positive_power_pins = [
+            (ref, pin_num, pin_name, ptype)
+            for ref, pin_num, ptype, pin_name, power_assignment in pins
+            if _is_positive_supply_pin(pin_name, ptype, power_assignment=power_assignment)
+        ]
+        if has_ground_endpoint and positive_power_pins:
+            refs = ", ".join(
+                f"{ref}:{pnum}" + (f" ({name})" if name else "")
+                for ref, pnum, _ptype, name, _power_assignment in pins
+            )
+            positive_pin_refs = ", ".join(
+                f"{ref}:{pnum}" + (f" ({name})" if name else "")
+                for ref, pnum, name, _ptype in positive_power_pins
+            )
             issues.append(
                 _issue(
                     _find_comp(components, pins[0][0]),
                     "vdd-to-gnd-short",
-                    f"Net '{net}' carries both VDD and GND — likely a power-to-ground short: {refs}",
+                    f"Net '{net}' connects a ground endpoint and non-ground power pin(s) "
+                    f"{positive_pin_refs} — likely a power-to-ground short: {refs}",
+                    severity="blocker",
+                    suggestion="Separate the supply and ground nets, then rerun validation.",
+                    net=net,
                 )
             )
 
     return issues
+
+
+def _is_positive_supply_pin(pin_name: str, pin_type: str, *, power_assignment: bool = False) -> bool:
+    """Return whether a pin is positively identified as a supply source/load.
+
+    A rail-like name by itself is not enough because ``VIN`` and ``VOUT`` can
+    also name analog signals. Require a power pin type or an explicit
+    ``power_pins`` assignment; the generic name ``OUT`` additionally requires
+    a power output type or explicit power assignment.
+    """
+    normalized = (pin_name or "").strip()
+    if not normalized or _GROUND_PIN_NAME_PATTERN.fullmatch(normalized):
+        return False
+    if _POSITIVE_SUPPLY_PIN_NAME_PATTERN.fullmatch(normalized):
+        return power_assignment or pin_type in {"power_in", "power_out"}
+    return normalized.upper() in {"OUT", "OUTPUT"} and (power_assignment or pin_type == "power_out")
 
 
 def _find_comp(components: list[ComponentDef], ref: str) -> ComponentDef:
@@ -953,7 +1000,11 @@ def _validate_pin_type_conflicts(components: list[ComponentDef]) -> list[Validat
         ):
             continue
 
-        outputs = [(ref, pnum) for ref, pnum, ptype in pins if ptype in _OUTPUT_TYPES]
+        outputs = [
+            (ref, pnum)
+            for ref, pnum, ptype, _pin_name, _power_assignment in pins
+            if ptype in _OUTPUT_TYPES
+        ]
         if len(outputs) > 1:
             detail = ", ".join(f"{ref}:{pnum}" for ref, pnum in outputs)
             issues.append(

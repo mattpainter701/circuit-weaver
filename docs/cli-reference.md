@@ -359,6 +359,8 @@ circuit-weaver export-gerbers <board.kicad_pcb> --output <dir>
 |-|-|
 | `--output`, `-o` | Output directory (required) |
 
+The export uses the board revision covered by the DRC record in the evidence manifest. After editing the PCB, rerun the checks and refresh the approval, or supply an explicit, unexpired manufacturing override. The ZIP contains files from the current export only.
+
 Requires KiCad CLI (`kicad-cli`) to be installed and on PATH.
 
 ---
@@ -874,7 +876,7 @@ Generate a unified design confidence report. Aggregates validation, simulation,
 thermal, DFM, ERC, and cross-reference checks into a single 0-100 score.
 
 ```bash
-circuit-weaver confidence <spec.yaml> [-o <report.html>] [--run-sims] [--pcb <file>] [--json]
+circuit-weaver confidence <spec.yaml> [-o <report.html>] [--run-sims] [--pcb <file>] [--specs-dir <dir>] [--json]
 ```
 
 | Flag | Description |
@@ -882,12 +884,10 @@ circuit-weaver confidence <spec.yaml> [-o <report.html>] [--run-sims] [--pcb <fi
 | `-o`, `--output` | Write HTML dashboard to file |
 | `--run-sims` | Run SPICE simulations as part of the confidence check |
 | `--pcb` | Path to `.kicad_pcb` file for DFM analysis |
+| `--specs-dir` | Thermal data directory. Defaults to `specs/` beside the design specification. |
 | `--json` | Output results as JSON |
 
-**Readiness classifications:**
-- `ready_for_fab`: score >= 80 with no blockers
-- `needs_review`: score >= 60 or has non-blocking warnings
-- `not_ready`: score < 60 or has blockers
+The weighted score uses the assessed sections. Missing PCB input or thermal data appears as a skipped check. The thermal section reports how many components contributed temperature estimates. Manufacturing readiness comes from the separate readiness assessment.
 
 ## discover
 
