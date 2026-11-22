@@ -100,7 +100,7 @@ preview and delivery check. Full-shape native plane coverage, unchanged protecte
 trace paths and vias, zone refill, saved connectivity, DRC, labels and all input
 and intermediate hashes are checked before success.
 
-The MCP pass lists all five tools, validates and generates the same design,
+The MCP pass checks the tool inventory, validates and generates the same design,
 discovers projects, and verifies that malformed input, an empty research query,
 and missing readiness evidence are returned as MCP tool errors.
 It checks native KiCad verification on the generated schematic. It does not

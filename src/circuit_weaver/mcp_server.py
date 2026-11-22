@@ -11,7 +11,7 @@ stdout, so tool calls are isolated to keep the stdio protocol stream clean.
 
 from __future__ import annotations
 
-import contextlib
+import asyncio
 import copy
 import io
 import json
@@ -25,18 +25,83 @@ from typing import Any, Literal, TypeVar
 
 _logger = logging.getLogger(__name__)
 _STDOUT_LOCK = threading.RLock()
+_STDOUT_CONTEXT = threading.local()
+_STDOUT_INSTALL_LOCK = threading.Lock()
 _T = TypeVar("_T")
 
 
-def _call_without_stdout(func: Callable[..., _T], *args: Any, **kwargs: Any) -> _T:
-    """Call an engine function without allowing prints onto MCP stdout."""
+class _ThreadRoutedStdout:
+    """Route each worker thread's tool output to its own capture buffer."""
+
+    def __init__(self, original: Any):
+        self._original = original
+
+    def write(self, value: str) -> int:
+        destination = getattr(_STDOUT_CONTEXT, "capture", None) or self._original
+        return destination.write(value)
+
+    def writelines(self, lines: Any) -> None:
+        destination = getattr(_STDOUT_CONTEXT, "capture", None) or self._original
+        destination.writelines(lines)
+
+    def flush(self) -> None:
+        destination = getattr(_STDOUT_CONTEXT, "capture", None) or self._original
+        destination.flush()
+
+    def isatty(self) -> bool:
+        return bool(self._original.isatty())
+
+    def fileno(self) -> int:
+        return self._original.fileno()
+
+    @property
+    def buffer(self) -> Any:
+        return self._original.buffer
+
+    @property
+    def encoding(self) -> str | None:
+        return self._original.encoding
+
+    @property
+    def errors(self) -> str | None:
+        return self._original.errors
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._original, name)
+
+
+def _install_stdout_router() -> None:
+    """Install a process-wide stdout proxy once, preserving the MCP transport."""
+    if isinstance(sys.stdout, _ThreadRoutedStdout):
+        return
+    with _STDOUT_INSTALL_LOCK:
+        if not isinstance(sys.stdout, _ThreadRoutedStdout):
+            sys.stdout = _ThreadRoutedStdout(sys.stdout)  # type: ignore[assignment]
+
+
+def _capture_tool_stdout(func: Callable[..., _T], *args: Any, **kwargs: Any) -> _T:
+    """Suppress prints for one tool call without changing process-global stdout."""
+    _install_stdout_router()
     captured = io.StringIO()
-    with _STDOUT_LOCK, contextlib.redirect_stdout(captured):
+    previous = getattr(_STDOUT_CONTEXT, "capture", None)
+    _STDOUT_CONTEXT.capture = captured
+    try:
         result = func(*args, **kwargs)
+    finally:
+        if previous is None:
+            del _STDOUT_CONTEXT.capture
+        else:
+            _STDOUT_CONTEXT.capture = previous
     output = captured.getvalue().strip()
     if output:
         _logger.debug("Suppressed engine stdout: %s", output[-2000:])
     return result
+
+
+def _call_without_stdout(func: Callable[..., _T], *args: Any, **kwargs: Any) -> _T:
+    """Serialize heavy engine calls while capturing only their worker output."""
+    with _STDOUT_LOCK:
+        return _capture_tool_stdout(func, *args, **kwargs)
 
 
 def _error_json(code: str, message: str) -> str:
@@ -44,17 +109,24 @@ def _error_json(code: str, message: str) -> str:
     return json.dumps({"status": "error", "error": {"code": code, "message": message}})
 
 
-def _as_mcp_tool_result(payload: str) -> str:
-    """Raise on a low-level error envelope so MCP sets ``isError``."""
+def _as_mcp_tool_result(payload: str) -> Any:
+    """Preserve machine-readable JSON while marking MCP error envelopes."""
     try:
         decoded = json.loads(payload)
     except (TypeError, json.JSONDecodeError):
         return payload
-    if isinstance(decoded, dict) and decoded.get("status") == "error":
-        error = decoded.get("error", {})
-        code = error.get("code", "tool_error") if isinstance(error, dict) else "tool_error"
-        message = error.get("message", "Tool call failed") if isinstance(error, dict) else str(error)
-        raise RuntimeError(f"{code}: {message}")
+    if isinstance(decoded, dict) and (
+        decoded.get("status") == "error" or (decoded.get("ok") is False and isinstance(decoded.get("error"), dict))
+    ):
+        from mcp.types import CallToolResult, TextContent
+
+        return CallToolResult(
+            isError=True,
+            content=[TextContent(type="text", text=payload)],
+            # FastMCP wraps ordinary JSON-string returns under ``result``.
+            # Explicit error results must provide the same structured shape.
+            structuredContent={"result": payload},
+        )
     return payload
 
 
@@ -189,8 +261,114 @@ def _manufacturing_readiness_tool(readiness_path: str) -> str:
         return _error_json("readiness_failed", str(exc) or type(exc).__name__)
 
 
+def _workflow_json(value: Any, *, field: str, expected: type) -> Any:
+    """Decode an optional JSON object/array argument without accepting coercions."""
+    if not value:
+        return expected()
+
+    def reject_constant(constant: str) -> None:
+        raise ValueError(f"{field} contains non-standard JSON constant {constant}")
+
+    try:
+        decoded = json.loads(value, parse_constant=reject_constant)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{field} must be valid JSON") from exc
+    if not isinstance(decoded, expected):
+        label = "object" if expected is dict else "array"
+        raise ValueError(f"{field} must contain a JSON {label}")
+    return decoded
+
+
+def _absolute_workflow_path(value: str, field: str) -> Path:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} must be a non-empty absolute path")
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        raise ValueError(f"{field} must be an absolute path")
+    return path
+
+
+def _workflow_tool_impl(
+    operation: str,
+    target: str = "",
+    *,
+    spec_json: str = "",
+    name: str = "",
+    stages_json: str = "",
+    options_json: str = "",
+    resume: bool = False,
+) -> str:
+    """Call the shared durable workflow API for MCP clients."""
+    try:
+        from circuit_weaver import project_workflow
+
+        if operation == "start_project":
+            project_dir = _absolute_workflow_path(target, "project_dir")
+            spec = _workflow_json(spec_json, field="spec_json", expected=dict) if spec_json else None
+            result = project_workflow.start_project(project_dir, spec, name=name or None)
+        elif operation == "runtime_info":
+            from circuit_weaver.runtime_info import runtime_info
+
+            result = runtime_info()
+        else:
+            project = _absolute_workflow_path(target, "target")
+            stages = _workflow_json(stages_json, field="stages_json", expected=list) if stages_json else None
+            options = _workflow_json(options_json, field="options_json", expected=dict) if options_json else None
+            if stages is not None and any(not isinstance(stage, str) for stage in stages):
+                raise ValueError("stages_json must contain only stage names")
+            calls = {
+                "open_project": lambda: project_workflow.open_project(project),
+                "plan_workflow": lambda: project_workflow.plan_workflow(project, stages=stages, options=options),
+                "run_workflow": lambda: project_workflow.run_workflow(
+                    project,
+                    stages=stages,
+                    options=options,
+                    resume=resume,
+                ),
+                "workflow_status": lambda: project_workflow.workflow_status(project),
+                "resume_workflow": lambda: project_workflow.resume_workflow(project, options=options),
+                "cancel_workflow": lambda: project_workflow.cancel_workflow(project),
+            }
+            if operation not in calls:
+                raise ValueError(f"Unsupported workflow operation: {operation}")
+            if operation in {"run_workflow", "resume_workflow"}:
+                result = _call_without_stdout(calls[operation])
+            else:
+                result = calls[operation]()
+        return json.dumps(result, default=str)
+    except (ValueError, TypeError) as exc:
+        return _error_json("invalid_workflow_arguments", str(exc))
+    except Exception as exc:
+        _logger.exception("MCP %s failed", operation)
+        return _error_json("workflow_failed", str(exc) or type(exc).__name__)
+
+
+def _workflow_tool(
+    operation: str,
+    target: str = "",
+    *,
+    spec_json: str = "",
+    name: str = "",
+    stages_json: str = "",
+    options_json: str = "",
+    resume: bool = False,
+) -> str:
+    """Run one lifecycle operation with per-thread stdout capture."""
+    return _capture_tool_stdout(
+        _workflow_tool_impl,
+        operation,
+        target,
+        spec_json=spec_json,
+        name=name,
+        stages_json=stages_json,
+        options_json=options_json,
+        resume=resume,
+    )
+
+
 def _create_app() -> Any:
     """Create and return the MCP server application."""
+    _install_stdout_router()
     try:
         from mcp.server.fastmcp import FastMCP
     except ImportError as exc:
@@ -199,32 +377,92 @@ def _create_app() -> Any:
     mcp = FastMCP("circuit-weaver", log_level="WARNING")
 
     @mcp.tool()
-    def validate_design(spec_json: str, detail_level: Literal["summary", "full"] = "summary") -> str:
+    def validate_design(spec_json: str, detail_level: Literal["summary", "full"] = "summary") -> Any:
         """Validate a design spec; use full detail to include embedded evidence metadata."""
         return _as_mcp_tool_result(_validate_design_tool(spec_json, detail_level))
 
     @mcp.tool()
-    def generate_artifacts(spec_json: str, output_dir: str = "") -> str:
+    async def generate_artifacts(spec_json: str, output_dir: str = "") -> Any:
         """Generate KiCad artifacts from a JSON spec into output_dir."""
-        return _as_mcp_tool_result(_generate_artifacts_tool(spec_json, output_dir))
+        payload = await asyncio.to_thread(_capture_tool_stdout, _generate_artifacts_tool, spec_json, output_dir)
+        return _as_mcp_tool_result(payload)
 
     @mcp.tool()
-    def discover_projects(root_dir: str = ".", depth: int = 2) -> str:
+    async def discover_projects(root_dir: str = ".", depth: int = 2) -> Any:
         """Discover projects beneath root_dir, scanning at most depth levels."""
-        return _as_mcp_tool_result(_discover_projects_tool(root_dir, depth))
+        payload = await asyncio.to_thread(_capture_tool_stdout, _discover_projects_tool, root_dir, depth)
+        return _as_mcp_tool_result(payload)
 
     @mcp.tool()
-    def research_component(query: str) -> str:
+    async def research_component(query: str) -> Any:
         """Look up a component by MPN, description, or keyword."""
-        return _as_mcp_tool_result(_research_component_tool(query))
+        payload = await asyncio.to_thread(_capture_tool_stdout, _research_component_tool, query)
+        return _as_mcp_tool_result(payload)
 
     @mcp.tool()
-    def manufacturing_readiness(readiness_path: str) -> str:
+    async def manufacturing_readiness(readiness_path: str) -> Any:
         """Read a manufacturing_readiness.json artifact and return its exact state."""
+        payload = await asyncio.to_thread(_capture_tool_stdout, _manufacturing_readiness_tool, readiness_path)
+        return _as_mcp_tool_result(payload)
 
-        return _as_mcp_tool_result(_manufacturing_readiness_tool(readiness_path))
+    @mcp.tool()
+    def runtime_info() -> Any:
+        """Report the installed runtime, skill installation state, and MCP launch details."""
+        return _as_mcp_tool_result(_workflow_tool("runtime_info"))
+
+    @mcp.tool()
+    def start_project(project_dir: str, spec_json: str = "", name: str = "") -> Any:
+        """Create and initialize a project at an explicit absolute project_dir."""
+        return _as_mcp_tool_result(_workflow_tool("start_project", project_dir, spec_json=spec_json, name=name))
+
+    @mcp.tool()
+    def open_project(target: str) -> Any:
+        """Open or resume project discovery from an explicit absolute path."""
+        return _as_mcp_tool_result(_workflow_tool("open_project", target))
+
+    @mcp.tool()
+    def plan_workflow(target: str, stages_json: str = "", options_json: str = "") -> Any:
+        """Plan workflow stages for an explicit absolute project path without executing them."""
+        return _as_mcp_tool_result(
+            _workflow_tool(
+                "plan_workflow",
+                target,
+                stages_json=stages_json,
+                options_json=options_json,
+            )
+        )
+
+    @mcp.tool()
+    async def run_workflow(target: str, stages_json: str = "", options_json: str = "", resume: bool = False) -> Any:
+        """Execute selected workflow stages and persist resumable checkpoints."""
+        payload = await asyncio.to_thread(
+            _workflow_tool,
+            "run_workflow",
+            target,
+            stages_json=stages_json,
+            options_json=options_json,
+            resume=resume,
+        )
+        return _as_mcp_tool_result(payload)
+
+    @mcp.tool()
+    def workflow_status(target: str) -> Any:
+        """Read durable workflow status for an explicit absolute project path."""
+        return _as_mcp_tool_result(_workflow_tool("workflow_status", target))
+
+    @mcp.tool()
+    async def resume_workflow(target: str, options_json: str = "") -> Any:
+        """Execute the verified saved workflow from its first incomplete stage."""
+        payload = await asyncio.to_thread(_workflow_tool, "resume_workflow", target, options_json=options_json)
+        return _as_mcp_tool_result(payload)
+
+    @mcp.tool()
+    def cancel_workflow(target: str) -> Any:
+        """Request workflow cancellation at the next stage boundary."""
+        return _as_mcp_tool_result(_workflow_tool("cancel_workflow", target))
 
     return mcp
+
 
 
 def _report_to_json(report: Any, detail_level: Literal["summary", "full"] = "full") -> str:

@@ -341,6 +341,50 @@ CAPABILITIES: Final[tuple[CapabilityRecord, ...]] = (
         verification_prereq=NOT_APPLICABLE,
         output_guarantee=NOT_APPLICABLE,
     ),
+    _record(
+        "start", "start",
+        python="circuit_weaver.project_workflow:start_project", mcp="start_project",
+        skill="circuit-weaver", since_version="unreleased", **_NON_DESIGN,
+    ),
+    _record(
+        "open", "open",
+        python="circuit_weaver.project_workflow:open_project", mcp="open_project",
+        skill="circuit-weaver", since_version="unreleased", **_NON_DESIGN,
+    ),
+    _record(
+        "runtime-info", "runtime-info",
+        python="circuit_weaver.runtime_info:runtime_info", mcp="runtime_info",
+        skill="circuit-weaver", since_version="unreleased", **_NON_DESIGN,
+    ),
+    _record(
+        "workflow", "workflow",
+        skill="circuit-weaver", since_version="unreleased", **_NON_DESIGN,
+    ),
+    _record(
+        "workflow-plan", "workflow plan",
+        python="circuit_weaver.project_workflow:plan_workflow", mcp="plan_workflow",
+        skill="circuit-weaver", since_version="unreleased", **_NON_DESIGN,
+    ),
+    _record(
+        "workflow-run", "workflow run",
+        python="circuit_weaver.project_workflow:run_workflow", mcp="run_workflow",
+        skill="circuit-weaver", since_version="unreleased", **_NON_DESIGN,
+    ),
+    _record(
+        "workflow-status", "workflow status",
+        python="circuit_weaver.project_workflow:workflow_status", mcp="workflow_status",
+        skill="circuit-weaver", since_version="unreleased", **_NON_DESIGN,
+    ),
+    _record(
+        "workflow-resume", "workflow resume",
+        python="circuit_weaver.project_workflow:resume_workflow", mcp="resume_workflow",
+        skill="circuit-weaver", since_version="unreleased", **_NON_DESIGN,
+    ),
+    _record(
+        "workflow-cancel", "workflow cancel",
+        python="circuit_weaver.project_workflow:cancel_workflow", mcp="cancel_workflow",
+        skill="circuit-weaver", since_version="unreleased", **_NON_DESIGN,
+    ),
     _record("save-research", "save-research", maturity="experimental", skill="circuit-weaver"),
     _record(
         "log-event",

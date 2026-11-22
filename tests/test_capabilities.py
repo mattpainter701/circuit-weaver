@@ -21,11 +21,12 @@ from circuit_weaver.capabilities import (
 def _dispatcher_top_level_parser_names() -> set[str]:
     """Read top-level parser declarations without importing the CLI or parsing argv."""
 
-    dispatcher = Path(__file__).parents[1] / "src" / "circuit_weaver" / "dispatcher.py"
-    tree = ast.parse(dispatcher.read_text(encoding="utf-8"))
+    package = Path(__file__).parents[1] / "src" / "circuit_weaver"
+    modules = [package / name for name in ("dispatcher.py", "workflow_cli.py")]
     return {
         node.args[0].value
-        for node in ast.walk(tree)
+        for module in modules
+        for node in ast.walk(ast.parse(module.read_text(encoding="utf-8")))
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "add_parser"

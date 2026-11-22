@@ -33,7 +33,17 @@ Circuit Weaver supports **describe the design → validate → generate KiCad ar
 
 Circuit Weaver is an **alpha tool for engineering prototypes**. The 0.37.0 workflow corpus covers all 13 shipped samples and three connected mixed-signal boards with 149, 155 and 145 physical parts. Each passes 16 stages, including native routing, DRC, assembled model previews and a real MCP session. These are finite regression fixtures; passing them does not establish arbitrary-circuit electrical correctness or fabrication readiness.
 
-Claude Code, Codex and OpenCode can use the packaged agent skills and CLI. The optional MCP server exposes five focused tools rather than the entire CLI lifecycle. Installer and MCP tests do not constitute a fresh end-to-end test inside every agent client; see [agent platform support](docs/agent-platforms.md).
+Claude Code, Codex and OpenCode can use the packaged agent skills, CLI and optional MCP server. MCP retains its five focused validation and discovery tools and adds runtime inspection plus checkpointed project lifecycle tools. Workflow execution is a synchronous request/response operation; cancellation is observed at stage boundaries. Installer and MCP tests do not constitute a fresh end-to-end test inside every agent client; see [agent platform support](docs/agent-platforms.md).
+
+| Project workflow need | CLI | MCP | Behavior |
+|-|-|-|-|
+| Check the installed interpreter, capabilities and skill state | `runtime-info --json` | `runtime_info` | Read-only preflight |
+| Discover or start a project | `discover --root <dir> --json`, `start <dir> --json` | `discover_projects`, `start_project` | Project paths are explicit for lifecycle operations |
+| Open, inspect, and plan work | `open <path> --json`, `workflow plan <dir> --json` | `open_project`, `workflow_status`, `plan_workflow` | Planning does not execute stages |
+| Execute or continue checkpointed work | `workflow run <dir>`, `workflow resume <dir>` | `run_workflow`, `resume_workflow` | Stages are validate, generate, build, place, route, preview; checkpoints use input and artifact hashes |
+| Request cancellation | `workflow cancel <dir>` | `cancel_workflow` | Cancellation takes effect at the next stage boundary |
+
+See the [project workflow guide](docs/project-workflows.md) for runtime selection, Python functions, MCP configuration, and checkpoint semantics. These tools report only the evidence their completed stages actually produced; they do not grant manufacturing approval.
 
 RF research and circuit-generation assistance are available, but controlled-impedance routing, matching networks, antenna performance and RF stability require separate engineering verification. Native DRC and a rendered board are not evidence of RF performance. Review the [automation validation guide](docs/automation-validation.md) for prerequisites, evidence and prototype delivery gates.
 
@@ -101,6 +111,15 @@ Verification is conservative: a capability only claims the evidence level its pu
 | `manufacturing-readiness` | beta | CLI: `manufacturing-readiness`; Python: `circuit_weaver.manufacturing_readiness:read_manufacturing_readiness`; HTTP: `POST /manufacturing-readiness`; MCP: `manufacturing_readiness`; Skill: `circuit-weaver` | `static-parse` → `static-parse` | `command-contract`, `fabrication-ready` | 0.34.0 |
 | `simulate` | experimental | CLI: `simulate`; Skill: `circuit-weaver` | `static-parse` → `static-parse` | `command-contract`, `static-parse` | 0.32.1 |
 | `discover` | beta | CLI: `discover`; MCP: `discover_projects`; Skill: `circuit-weaver` | not applicable (operational) | `command-contract` | 0.32.1 |
+| `start` | beta | CLI: `start`; Python: `circuit_weaver.project_workflow:start_project`; MCP: `start_project`; Skill: `circuit-weaver` | not applicable (operational) | `command-contract` | unreleased |
+| `open` | beta | CLI: `open`; Python: `circuit_weaver.project_workflow:open_project`; MCP: `open_project`; Skill: `circuit-weaver` | not applicable (operational) | `command-contract` | unreleased |
+| `runtime-info` | beta | CLI: `runtime-info`; Python: `circuit_weaver.runtime_info:runtime_info`; MCP: `runtime_info`; Skill: `circuit-weaver` | not applicable (operational) | `command-contract` | unreleased |
+| `workflow` | beta | CLI: `workflow`; Skill: `circuit-weaver` | not applicable (operational) | `command-contract` | unreleased |
+| `workflow plan` | beta | CLI: `workflow plan`; Python: `circuit_weaver.project_workflow:plan_workflow`; MCP: `plan_workflow`; Skill: `circuit-weaver` | not applicable (operational) | `command-contract` | unreleased |
+| `workflow run` | beta | CLI: `workflow run`; Python: `circuit_weaver.project_workflow:run_workflow`; MCP: `run_workflow`; Skill: `circuit-weaver` | not applicable (operational) | `command-contract` | unreleased |
+| `workflow status` | beta | CLI: `workflow status`; Python: `circuit_weaver.project_workflow:workflow_status`; MCP: `workflow_status`; Skill: `circuit-weaver` | not applicable (operational) | `command-contract` | unreleased |
+| `workflow resume` | beta | CLI: `workflow resume`; Python: `circuit_weaver.project_workflow:resume_workflow`; MCP: `resume_workflow`; Skill: `circuit-weaver` | not applicable (operational) | `command-contract` | unreleased |
+| `workflow cancel` | beta | CLI: `workflow cancel`; Python: `circuit_weaver.project_workflow:cancel_workflow`; MCP: `cancel_workflow`; Skill: `circuit-weaver` | not applicable (operational) | `command-contract` | unreleased |
 | `save-research` | experimental | CLI: `save-research`; Skill: `circuit-weaver` | `static-parse` → `static-parse` | `command-contract`, `static-parse` | 0.32.1 |
 | `log-event` | beta | CLI: `log-event` | not applicable (operational) | `command-contract` | 0.32.1 |
 <!-- capability-registry:end -->

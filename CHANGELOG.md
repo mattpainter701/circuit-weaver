@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Start, open, plan, run, and resume a project through the CLI, Python, or MCP. Saved checkpoints verify inputs and outputs before resuming work.
+
 ### Fixed
 
 - Electrical validation detects a supply pin shorted to ground, including a regulator whose output and ground pins share a net.

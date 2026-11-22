@@ -8,6 +8,15 @@ import pytest
 from circuit_weaver import dispatcher, pcb_model_preview, pcb_preview
 
 
+@pytest.fixture(autouse=True)
+def renderer_dispatch_only(monkeypatch):
+    # These tests mock rendering and deliberately create no native files.
+    # Checkpoint and artifact validation are exercised by workflow tests.
+    from circuit_weaver import workflow_cli
+
+    monkeypatch.setattr(workflow_cli, "native_stage", lambda stage, source, output, options, action: action())
+
+
 def test_requested_unavailable_model_render_fails_cli_with_json(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", [
         "circuit-weaver", "preview-pcb", "board.kicad_pcb", "-o", "preview.svg", "--render-3d",

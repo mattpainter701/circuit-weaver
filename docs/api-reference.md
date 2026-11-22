@@ -1,6 +1,6 @@
 # API Reference
 
-Public Python API for Circuit Weaver. All functions are in `circuit_weaver.dispatcher`.
+Public Python API for Circuit Weaver. Design operations are in `circuit_weaver.dispatcher`; durable project lifecycle operations are in `circuit_weaver.project_workflow`.
 
 ```python
 from circuit_weaver.dispatcher import (
@@ -13,7 +13,16 @@ from circuit_weaver.dispatcher import (
 )
 from circuit_weaver.design_import import analyze_design, import_design
 from circuit_weaver.project_state import get_project_state_summary, resume_project
+from circuit_weaver.project_workflow import (
+    start_project, open_project, plan_workflow, run_workflow,
+    workflow_status, resume_workflow, cancel_workflow,
+)
+from circuit_weaver.runtime_info import runtime_info
 ```
+
+For lifecycle arguments, checkpoint semantics and runnable examples, see
+[Project lifecycle workflows](project-workflows.md). `resume_workflow` executes
+the saved plan; `resume_project` remains the legacy non-executing summary.
 
 ---
 
