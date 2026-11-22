@@ -25,6 +25,10 @@ All platforms follow the same design flow — just different UI for user input.
 
 ## Start, Open, and Resume Projects (First Route)
 
+Use `circuit-weaver library-access <part> --project-root <directory> --json`
+to check which symbols, footprints, 3D models, and SPICE model bindings are
+available locally. The MCP tool `library_access` accepts an absolute project path.
+
 For every request to start, open, continue, or resume a project, first identify the
 runtime that will perform the work. Use the installed `circuit-weaver` command
 when available; otherwise use the explicitly selected Python interpreter with
