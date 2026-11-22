@@ -371,6 +371,7 @@ def _create_app() -> Any:
     _install_stdout_router()
     try:
         from mcp.server.fastmcp import FastMCP
+        from mcp.types import ToolAnnotations
     except ImportError as exc:
         raise RuntimeError("MCP support is unavailable; install circuit-weaver[mcp]") from exc
 
@@ -409,6 +410,20 @@ def _create_app() -> Any:
     def runtime_info() -> Any:
         """Report the installed runtime, skill installation state, and MCP launch details."""
         return _as_mcp_tool_result(_workflow_tool("runtime_info"))
+
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
+    async def library_access(query: str = "", project_root: str = "") -> Any:
+        """Inspect local CAD assets, curated component support and SPICE model bindings."""
+        from .library_access import audit_library_access
+
+        try:
+            root = _absolute_workflow_path(project_root, "project_root") if project_root else None
+            result = await asyncio.to_thread(
+                _capture_tool_stdout, audit_library_access, query or None, project_root=root
+            )
+            return _as_mcp_tool_result(json.dumps(result, default=str))
+        except (OSError, ValueError) as exc:
+            return _as_mcp_tool_result(_error_json("library_access_failed", str(exc)))
 
     @mcp.tool()
     def start_project(project_dir: str, spec_json: str = "", name: str = "") -> Any:

@@ -73,6 +73,39 @@ def test_builtin_uses_exact_legacy_shield_name_without_mutating_registry(tmp_pat
     assert {pin.number for pin in BUILTIN_REGISTRY.get("USB-C-PWR-ND").pins} == {pin.number for pin in bound.pins}
 
 
+def test_explicit_environment_footprint_root_precedes_same_name_global_stock_library(tmp_path, monkeypatch):
+    from circuit_weaver import footprint_lib
+
+    explicit_root = tmp_path / "user-overrides"
+    explicit_root.mkdir()
+    custom_library = explicit_root / "Connector_USB.pretty"
+    custom_library.mkdir()
+    custom_file = custom_library / "USB_C_Receptacle_GCT_USB4085.kicad_mod"
+    numbers = ({pin.number for pin in BUILTIN_REGISTRY._components["USB-C-PWR"].pins} - {"SH"}) | {"S1"}
+    custom_file.write_text(
+        '(footprint "USB4085" ' + " ".join(f'(pad "{number}" smd rect)' for number in sorted(numbers)) + ")",
+        encoding="utf-8",
+    )
+
+    stock_root = tmp_path / "stock"
+    stock_library = stock_root / "Connector_USB.pretty"
+    stock_library.mkdir(parents=True)
+    stock_file = stock_library / "USB_C_Receptacle_GCT_USB4085.kicad_mod"
+    stock_file.write_text('(footprint "USB4085" (pad "SH" smd rect))', encoding="utf-8")
+    monkeypatch.setenv("KICAD_FOOTPRINT_DIR", str(explicit_root))
+    monkeypatch.setattr(footprint_lib, "_KICAD_FOOTPRINT_PATHS", {"Windows": [stock_root]})
+    monkeypatch.setattr(
+        footprint_lib,
+        "_global_library_table_entries",
+        lambda *_args: {"Connector_USB": stock_library},
+    )
+
+    bound = BUILTIN_REGISTRY.get("USB-C-PWR")
+
+    assert "S1" in {pin.number for pin in bound.pins}
+    assert "SH" not in {pin.number for pin in bound.pins}
+
+
 def test_unknown_legacy_pad_set_is_not_silently_reconciled(tmp_path, monkeypatch):
     canonical = _legacy_library(tmp_path, monkeypatch, extra_pad="UNEXPECTED")
 

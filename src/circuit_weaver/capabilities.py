@@ -385,6 +385,11 @@ CAPABILITIES: Final[tuple[CapabilityRecord, ...]] = (
         python="circuit_weaver.project_workflow:cancel_workflow", mcp="cancel_workflow",
         skill="circuit-weaver", since_version="unreleased", **_NON_DESIGN,
     ),
+    _record(
+        "library-access", "library-access",
+        python="circuit_weaver.library_access:audit_library_access", mcp="library_access",
+        skill="circuit-weaver", since_version="unreleased", **_NON_DESIGN,
+    ),
     _record("save-research", "save-research", maturity="experimental", skill="circuit-weaver"),
     _record(
         "log-event",

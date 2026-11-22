@@ -363,6 +363,7 @@ def test_stdio_server_handshake_and_tool_call(tmp_path: Path) -> None:
                     "research_component",
                     "manufacturing_readiness",
                     "runtime_info",
+                    "library_access",
                     "start_project",
                     "open_project",
                     "plan_workflow",
