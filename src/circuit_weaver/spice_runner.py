@@ -7,10 +7,13 @@ degradation when ngspice is not installed.
 
 from __future__ import annotations
 
+import math
+import os
 import re
 import shutil
 import subprocess
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -30,6 +33,8 @@ class SimulationResult:
     warnings: list[str] = field(default_factory=list)
     duration_sec: float = 0.0
     skip_reason: str = ""
+    evidence_verified: bool = False
+    target_checks: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -42,6 +47,8 @@ class SimulationResult:
             "warnings": self.warnings,
             "duration_sec": round(self.duration_sec, 2),
             "skip_reason": self.skip_reason,
+            "evidence_verified": self.evidence_verified,
+            "target_checks": self.target_checks,
         }
 
 
@@ -60,41 +67,103 @@ def _parse_raw_ascii(raw_path: Path) -> tuple[dict[str, list[float]], list[str]]
     Returns:
         (traces dict, variable names list)
     """
-    content = raw_path.read_text(encoding="utf-8", errors="replace")
-    traces: dict[str, list[float]] = {}
-    var_names: list[str] = []
-    in_values = False
+    content = raw_path.read_text(encoding="utf-8", errors="strict")
+    names: list[str] = []
+    expected_vars: int | None = None
+    expected_points: int | None = None
+    flags = ""
+    section = "header"
+    points: list[list[float]] = []
+    current: list[float] = []
 
-    for line in content.splitlines():
-        line = line.strip()
-
-        if line.startswith("No. Variables:"):
-            pass  # n_vars parsed but not needed for trace extraction
-        elif line.startswith("No. Points:"):
-            pass  # n_points parsed but not needed for trace extraction
-        elif line.startswith("Variables:"):
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if section == "header":
+            if line.startswith("Flags:"):
+                flags = line.split(":", 1)[1].strip().lower()
+            elif line.startswith("No. Variables:"):
+                expected_vars = int(line.split(":", 1)[1])
+            elif line.startswith("No. Points:"):
+                expected_points = int(line.split(":", 1)[1])
+            elif line == "Variables:":
+                section = "variables"
             continue
-        elif re.match(r"^\d+\t", line) and not in_values:
-            # Variable definition line: "0\ttime\ttime"
-            parts = line.split("\t")
-            if len(parts) >= 2:
-                name = parts[1].strip()
-                var_names.append(name)
-                traces[name] = []
-        elif line == "Values:":
-            in_values = True
-        elif in_values and line:
-            # Data values
-            parts = line.split()
-            for i, val_str in enumerate(parts):
-                try:
-                    val = float(val_str.replace(",", ""))
-                    if i < len(var_names):
-                        traces[var_names[i]].append(val)
-                except (ValueError, IndexError):
-                    pass
+        if section == "variables":
+            if line == "Values:":
+                section = "values"
+                continue
+            match = re.match(r"^(\d+)\s+([^\s]+)\s+([^\s]+)(?:\s+.*)?$", line)
+            if not match or int(match.group(1)) != len(names):
+                raise ValueError("Malformed or non-sequential raw variable table")
+            names.append(match.group(2))
+            continue
+        if not line:
+            continue
 
-    return traces, var_names
+        # Each point starts with its sequential point index. Remaining variables
+        # may be on continuation lines, optionally prefixed by their variable index.
+        match = re.match(r"^(\d+)\s+(.+)$", line)
+        if not current:
+            if not match or int(match.group(1)) != len(points):
+                raise ValueError("Malformed or non-sequential raw point index")
+            value_text = match.group(2).strip()
+        elif match and int(match.group(1)) == len(current):
+            value_text = match.group(2).strip()
+        else:
+            value_text = line
+
+        if flags == "complex":
+            pair = re.split(r"[\s,]+", value_text.strip("()"))
+            if len(pair) != 2:
+                raise ValueError("Malformed complex raw value")
+            value = complex(float(pair[0]), float(pair[1]))
+            if not math.isfinite(value.real) or not math.isfinite(value.imag):
+                raise ValueError("Raw output contains non-finite values")
+            # Existing trace consumers are real-valued; retain magnitude for AC
+            # response vectors while preserving the real frequency axis.
+            parsed_value = abs(value)
+        elif flags == "real":
+            try:
+                parsed_value = float(value_text)
+            except ValueError as exc:
+                raise ValueError("Malformed real raw value") from exc
+            if not math.isfinite(parsed_value):
+                raise ValueError("Raw output contains non-finite values")
+        else:
+            raise ValueError(f"Unsupported or missing raw flags: {flags or 'unknown'}")
+        current.append(parsed_value)
+        if expected_vars is not None and len(current) == expected_vars:
+            points.append(current)
+            current = []
+        elif expected_vars is not None and len(current) > expected_vars:
+            raise ValueError("Raw point has more values than declared variables")
+
+    if current:
+        raise ValueError("Raw output ends with an incomplete point")
+    if not names or expected_vars != len(names):
+        raise ValueError("Raw variable table is missing or incomplete")
+    if expected_points is None or expected_points <= 0 or len(points) != expected_points:
+        raise ValueError("Raw output point count is missing or incomplete")
+    return {name: [point[index] for point in points] for index, name in enumerate(names)}, names
+
+
+def _validate_raw_evidence(traces: dict[str, list[float]], sim_type: str) -> None:
+    """Reject empty, malformed, or incomplete raw output before calling it evidence."""
+    if not traces or any(not values for values in traces.values()):
+        raise ValueError("raw output contains no complete vectors")
+    if any(not math.isfinite(value) for values in traces.values() for value in values):
+        raise ValueError("raw output contains non-finite values")
+    if len({len(values) for values in traces.values()}) != 1:
+        raise ValueError("raw output vectors have inconsistent point counts")
+    axis_name = {"tran": "time", "ac": "frequency"}.get(sim_type)
+    if axis_name:
+        axis = traces.get(axis_name)
+        if axis is None or len(axis) < 2 or any(b <= a for a, b in zip(axis, axis[1:])):
+            raise ValueError(f"raw output lacks a strictly increasing {axis_name} axis")
+    if sim_type in {"tran", "ac"}:
+        axis_name = "time" if sim_type == "tran" else "frequency"
+        if not any(name.casefold() != axis_name for name in traces):
+            raise ValueError("raw output contains no measured signal vectors")
 
 
 def _extract_metrics(
@@ -192,35 +261,62 @@ def run_simulation(
             skip_reason=f"Netlist not found: {netlist}",
         )
 
-    wdir = Path(working_dir) if working_dir else netlist.parent
+    original_netlist = netlist.resolve()
+    wdir = (Path(working_dir) if working_dir else original_netlist.parent).resolve()
+    try:
+        source = original_netlist.read_text(encoding="utf-8", errors="strict")
+    except (OSError, UnicodeError) as exc:
+        return SimulationResult(status="failed", sim_type=sim_type, skip_reason=f"Cannot read netlist: {exc}")
+
+    # Each process gets a private input path and raw output. Keep cwd unchanged
+    # so relative .include and .lib paths resolve as they did before isolation.
+    run_id = uuid.uuid4().hex
+    run_netlist = wdir / f".{original_netlist.stem}-{run_id}.cir"
+    raw_file = wdir / f".{original_netlist.stem}-{run_id}.raw"
+    source = re.sub(
+        r"(?im)^(\s*write\s+)(?:\"[^\"]*\"|'[^']*'|\S+)(.*)$",
+        lambda match: f'{match.group(1)}"{raw_file}"{match.group(2)}',
+        source,
+    )
+    try:
+        run_netlist.write_text(source, encoding="utf-8", errors="strict")
+    except OSError as exc:
+        return SimulationResult(status="failed", sim_type=sim_type, skip_reason=f"Cannot stage isolated netlist: {exc}")
 
     try:
         # Run ngspice in batch mode
         proc = subprocess.run(
-            [ngspice, "-b", str(netlist)],
+            [ngspice, "-b", "-r", str(raw_file), str(run_netlist)],
             capture_output=True,
             text=True,
             timeout=timeout,
             cwd=str(wdir),
+            env={**os.environ, "SPICE_ASCIIRAWFILE": "1"},
         )
 
         duration = time.time() - t0
 
-        # Check for raw file output
-        raw_file = wdir / "results.raw"
-        if not raw_file.exists():
-            # Try default output name
-            raw_file = netlist.with_suffix(".raw")
-
         warnings = []
-        if proc.stderr:
-            for line in proc.stderr.splitlines():
+        diagnostics = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+        if diagnostics:
+            for line in diagnostics.splitlines():
                 if "warning" in line.lower() or "error" in line.lower():
                     warnings.append(line.strip())
 
-        if raw_file.exists() and raw_file.stat().st_size > 0:
+        if proc.returncode != 0 or re.search(
+            r"\b(?:fatal\s+)?error\s*:|singular matrix|timestep too small|failed to converge|no convergence",
+            diagnostics,
+            re.IGNORECASE,
+        ):
+            result = SimulationResult(
+                status="failed", sim_type=sim_type,
+                skip_reason=f"ngspice reported failure (exit {proc.returncode})",
+                warnings=warnings[:10], duration_sec=duration,
+            )
+        elif raw_file.exists() and raw_file.stat().st_size > 0:
             try:
                 traces, var_names = _parse_raw_ascii(raw_file)
+                _validate_raw_evidence(traces, sim_type)
                 metrics = _extract_metrics(traces, sim_type)
 
                 result = SimulationResult(
@@ -233,6 +329,7 @@ def run_simulation(
                     metrics=metrics,
                     warnings=warnings[:10],
                     duration_sec=duration,
+                    evidence_verified=True,
                 )
             except Exception as exc:
                 result = SimulationResult(
@@ -265,7 +362,17 @@ def run_simulation(
             skip_reason=f"Failed to run ngspice: {exc}",
             duration_sec=time.time() - t0,
         )
+    finally:
+        try:
+            run_netlist.unlink(missing_ok=True)
+        except OSError as exc:
+            if "result" in locals():
+                result.warnings.append(f"Could not remove staged netlist: {exc}")
 
+    return _log_result(result, original_netlist, sim_type)
+
+
+def _log_result(result: SimulationResult, netlist: Path, sim_type: str) -> SimulationResult:
     # Log to design.log
     from .logging_bridge import get_design_logger
 

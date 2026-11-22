@@ -143,6 +143,7 @@ class TestExportSpiceNetlist:
         assert "R1" in content
         assert "C1" in content
         assert ".tran" in content
+        assert "set filetype=ascii" in content
         assert ".end" in content
 
     def test_skips_components_without_models(self, tmp_path):

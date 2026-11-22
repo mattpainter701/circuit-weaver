@@ -7,6 +7,7 @@ into a DesignSimulationReport with a confidence score.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -69,6 +70,48 @@ class DesignSimulationReport:
 
 _POWER_CATEGORIES = {"buck", "boost", "buck_boost", "ldo", "charge_pump", "power_mux"}
 _FILTER_CATEGORIES = {"filter", "rc_filter", "lc_filter", "pll_filter"}
+
+
+def _evaluate_simulation_targets(result: SimulationResult, targets: dict[str, Any]) -> None:
+    """Compare only measurements with a known metric meaning; retain unknowns."""
+    checks: dict[str, str] = {}
+    for key, limit in targets.items():
+        if isinstance(limit, bool) or not isinstance(limit, (int, float)) or not math.isfinite(float(limit)):
+            checks[str(key)] = "unverified"
+            continue
+        normalized = str(key).casefold()
+        if normalized == "ripple_mv":
+            matches = [value for name, value in result.metrics.items() if name.casefold().endswith("_ripple_mv")]
+            if len(matches) != 1 or not math.isfinite(float(matches[0])):
+                checks[str(key)] = "unverified"
+            else:
+                checks[str(key)] = "passed" if matches[0] <= limit else "failed"
+        elif normalized == "phase_margin_deg":
+            matches = [value for name, value in result.metrics.items() if name.casefold() == normalized]
+            if len(matches) != 1 or not math.isfinite(float(matches[0])):
+                checks[str(key)] = "unverified"
+            else:
+                checks[str(key)] = "passed" if matches[0] >= limit else "failed"
+        else:
+            # In particular, a generic AC point count is not a phase margin.
+            checks[str(key)] = "unverified"
+    result.target_checks = checks
+
+
+def _targets_for_analysis(targets: dict[str, Any], analysis: str) -> dict[str, Any]:
+    """Keep planned target checks on the analysis that can measure them."""
+    selected: dict[str, Any] = {}
+    for key, value in targets.items():
+        normalized = str(key).casefold()
+        if "ripple" in normalized:
+            if analysis == "tran":
+                selected[key] = value
+        elif "phase_margin" in normalized or "bandwidth" in normalized:
+            if analysis == "ac":
+                selected[key] = value
+        else:
+            selected[key] = value
+    return selected
 
 
 def plan_simulations(
@@ -148,8 +191,7 @@ def score_simulation_confidence(results: list[SimulationResult]) -> tuple[float,
     """Score 0-100 based on simulation outcomes.
 
     Factors:
-    - % of sims that ran successfully (not skipped/failed)
-    - % that produced metrics within target ranges
+    - % of sims that produced fresh, parsed raw evidence and metrics
     - Penalty for skipped sims (tool not available)
     - Penalty for failed sims (errors)
     """
@@ -157,9 +199,23 @@ def score_simulation_confidence(results: list[SimulationResult]) -> tuple[float,
         return 0.0, "F"
 
     total = len(results)
-    ok_count = sum(1 for r in results if r.status == "ok")
+    ok_count = sum(
+        1 for r in results
+        if r.status == "ok"
+        and r.evidence_verified
+        and bool(r.metrics)
+        and bool(r.target_checks)
+        and all(state == "passed" for state in r.target_checks.values())
+    )
     skipped_count = sum(1 for r in results if r.status == "skipped")
-    failed_count = sum(1 for r in results if r.status in ("failed", "timeout"))
+    failed_count = sum(
+        1 for r in results
+        if r.status in ("failed", "timeout")
+        or (
+            r.status == "ok"
+            and any(state == "failed" for state in r.target_checks.values())
+        )
+    )
 
     # Base score from success rate
     if total == skipped_count:
@@ -246,6 +302,10 @@ def run_design_simulations(
                 title=f"Power simulation: {ref} ({analysis})",
             )
             result = run_simulation(netlist_path, sim_type=analysis)
+            _evaluate_simulation_targets(
+                result,
+                _targets_for_analysis(sim_def.get("target_metrics", {}), analysis),
+            )
             results.append(result)
 
             if result.status == "ok":
@@ -298,10 +358,23 @@ def run_design_simulations(
     # Summary
     ok = sum(1 for r in results if r.status == "ok")
     skipped = sum(1 for r in results if r.status == "skipped")
-    failed = sum(1 for r in results if r.status in ("failed", "timeout"))
+    failed = sum(
+        1 for r in results
+        if r.status in ("failed", "timeout") or any(state == "failed" for state in r.target_checks.values())
+    )
+    unverified = sum(
+        1 for r in results
+        if r.status == "ok"
+        and (
+            not r.evidence_verified
+            or not r.metrics
+            or not r.target_checks
+            or any(state == "unverified" for state in r.target_checks.values())
+        )
+    )
     summary = (
         f"{len(results)} simulation(s) planned. "
-        f"{ok} passed, {failed} failed, {skipped} skipped. "
+        f"{ok} ran, {failed} failed, {unverified} unverified, {skipped} skipped. "
         f"Confidence: {confidence_score}/100 ({grade})."
     )
 

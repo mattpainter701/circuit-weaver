@@ -1,6 +1,12 @@
 """Tests for SPICE simulation runner."""
 
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from threading import Barrier
+from types import SimpleNamespace
 from unittest.mock import patch
+
+import pytest
 
 from circuit_weaver.spice_runner import (
     SimulationResult,
@@ -36,6 +42,132 @@ class TestRunSimulation:
         assert result.status == "failed"
         assert "not found" in result.skip_reason
 
+    @staticmethod
+    def _raw(path, contents=None):
+        path.write_text(contents or """Title: test
+Plotname: Transient Analysis
+Flags: real
+No. Variables: 2
+No. Points: 3
+Variables:
+0\ttime\ttime
+1\tv(out)\tvoltage
+Values:
+0 0
+ 1 1.0
+1 1e-6
+ 1 1.1
+2 2e-6
+ 1 1.0
+""")
+
+    def test_success_requires_fresh_verified_raw_evidence(self, tmp_path):
+        netlist = tmp_path / "test.cir"
+        netlist.write_text(".tran 1u 2u\n.end")
+
+        def run(*args, **kwargs):
+            command = args[0]
+            assert "-a" not in command
+            assert kwargs["env"]["SPICE_ASCIIRAWFILE"] == "1"
+            self._raw(Path(command[command.index("-r") + 1]))
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch("circuit_weaver.spice_runner._find_ngspice", return_value="ngspice"), patch(
+            "circuit_weaver.spice_runner.subprocess.run", side_effect=run
+        ):
+            result = run_simulation(netlist, sim_type="tran")
+        assert result.status == "ok"
+        assert result.evidence_verified
+        assert result.metrics
+
+    def test_stale_raw_file_cannot_satisfy_run(self, tmp_path):
+        netlist = tmp_path / "test.cir"
+        netlist.write_text(".tran 1u 2u\n.end")
+        self._raw(tmp_path / "results.raw")
+        with patch("circuit_weaver.spice_runner._find_ngspice", return_value="ngspice"), patch(
+            "circuit_weaver.spice_runner.subprocess.run",
+            return_value=SimpleNamespace(returncode=0, stdout="", stderr=""),
+        ):
+            result = run_simulation(netlist, sim_type="tran")
+        assert result.status == "failed"
+        assert not result.evidence_verified
+        assert "no output" in result.skip_reason
+        assert (tmp_path / "results.raw").exists()
+
+    def test_nonzero_process_fails_even_if_raw_output_exists(self, tmp_path):
+        netlist = tmp_path / "test.cir"
+        netlist.write_text(".tran 1u 2u\n.end")
+
+        def run(*args, **kwargs):
+            command = args[0]
+            self._raw(Path(command[command.index("-r") + 1]))
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
+
+        with patch("circuit_weaver.spice_runner._find_ngspice", return_value="ngspice"), patch(
+            "circuit_weaver.spice_runner.subprocess.run", side_effect=run
+        ):
+            result = run_simulation(netlist, sim_type="tran")
+        assert result.status == "failed"
+        assert not result.evidence_verified
+        assert "exit 1" in result.skip_reason
+
+    def test_missing_required_axis_fails_closed(self, tmp_path):
+        netlist = tmp_path / "test.cir"
+        netlist.write_text(".tran 1u 2u\n.end")
+
+        def run(*args, **kwargs):
+            command = args[0]
+            self._raw(Path(command[command.index("-r") + 1]), """Title: test
+Flags: real
+No. Variables: 2
+No. Points: 2
+Variables:
+0\tindex\tindex
+1\tv(out)\tvoltage
+Values:
+0 0
+ 1 1.0
+1 1
+ 1 1.1
+""")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch("circuit_weaver.spice_runner._find_ngspice", return_value="ngspice"), patch(
+            "circuit_weaver.spice_runner.subprocess.run", side_effect=run
+        ):
+            result = run_simulation(netlist, sim_type="tran")
+        assert result.status == "failed"
+        assert not result.evidence_verified
+        assert "time axis" in result.skip_reason
+
+    def test_concurrent_runs_use_isolated_raw_files_and_preserve_include_cwd(self, tmp_path):
+        netlist = tmp_path / "same.cir"
+        netlist.write_text('.include "models/device.lib"\n.tran 1u 2u\n.end')
+        (tmp_path / "results.raw").write_text("user's existing raw data")
+        barrier = Barrier(2)
+
+        def run(*args, **kwargs):
+            command = args[0]
+            raw_path = Path(command[command.index("-r") + 1])
+            staged_netlist = Path(command[-1])
+            assert kwargs["cwd"] == str(tmp_path.resolve())
+            assert '.include "models/device.lib"' in staged_netlist.read_text()
+            barrier.wait(timeout=5)
+            self._raw(raw_path)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch("circuit_weaver.spice_runner._find_ngspice", return_value="ngspice"), patch(
+            "circuit_weaver.spice_runner.subprocess.run", side_effect=run
+        ):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(run_simulation, netlist, sim_type="tran") for _ in range(2)]
+                results = [future.result(timeout=10) for future in futures]
+
+        assert all(result.status == "ok" for result in results)
+        assert len({result.raw_file for result in results}) == 2
+        assert all(Path(result.raw_file).is_file() for result in results)
+        assert (tmp_path / "results.raw").read_text() == "user's existing raw data"
+
     def test_to_dict(self):
         result = SimulationResult(
             status="ok", sim_type="tran",
@@ -62,22 +194,60 @@ Variables:
 0\ttime\ttime
 1\tv(out)\tvoltage
 Values:
-0.0 3.3
-1e-6 3.31
-2e-6 3.29
+0 0.0
+ 1 3.3
+1 1e-6
+ 1 3.31
+2 2e-6
+ 1 3.29
 """
         raw_file = tmp_path / "test.raw"
         raw_file.write_text(raw_content)
         traces, var_names = _parse_raw_ascii(raw_file)
         assert "time" in var_names
         assert "v(out)" in var_names
+        assert traces["time"] == [0.0, 1e-6, 2e-6]
 
     def test_empty_raw_file(self, tmp_path):
         raw_file = tmp_path / "empty.raw"
         raw_file.write_text("")
-        traces, var_names = _parse_raw_ascii(raw_file)
-        assert traces == {}
-        assert var_names == []
+        with pytest.raises(ValueError, match="variable table"):
+            _parse_raw_ascii(raw_file)
+
+    def test_reject_incomplete_point_count(self, tmp_path):
+        raw_file = tmp_path / "short.raw"
+        raw_file.write_text("""Title: test
+Flags: real
+No. Variables: 2
+No. Points: 2
+Variables:
+0 time time
+1 v(out) voltage
+Values:
+0 0
+ 1 1.0
+""")
+        with pytest.raises(ValueError, match="point count"):
+            _parse_raw_ascii(raw_file)
+
+    def test_parse_complex_raw_values_as_magnitudes(self, tmp_path):
+        raw_file = tmp_path / "complex.raw"
+        raw_file.write_text("""Title: test
+Flags: complex
+No. Variables: 2
+No. Points: 2
+Variables:
+0 frequency frequency
+1 v(out) voltage
+Values:
+0 (10,0)
+ 1 (3,4)
+1 (20,0)
+ 1 (0,2)
+""")
+        traces, names = _parse_raw_ascii(raw_file)
+        assert names == ["frequency", "v(out)"]
+        assert traces["v(out)"] == [5.0, 2.0]
 
 
 class TestExtractMetrics:

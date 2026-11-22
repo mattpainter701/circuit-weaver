@@ -1,7 +1,11 @@
 """Tests for design confidence dashboard."""
 
+import json
+import shutil
+import subprocess
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from circuit_weaver.confidence_dashboard import (
     ConfidenceSection,
@@ -289,10 +293,37 @@ class TestConfidenceSection:
 
 
 class TestConfidenceCLI:
-    def test_confidence_cli_json(self, tmp_path):
-        import json
-        import subprocess
+    def test_missing_board_and_thermal_data_are_unassessed(self, tmp_path):
+        source = Path(__file__).parents[1] / "samples/led_power_indicator/led_power_indicator.yaml"
+        spec = tmp_path / "design.yaml"
+        shutil.copyfile(source, spec)
+        cmd = [sys.executable, "-m", "circuit_weaver", "confidence", str(spec), "--json",
+               "--pcb", str(tmp_path / "missing.kicad_pcb")]
+        report = json.loads(subprocess.run(cmd, capture_output=True, text=True, check=True).stdout)
+        for name in ("thermal", "manufacturing"):
+            section = report["sections"][name]
+            assert (section["status"], section["grade"], section["score"]) == ("skipped", "N/A", 0)
+        assert report["sections"]["thermal"]["assessed_components"] == 0
+        assert any("DFM" in message for message in report["blockers"])
 
+        specs_dir = tmp_path / "specs"
+        specs_dir.mkdir()
+        data = {"AMS1117-3.3": {"theta_ja": 100, "pdiss_max_w": 2, "tj_max": 125}}
+        (specs_dir / "ic_thermal.json").write_text(json.dumps(data), encoding="utf-8")
+        with_data = json.loads(subprocess.run(cmd, capture_output=True, text=True, check=True).stdout)
+        thermal = with_data["sections"]["thermal"]
+        assert thermal["assessed_components"] == 1
+        assert thermal["status"] == "partial"
+        assert thermal["score"] < 100
+        assert any("Thermal" in message for message in with_data["blockers"])
+
+    def test_failed_erc_and_empty_audit_contribute_no_grade(self):
+        report = generate_confidence_report(erc_result=MockErcResult(status="failed"), xref_results=[])
+        assert report.sections["erc_drc"].grade == "N/A"
+        assert report.sections["cross_reference"].grade == "N/A"
+        assert report.overall_score == 0
+
+    def test_confidence_cli_json(self, tmp_path):
         # Create a minimal spec
         spec = tmp_path / "design.yaml"
         spec.write_text("project: CLITest\nblocks: []")

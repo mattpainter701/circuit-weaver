@@ -30,6 +30,14 @@ class ConfidenceSection:
     issues: list[dict[str, Any]] = field(default_factory=list)
     recommendations: list[str] = field(default_factory=list)
     evidence_ids: list[str] = field(default_factory=list)
+    assessed_components: int | None = None
+
+    def display_result(self) -> str:
+        score = "N/A" if self.status == "skipped" else f"{self.score:.0f}/100 ({self.grade})"
+        if self.assessed_components is None:
+            return score
+        unit = "component" if self.assessed_components == 1 else "components"
+        return f"{score} · {self.assessed_components} {unit} assessed"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -40,6 +48,7 @@ class ConfidenceSection:
             "issue_count": len(self.issues),
             "recommendations": self.recommendations,
             "evidence_ids": sorted(set(self.evidence_ids)),
+            **({"assessed_components": self.assessed_components} if self.assessed_components is not None else {}),
         }
 
 
@@ -99,7 +108,7 @@ class DesignConfidenceReport:
                 "skipped": "[--]",
             }.get(section.status, "[??]")
             lines.append(
-                f"  {status_icon} {section.name:<25} {section.score:5.0f}/100 ({section.grade})"
+                f"  {status_icon} {section.name:<25} {section.display_result()}"
             )
             if section.status == "skipped" and section.recommendations:
                 skipped_hints.append(f"  {section.name}: {section.recommendations[0]}")
@@ -141,7 +150,7 @@ class DesignConfidenceReport:
                         border-left:4px solid {color}">
                 <strong>{section.name}</strong>
                 <span style="float:right;color:{color};font-weight:bold">
-                    {section.score:.0f}/100 ({section.grade})
+                    {section.display_result()}
                 </span>
                 <div style="font-size:0.85em;color:#666">{section.status}</div>
             </div>"""
@@ -320,24 +329,27 @@ def generate_confidence_report(
         )
 
     # 3. Thermal
-    if thermal_result is not None:
-        critical = sum(1 for c in thermal_result.get("components", []) if c.get("status") == "critical")
-        warns = sum(1 for c in thermal_result.get("components", []) if c.get("status") == "warning")
-        total_comps = len(thermal_result.get("components", []))
+    thermal_components = (thermal_result or {}).get("components", [])
+    if thermal_components:
+        critical = sum(1 for c in thermal_components if c.get("status") == "critical")
+        warns = sum(1 for c in thermal_components if c.get("status") == "warning")
+        total_comps = len(thermal_components)
         score = _score_from_issues(total_comps, critical, warns)
         sections["thermal"] = ConfidenceSection(
             name="Thermal Analysis",
             score=score,
             grade=_grade(score),
-            status="complete",
+            status="partial" if components and total_comps < len(components) else "complete",
             recommendations=thermal_result.get("recommendations", []),
+            assessed_components=total_comps,
         )
         if critical:
             blockers.append(f"Thermal: {critical} component(s) exceed Tj_max")
     else:
         sections["thermal"] = ConfidenceSection(
             name="Thermal Analysis", score=0, grade="N/A", status="skipped",
-            recommendations=["No thermal data — add ic_thermal.json with theta_ja and tj_max values"],
+            recommendations=["Supply thermal data including pdiss_max_w in the specs directory."],
+            assessed_components=0,
         )
 
     # 4. Signal Integrity
@@ -348,7 +360,14 @@ def generate_confidence_report(
     )
 
     # 5. Manufacturing/DFM
-    if dfm_violations is not None:
+    input_error = next((v for v in dfm_violations or () if v.type == "dfm_input_unknown"), None)
+    if input_error is not None:
+        blockers.append(input_error.message)
+        sections["manufacturing"] = ConfidenceSection(
+            name="Manufacturing (DFM)", score=0, grade="N/A", status="skipped",
+            recommendations=[input_error.suggestion],
+        )
+    elif dfm_violations is not None:
         critical = sum(1 for v in dfm_violations if getattr(v, "severity", "") == "critical")
         warns = sum(1 for v in dfm_violations if getattr(v, "severity", "") == "warning")
         score = _score_from_issues(len(dfm_violations) + 1, critical, warns)
@@ -367,7 +386,7 @@ def generate_confidence_report(
         )
 
     # 6. Cross-Reference
-    if xref_results is not None:
+    if any(xr.checked_items or xr.issues for xr in xref_results or ()):
         xr_errors = sum(
             sum(1 for i in xr.issues if i.level == "error")
             for xr in xref_results
@@ -393,8 +412,8 @@ def generate_confidence_report(
         )
 
     # 7. ERC/DRC
-    if erc_result is not None:
-        erc_dict = erc_result.to_dict() if hasattr(erc_result, "to_dict") else erc_result
+    erc_dict = erc_result.to_dict() if hasattr(erc_result, "to_dict") else erc_result or {}
+    if erc_dict.get("status") == "ok":
         erc_errs = erc_dict.get("errors", 0)
         erc_warns = erc_dict.get("warnings", 0)
         score = _score_from_issues(erc_errs + erc_warns + 1, erc_errs, erc_warns)
@@ -402,11 +421,13 @@ def generate_confidence_report(
             name="ERC/DRC",
             score=score,
             grade=_grade(score),
-            status="complete" if erc_dict.get("status") == "ok" else "partial",
+            status="complete",
         )
         if erc_errs:
             blockers.append(f"ERC: {erc_errs} error(s)")
     else:
+        if erc_dict.get("status") == "failed":
+            blockers.append(f"ERC failed: {erc_dict.get('skip_reason') or 'no usable result'}")
         sections["erc_drc"] = ConfidenceSection(
             name="ERC/DRC", score=0, grade="N/A", status="skipped",
             recommendations=[

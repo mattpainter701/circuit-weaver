@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import copy
+import hashlib
 import io
 import json
 import logging
@@ -4369,6 +4370,7 @@ def main() -> None:
     conf_p.add_argument("spec", help="Path to YAML/JSON design spec")
     conf_p.add_argument("--output", "-o", default=None, help="Write HTML dashboard to file")
     conf_p.add_argument("--pcb", default=None, help="Path to .kicad_pcb for DFM analysis")
+    conf_p.add_argument("--specs-dir", help="Thermal data directory (default: specs/ beside the design spec)")
     conf_p.add_argument(
         "--run-sims",
         action="store_true",
@@ -5037,8 +5039,7 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
         raise SystemExit(0 if result["status"] in {"ok", "bom_only"} else 1)
 
     if args.command == "export-gerbers":
-        import zipfile
-
+        from .fabrication_export import GerberExportError, export_gerbers_archive
         from .manufacturing_readiness import (
             EVIDENCE_MANIFEST_FILENAME,
             READINESS_FILENAME,
@@ -5058,6 +5059,8 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
         )
         override_values = (args.override_id, args.override_reason, args.override_expires_at)
         try:
+            board_path = Path(args.kicad_pcb)
+            board_sha256 = hashlib.sha256(board_path.read_bytes()).hexdigest()
             if any(value is not None for value in override_values) and not all(
                 isinstance(value, str) and value.strip() for value in override_values
             ):
@@ -5085,11 +5088,12 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
                 readiness,
                 evidence_records=evidence_records,
                 override=override,
+                board_sha256=board_sha256,
             )
-        except ReadinessContractError as exc:
+        except (OSError, ReadinessContractError) as exc:
             _print_json(
                 {
-                    "status": "blocked",
+                    "status": "error" if isinstance(exc, OSError) else "blocked",
                     "message": str(exc),
                     "manufacturing_readiness": str(readiness_path),
                     "evidence_manifest": str(evidence_path),
@@ -5107,53 +5111,22 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
             )
             raise SystemExit(1)
 
-        out = Path(args.output)
-        out.mkdir(parents=True, exist_ok=True)
-
-        # Export gerbers
-        result = subprocess.run(
-            [str(cli), "pcb", "export", "gerbers", "-o", str(out), args.kicad_pcb],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            _print_json(
-                {
-                    "status": "error",
-                    "message": f"kicad-cli gerber export failed: {result.stderr}",
-                }
+        try:
+            exported = export_gerbers_archive(
+                args.kicad_pcb,
+                args.output,
+                kicad_cli=cli,
+                expected_board_sha256=board_sha256,
             )
-            raise SystemExit(1)
-
-        # Export drill files
-        result = subprocess.run(
-            [str(cli), "pcb", "export", "drill", "-o", str(out), args.kicad_pcb],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            _print_json(
-                {
-                    "status": "error",
-                    "message": f"kicad-cli drill export failed: {result.stderr}",
-                }
-            )
-            raise SystemExit(1)
-
-        # ZIP the output files (gerbers + drills)
-        gerber_files = list(out.glob("*.gbr")) + list(out.glob("*.drl"))
-        zip_path = out / f"{Path(args.kicad_pcb).stem}_gerbers.zip"
-
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for f in gerber_files:
-                zf.write(f, arcname=f.name)
+        except (GerberExportError, OSError) as exc:
+            _print_json({"status": "error", "message": str(exc)})
+            raise SystemExit(1) from exc
 
         _print_json(
             {
                 "status": "ok",
-                "message": f"Exported Gerbers and drills to {zip_path}",
-                "zip": str(zip_path),
-                "file_count": len(gerber_files),
+                "message": f"Exported Gerbers and drills to {exported['zip']}",
+                **exported,
                 "manufacturing_readiness": readiness.to_dict(),
                 "evidence_manifest": str(evidence_path),
                 "override_id": override.id if override else None,
@@ -5940,7 +5913,7 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
         print(dfm_report(violations), file=sys.stderr)
         _print_json(
             {
-                "status": "ok",
+                "status": "error" if any(v.type == "dfm_input_unknown" for v in violations) else "ok",
                 "violations_count": len(violations),
                 "critical_count": len([v for v in violations if v.severity == "critical"]),
                 "warnings_count": len([v for v in violations if v.severity == "warning"]),
@@ -6080,7 +6053,8 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
             try:
                 from .thermal_analysis import analyze_thermal
 
-                thermal_result = analyze_thermal(compiled.components)
+                specs_dir = args.specs_dir or Path(args.spec).parent / "specs"
+                thermal_result = analyze_thermal(compiled.components, specs_dir=specs_dir)
             except Exception as thermal_exc:
                 print(f"  Thermal analysis skipped: {thermal_exc}", file=sys.stderr)
 
