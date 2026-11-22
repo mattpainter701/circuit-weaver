@@ -27,7 +27,7 @@ Inspect installed and project-local KiCad symbols, footprints, and 3D models. Pa
 circuit-weaver library-access LM358 --project-root ./amplifier --json
 ```
 
-The report identifies the source of each match. It lists curated component support and SPICE model bindings separately. A verified subcircuit name and pin count establish a structural match. Electrical qualification requires additional evidence.
+The report identifies the source of each match. Project table entries take precedence, followed by explicitly configured library roots, user-global table entries, and the installed library directories. The report lists curated component support and SPICE model bindings separately. A verified subcircuit name and pin count establish a structural match. Electrical qualification requires additional evidence.
 
 Python callers can use `circuit_weaver.library_access.audit_library_access`. The MCP tool `library_access` accepts an optional query and an absolute project root. The audit reads local files without installing or modifying libraries.
 

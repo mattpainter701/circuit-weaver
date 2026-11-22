@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 from typing import Any, Iterable
 
-from .footprint_lib import KiCadFootprintLibrary, _iter_blocks, _project_library_uri
+from .footprint_lib import KiCadFootprintLibrary, _iter_blocks
 from .kicad_lib import KiCadLibrary, _project_symbol_path
 from .pcb_model_preview import (
     _MODEL_RE,
@@ -214,12 +214,64 @@ def _search_models(roots: list[Path], query: str, limit: int) -> list[dict[str, 
     return matches
 
 
+def _component_from_symbol_source(symbol: dict[str, str], library: KiCadLibrary) -> tuple[Any | None, str | None]:
+    """Parse the selected source so a duplicate nickname cannot redirect lookup."""
+    from .kicad_lib import parse_kicad_sym_file, symbol_to_component_def
+
+    try:
+        path = Path(symbol["path"])
+        definitions = (
+            library._load_symdir(path.parent)
+            if path.parent.suffix == ".kicad_symdir"
+            else parse_kicad_sym_file(str(path))
+        )
+        definition = definitions.get(symbol["name"])
+        if not isinstance(definition, dict):
+            return None, "selected symbol source does not contain the matched symbol"
+        if definition.get("extends") and not definition.get("pins"):
+            parent = definitions.get(definition["extends"])
+            if not isinstance(parent, dict):
+                return None, "selected symbol extends a definition outside its source library"
+            merged = dict(parent.get("properties", {}))
+            merged.update(definition.get("properties", {}))
+            definition = {**definition, "pins": definition.get("pins") or parent.get("pins", []), "properties": merged}
+        return symbol_to_component_def(symbol["name"], definition, lib_name=symbol["library"]), None
+    except (OSError, UnicodeError, RuntimeError, ValueError, KeyError, IndexError) as exc:
+        return None, f"selected symbol source could not be parsed: {type(exc).__name__}"
+
+
+def _footprint_source_for_path(
+    path: Path,
+    library: KiCadFootprintLibrary,
+    project_root: Path | None,
+) -> str:
+    """Label provenance from the physical path selected by footprint resolution."""
+    resolved = path.resolve()
+
+    def is_beneath(root: Path) -> bool:
+        try:
+            return resolved.is_relative_to(root.resolve())
+        except (OSError, RuntimeError, ValueError):
+            return False
+
+    if project_root is not None and any(is_beneath(root) for root in library.project_libraries.values()):
+        return "project_table"
+    if any(is_beneath(root) for root in library._explicit_roots):
+        return "local_root"
+    if any(is_beneath(root) for root in library.global_libraries.values()):
+        return "global_table"
+    if any(is_beneath(root) for root in library.roots):
+        return "local_root"
+    return "unknown"
+
+
 def _resolved_symbol_assets(
     symbols: list[dict[str, str]],
     query: str,
     library: KiCadLibrary,
     footprints: KiCadFootprintLibrary,
     model_roots: dict[str, list[Path]],
+    ambiguous_library_names: set[str],
     limit: int = 5,
 ) -> list[dict[str, Any]]:
     """Resolve assets for a few exact symbol-name matches, without vetting fit."""
@@ -229,12 +281,15 @@ def _resolved_symbol_assets(
             continue
         if len(resolved_assets) >= limit:
             break
-        try:
-            component = library.get_component(symbol["name"], lib_name=symbol["library"])
-            component_error = None
-        except (OSError, RuntimeError, ValueError) as exc:
-            component = None
-            component_error = type(exc).__name__
+        if symbol["library"] in ambiguous_library_names:
+            component, component_error = _component_from_symbol_source(symbol, library)
+        else:
+            try:
+                component = library.get_component(symbol["name"], lib_name=symbol["library"])
+                component_error = None
+            except (OSError, UnicodeError, RuntimeError, ValueError, KeyError, IndexError) as exc:
+                component = None
+                component_error = f"symbol resolver failed: {type(exc).__name__}"
         footprint_ref = getattr(component, "footprint", None) if component else None
         item: dict[str, Any] = {
             "symbol": symbol["name"],
@@ -246,11 +301,7 @@ def _resolved_symbol_assets(
             "note": "asset resolution only; does not verify pinout, package fit, or simulation usability",
         }
         if not isinstance(footprint_ref, str) or not footprint_ref:
-            item["footprint"]["reason"] = (
-                f"symbol parser failed: {component_error}"
-                if component_error
-                else "symbol has no parsed footprint binding"
-            )
+            item["footprint"]["reason"] = component_error or "symbol has no parsed footprint binding"
             resolved_assets.append(item)
             continue
         try:
@@ -527,6 +578,7 @@ def audit_library_access(
     )
     symbol_root_sources = {_path_key(Path(item["path"])): item["source"] for item in symbol_root_records}
     symbol_assets = _symbol_assets(library, project, symbol_root_sources)
+    ambiguous_symbol_libraries = {conflict["library"] for conflict in _library_name_conflicts(symbol_assets)}
 
     footprint_library = KiCadFootprintLibrary(root=footprint_roots, project_root=project)
     footprint_root_records = _root_records(
@@ -562,15 +614,7 @@ def audit_library_access(
             resolved = footprint_library.resolve(reference)
             if resolved is None:
                 continue
-            nickname = reference.partition(":")[0]
-            source = "global_table" if nickname in footprint_library.global_libraries else "local_root"
-            if project is not None:
-                try:
-                    project_library = _project_library_uri(project, nickname)
-                except (OSError, RuntimeError, ValueError):
-                    project_library = None
-                if project_library is not None and resolved.is_relative_to(project_library.resolve()):
-                    source = "project_table"
+            source = _footprint_source_for_path(resolved, footprint_library, project)
             item = {"reference": reference, "path": str(resolved), "source": source}
             if item not in footprints:
                 footprints.append(item)
@@ -622,7 +666,14 @@ def audit_library_access(
             "models_3d": _search_models(selected_models, query, limit) if query else [],
         },
         "resolved_symbol_assets": (
-            _resolved_symbol_assets(symbols, query, library, footprint_library, resolution_model_roots)
+            _resolved_symbol_assets(
+                symbols,
+                query,
+                library,
+                footprint_library,
+                resolution_model_roots,
+                ambiguous_symbol_libraries,
+            )
             if query and symbols
             else []
         ),

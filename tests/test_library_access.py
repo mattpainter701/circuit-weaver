@@ -44,6 +44,22 @@ def _symbol(path: Path, name: str) -> Path:
     return path
 
 
+def _symbol_with_footprint(path: Path, name: str, footprint: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"""(kicad_symbol_lib (version 20211014) (generator "kicad_symbol_editor")
+  (symbol "{name}"
+    (property "Reference" "U" (at 0 0 0) (effects (font (size 1 1))))
+    (property "Value" "{name}" (at 0 0 0) (effects (font (size 1 1))))
+    (property "Footprint" "{footprint}" (at 0 0 0) (effects (font (size 1 1))))
+  )
+)
+""",
+        encoding="utf-8",
+    )
+    return path
+
+
 def test_add_path_indexes_kicad10_symdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _clean_kicad_env(monkeypatch, tmp_path)
     root = tmp_path / "symbols"
@@ -167,6 +183,32 @@ def test_library_access_searches_project_footprints_with_project_provenance(
 
     assert report["matches"]["footprints"][0]["path"] == str(mod)
     assert report["matches"]["footprints"][0]["source"] == "project_table"
+
+
+def test_library_access_reports_footprint_provenance_from_selected_physical_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clean_kicad_env(monkeypatch, tmp_path)
+    local_root = tmp_path / "explicit-footprints"
+    local_footprint = local_root / "RF_Module.pretty" / "AD9361.kicad_mod"
+    local_footprint.parent.mkdir(parents=True)
+    local_footprint.write_text('(footprint "AD9361")', encoding="utf-8")
+    global_library = tmp_path / "global" / "RF_Module.pretty"
+    global_footprint = global_library / "AD9361.kicad_mod"
+    global_footprint.parent.mkdir(parents=True)
+    global_footprint.write_text('(footprint "AD9361-global")', encoding="utf-8")
+    global_table = tmp_path / "roaming" / "kicad" / "10.0" / "fp-lib-table"
+    global_table.parent.mkdir(parents=True)
+    global_table.write_text(
+        "(fp_lib_table (version 7) " f'(lib (name "RF_Module") (type "KiCad") (uri "{global_library.as_posix()}")))',
+        encoding="utf-8",
+    )
+
+    report = audit_library_access("AD9361", footprint_roots=[local_root])
+
+    footprint_match = report["matches"]["footprints"][0]
+    assert footprint_match["path"] == str(local_footprint)
+    assert footprint_match["source"] == "local_root"
 
 
 def test_library_access_separates_kicad_assets_from_functional_and_spice_support(
@@ -362,7 +404,7 @@ def test_exact_symbol_resolves_generic_footprint_and_model_assets(
 ) -> None:
     _clean_kicad_env(monkeypatch, tmp_path)
     symbols = tmp_path / "symbols"
-    _symbol(symbols / "RF.kicad_sym", "ADF4351")
+    _symbol_with_footprint(symbols / "RF.kicad_sym", "ADF4351", "RF_Generic:LFCSP-32")
     footprints = tmp_path / "footprints"
     model = tmp_path / "models" / "LFCSP-32.step"
     model.parent.mkdir(parents=True)
@@ -375,12 +417,6 @@ def test_exact_symbol_resolves_generic_footprint_and_model_assets(
         ).encode("utf-8")
     )
     footprint.write_bytes(footprint_bytes)
-    monkeypatch.setattr(
-        KiCadLibrary,
-        "get_component",
-        lambda self, symbol_name, lib_name=None: SimpleNamespace(footprint="RF_Generic:LFCSP-32"),
-    )
-
     report = audit_library_access("ADF4351", symbol_roots=[symbols], footprint_roots=[footprints])
 
     assert report["matches"]["symbols"][0]["name"] == "ADF4351"
@@ -394,6 +430,74 @@ def test_exact_symbol_resolves_generic_footprint_and_model_assets(
     assert asset["models"][0]["path"] == str(model.resolve())
     assert asset["models"][0]["sha256"]
     assert "does not verify" in asset["note"]
+
+
+def test_duplicate_symbol_nickname_assets_follow_the_selected_symbol_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clean_kicad_env(monkeypatch, tmp_path)
+    local_symbols = tmp_path / "local-symbols"
+    global_symbols = tmp_path / "global-symbols"
+    _symbol_with_footprint(local_symbols / "RF.kicad_sym", "AD9361", "RFParts:LocalPart")
+    global_symbol = _symbol_with_footprint(global_symbols / "RF.kicad_sym", "AD9361", "RFParts:GlobalPart")
+    global_table = tmp_path / "roaming" / "kicad" / "10.0" / "sym-lib-table"
+    global_table.parent.mkdir(parents=True)
+    global_table.write_text(
+        "(sym_lib_table (version 7) " f'(lib (name "RF") (type "KiCad") (uri "{global_symbol.as_posix()}")))',
+        encoding="utf-8",
+    )
+    footprints = tmp_path / "footprints"
+    for name in ("LocalPart", "GlobalPart"):
+        footprint = footprints / "RFParts.pretty" / f"{name}.kicad_mod"
+        footprint.parent.mkdir(parents=True, exist_ok=True)
+        footprint.write_text(f'(footprint "{name}")', encoding="utf-8")
+
+    # A stale nickname cache must not replace the symbol definition selected
+    # from the global table with a different same-nickname local definition.
+    monkeypatch.setattr(
+        KiCadLibrary,
+        "get_component",
+        lambda self, symbol_name, lib_name=None: SimpleNamespace(footprint="RFParts:LocalPart"),
+    )
+    report = audit_library_access("AD9361", symbol_roots=[local_symbols], footprint_roots=[footprints])
+
+    assert report["conflicts"]["symbol_library_name_collisions"]
+    asset = report["resolved_symbol_assets"][0]
+    assert asset["symbol_path"] == str(global_symbol.resolve())
+    assert asset["footprint_reference"] == "RFParts:GlobalPart"
+    assert asset["footprint"]["path"].endswith("GlobalPart.kicad_mod")
+
+
+def test_unambiguous_extended_symbol_keeps_resolved_inherited_footprint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clean_kicad_env(monkeypatch, tmp_path)
+    symbol_root = tmp_path / "symbols"
+    symdir = symbol_root / "Sensors.kicad_symdir"
+    _symbol_with_footprint(symdir / "Parent.kicad_sym", "Parent", "RF_Generic:DerivedPart")
+    child = symdir / "DerivedPart.kicad_sym"
+    child.write_text(
+        """(kicad_symbol_lib (version 20211014) (generator "kicad_symbol_editor")
+  (symbol "DerivedPart" (extends "Parent")
+    (property "Reference" "U" (at 0 0 0) (effects (font (size 1 1))))
+    (property "Value" "DerivedPart" (at 0 0 0) (effects (font (size 1 1))))
+  )
+)
+""",
+        encoding="utf-8",
+    )
+    footprint_root = tmp_path / "footprints"
+    footprint = footprint_root / "RF_Generic.pretty" / "DerivedPart.kicad_mod"
+    footprint.parent.mkdir(parents=True)
+    footprint.write_text('(footprint "DerivedPart")', encoding="utf-8")
+
+    report = audit_library_access("DerivedPart", symbol_roots=[symbol_root], footprint_roots=[footprint_root])
+
+    asset = report["resolved_symbol_assets"][0]
+    assert asset["symbol_path"] == str(child.resolve())
+    assert asset["footprint_reference"] == "RF_Generic:DerivedPart"
+    assert asset["footprint"]["available"] is True
+    assert asset["footprint"]["path"] == str(footprint.resolve())
 
 
 def test_library_access_reports_duplicate_symbol_and_footprint_nicknames(

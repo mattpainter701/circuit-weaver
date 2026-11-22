@@ -530,19 +530,34 @@ class KiCadLibrary:
             self._cache = Path.home() / ".cache" / "schematic_engine" / "kicad_symbols"
 
         # Auto-detect standard, versioned, and caller-supplied symbol roots.
+        self._explicit_symbol_roots = self._find_explicit_kicad_roots(roots)
         self._local_kicad_roots = self._find_local_kicad_roots(roots)
         self._local_kicad = self._local_kicad_roots[0] if self._local_kicad_roots else None
         if self._local_kicad:
             print(f"Found local KiCad symbols: {self._local_kicad}")
 
     @staticmethod
-    def _find_local_kicad_roots(roots: list[str | Path] | None = None) -> list[Path]:
+    def _find_explicit_kicad_roots(roots: list[str | Path] | None = None) -> list[Path]:
         """Return existing symbol roots in explicit-to-default precedence order."""
         candidates = [Path(path).expanduser() for path in roots or []]
         candidates.extend(
             Path(os.environ[name]).expanduser() for name in _KICAD_SYMBOL_ENV_PATHS if os.environ.get(name)
         )
-        candidates.extend(_KICAD_LIB_PATHS.get(platform.system(), []))
+        existing: list[Path] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            if not candidate.is_dir():
+                continue
+            resolved = candidate.resolve()
+            key = os.path.normcase(str(resolved))
+            if key not in seen:
+                seen.add(key)
+                existing.append(resolved)
+        return existing
+
+    @staticmethod
+    def _find_local_kicad_roots(roots: list[str | Path] | None = None) -> list[Path]:
+        candidates = [*KiCadLibrary._find_explicit_kicad_roots(roots), *_KICAD_LIB_PATHS.get(platform.system(), [])]
         existing: list[Path] = []
         seen: set[str] = set()
         for candidate in candidates:
@@ -591,6 +606,7 @@ class KiCadLibrary:
             entries.extend((entry.stem, entry) for entry in sorted(p.glob("*.kicad_symdir")) if entry.is_dir())
         if p not in self._local_kicad_roots:
             self._local_kicad_roots.insert(0, p)
+            self._explicit_symbol_roots.insert(0, p)
             self._local_kicad = p
         self._symbol_search_cache.clear()
         for lib_name, entry in entries:
@@ -668,6 +684,24 @@ class KiCadLibrary:
                     return entry.name
         return None
 
+    def _load_local_root(self, lib_name: str, root: Path) -> dict | None:
+        """Load a library from one ordered root, caching its parsed source."""
+        local_file = root / f"{lib_name}.kicad_sym"
+        if local_file.exists():
+            syms = parse_kicad_sym_file(str(local_file))
+            self._symbols[lib_name] = syms
+            self._sym_files[lib_name] = local_file
+            self._sym_dirs.pop(lib_name, None)
+            return syms
+        local_dir = root / f"{lib_name}.kicad_symdir"
+        if local_dir.is_dir():
+            syms = self._load_symdir(local_dir)
+            self._symbols[lib_name] = syms
+            self._sym_dirs[lib_name] = local_dir
+            self._sym_files.pop(lib_name, None)
+            return syms
+        return None
+
     def _load_lib(self, lib_name: str) -> dict:
         """Load and cache a library's symbols."""
         if lib_name in self._symbols:
@@ -694,6 +728,12 @@ class KiCadLibrary:
             self._symbols[lib_name] = syms
             return syms
 
+        # Explicit constructor/environment roots override same-named global tables.
+        for local_root in self._explicit_symbol_roots:
+            syms = self._load_local_root(lib_name, local_root)
+            if syms is not None:
+                return syms
+
         global_path = self._global_libraries.get(lib_name)
         if global_path is not None:
             if global_path.suffix == ".kicad_sym":
@@ -705,19 +745,13 @@ class KiCadLibrary:
             self._symbols[lib_name] = syms
             return syms
 
-        # Try local KiCad roots — support files and KiCad 10 symdirs.
+        # Try platform stock roots after explicit and user-global sources.
+        explicit = set(self._explicit_symbol_roots)
         for local_root in self._local_kicad_roots:
-            local_file = local_root / f"{lib_name}.kicad_sym"
-            if local_file.exists():
-                syms = parse_kicad_sym_file(str(local_file))
-                self._symbols[lib_name] = syms
-                self._sym_files[lib_name] = local_file
-                return syms
-            local_dir = local_root / f"{lib_name}.kicad_symdir"
-            if local_dir.is_dir():
-                syms = self._load_symdir(local_dir)
-                self._symbols[lib_name] = syms
-                self._sym_dirs[lib_name] = local_dir
+            if local_root in explicit:
+                continue
+            syms = self._load_local_root(lib_name, local_root)
+            if syms is not None:
                 return syms
 
         # Try cache — single file or directory

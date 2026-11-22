@@ -303,6 +303,7 @@ class KiCadFootprintLibrary:
         *,
         project_root: str | Path | None = None,
     ) -> None:
+        self._explicit_roots = self._roots_from_inputs(root)
         self._roots = self._default_roots(root)
         self._project_root = Path(project_root).resolve() if project_root is not None else None
         self._global_libraries = _global_library_table_entries("fp-lib-table", "fp_lib_table")
@@ -337,7 +338,7 @@ class KiCadFootprintLibrary:
         return libraries
 
     @staticmethod
-    def _default_roots(root: str | Path | Iterable[str | Path] | None) -> list[Path]:
+    def _roots_from_inputs(root: str | Path | Iterable[str | Path] | None) -> list[Path]:
         roots: list[Path] = []
         if root:
             if isinstance(root, (str, Path)):
@@ -353,8 +354,6 @@ class KiCadFootprintLibrary:
             env = os.environ.get(name)
             if env:
                 roots.append(Path(env))
-        roots.extend(_KICAD_FOOTPRINT_PATHS.get(platform.system(), []))
-
         existing: list[Path] = []
         seen: set[str] = set()
         for candidate in roots:
@@ -365,6 +364,19 @@ class KiCadFootprintLibrary:
                 seen.add(key)
                 existing.append(candidate)
         return existing
+
+    @staticmethod
+    def _default_roots(root: str | Path | Iterable[str | Path] | None) -> list[Path]:
+        roots = KiCadFootprintLibrary._roots_from_inputs(root)
+        seen = {os.path.normcase(os.path.abspath(path)) for path in roots}
+        for candidate in _KICAD_FOOTPRINT_PATHS.get(platform.system(), []):
+            if not candidate.is_dir():
+                continue
+            key = os.path.normcase(os.path.abspath(candidate))
+            if key not in seen:
+                seen.add(key)
+                roots.append(candidate)
+        return roots
 
     @property
     def roots(self) -> list[Path]:
@@ -404,12 +416,16 @@ class KiCadFootprintLibrary:
                 if not candidate.is_relative_to(self._project_root):
                     raise ValueError("project footprint file escapes project root")
                 return candidate if candidate.is_file() else None
+        rel = Path(f"{lib}.pretty") / f"{name}.kicad_mod"
+        for root in self._explicit_roots:
+            candidate = root / rel
+            if candidate.is_file():
+                return candidate
         global_library = self._global_libraries.get(lib)
         if global_library is not None:
             candidate = global_library / f"{name}.kicad_mod"
             return candidate if candidate.is_file() else None
-        rel = Path(f"{lib}.pretty") / f"{name}.kicad_mod"
-        for root in self._roots:
+        for root in self._roots[len(self._explicit_roots) :]:
             candidate = root / rel
             if candidate.is_file():
                 return candidate
