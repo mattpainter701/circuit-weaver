@@ -220,15 +220,18 @@ def fetch_spice_models(
     }
 
 
-def resolve_spice_models(manifest_path: Path) -> dict[str, str]:
-    """Read manifest.json and return {mpn: model_file_path} for available models.
+def resolve_spice_models(manifest_path: Path) -> dict[str, str | dict[str, object]]:
+    """Read the model manifest without promoting path-only entries to models.
 
     Args:
         manifest_path: Path to spice_models/manifest.json
 
     Returns:
-        Dict mapping MPN to absolute model file path for components with
-        successfully downloaded SPICE models.
+        MPNs with an existing contained file map to an absolute path when the
+        manifest is legacy/path-only. Explicit contracts map to
+        ``{path, subckt, pin_order}`` only when the declared subcircuit and pin
+        count match the model file. The netlist exporter deliberately treats
+        legacy path-only entries as unsupported.
     """
     manifest_path = Path(manifest_path)
     if not manifest_path.exists():
@@ -239,13 +242,62 @@ def resolve_spice_models(manifest_path: Path) -> dict[str, str]:
     except (json.JSONDecodeError, OSError):
         return {}
 
-    result: dict[str, str] = {}
-    model_dir = manifest_path.parent
+    if not isinstance(manifest, dict):
+        return {}
+
+    result: dict[str, str | dict[str, object]] = {}
+    model_dir = manifest_path.parent.resolve()
 
     for mpn, entry in manifest.items():
-        if entry.get("spice_status") == "ok" and entry.get("spice_file"):
-            model_file = model_dir / entry["spice_file"]
-            if model_file.exists():
-                result[mpn] = str(model_file)
+        if not isinstance(entry, dict) or entry.get("spice_status") != "ok":
+            continue
+        filename = entry.get("spice_file")
+        if not isinstance(filename, str) or not filename.strip():
+            continue
+        relative_path = Path(filename)
+        try:
+            model_file = (relative_path if relative_path.is_absolute() else model_dir / relative_path).resolve()
+            if not model_file.is_relative_to(model_dir) or not model_file.is_file():
+                continue
+        except (OSError, RuntimeError):
+            continue
+
+        subckt = entry.get("subckt")
+        pin_order = entry.get("pin_order")
+        if subckt is None or pin_order is None:
+            # Preserve the old path-only shape so consumers can explain that
+            # the download exists but lacks an authored electrical contract.
+            result[str(mpn)] = str(model_file)
+            continue
+        if (
+            not isinstance(subckt, str)
+            or not re.fullmatch(r"[A-Za-z0-9_.$-]+", subckt)
+            or not isinstance(pin_order, list)
+            or not pin_order
+            or any(
+                not isinstance(pin, (str, int)) or not re.fullmatch(r"[A-Za-z0-9_.$-]+", str(pin)) for pin in pin_order
+            )
+            or len(set(map(str, pin_order))) != len(pin_order)
+        ):
+            result[str(mpn)] = str(model_file)
+            continue
+        try:
+            model_text = model_file.read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeError):
+            result[str(mpn)] = str(model_file)
+            continue
+        declarations: dict[str, int] = {}
+        for line in model_text.splitlines():
+            declaration = re.match(r"^\s*\.subckt\s+(\S+)(?:\s+(.*?))?\s*$", line, re.I)
+            if declaration:
+                pins = (declaration.group(2) or "").split()
+                lower_pins = [pin.lower() for pin in pins]
+                if "params:" in lower_pins:
+                    pins = pins[: lower_pins.index("params:")]
+                declarations[declaration.group(1).lower()] = len(pins)
+        if declarations.get(subckt.lower()) != len(pin_order):
+            result[str(mpn)] = str(model_file)
+            continue
+        result[str(mpn)] = {"path": str(model_file), "subckt": subckt, "pin_order": list(map(str, pin_order))}
 
     return result

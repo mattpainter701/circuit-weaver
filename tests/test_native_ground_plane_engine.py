@@ -80,6 +80,14 @@ def test_protected_path_requires_existing_trace_only_route():
         ground._trace_route(graph, {"from_ref": "U1", "from_pad": "1", "to_ref": "J1", "to_pad": "1"})
 
 
+def test_protected_logical_endpoint_with_multiple_physical_members_fails_closed():
+    first = object()
+    second = object()
+
+    with pytest.raises(ValueError, match="repeated physical pad endpoint.*ambiguous"):
+        ground._ensure_protected_endpoints_unambiguous(([first, second], [object()]), 0)
+
+
 def test_zone_anchor_query_uses_stable_pad_and_track_methods():
     calls = []
 
@@ -108,3 +116,26 @@ def test_zone_anchor_query_uses_stable_pad_and_track_methods():
 
     assert calls == ["pads", "tracks"]
     assert [item.GetClass() for item in anchors] == ["PAD", "PCB_VIA", "PCB_TRACK"]
+
+
+def test_enabled_copper_names_are_resolved_from_native_board_stack():
+    class LayerStack(list):
+        def Seq(self):
+            return list(self)
+
+    class Enabled:
+        def CuStack(self):
+            return LayerStack([0, 2, 4, 31])
+
+    class Settings:
+        def GetCopperLayerCount(self):
+            return 4
+
+    board = SimpleNamespace(
+        GetEnabledLayers=lambda: Enabled(),
+        GetLayerName=lambda layer: {0: "F.Cu", 2: "In1.Cu", 4: "In2.Cu", 31: "B.Cu"}[layer],
+        GetDesignSettings=lambda: Settings(),
+    )
+    assert ground._copper_layer_ids(board, SimpleNamespace()) == {
+        "F.Cu": 0, "In1.Cu": 2, "In2.Cu": 4, "B.Cu": 31,
+    }

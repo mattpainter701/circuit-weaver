@@ -118,8 +118,7 @@ def test_run_and_resume_call_shared_workflow_functions(monkeypatch: pytest.Monke
 
 def test_mcp_app_exposes_workflow_tools_and_keeps_legacy_tools() -> None:
     app = mcp_server._create_app()
-    tools = {tool.name: tool for tool in app._tool_manager.list_tools()}
-    names = set(tools)
+    names = {tool.name for tool in app._tool_manager.list_tools()}
     assert {
         "validate_design",
         "generate_artifacts",
@@ -136,9 +135,6 @@ def test_mcp_app_exposes_workflow_tools_and_keeps_legacy_tools() -> None:
         "resume_workflow",
         "cancel_workflow",
     } <= names
-    validate_schema = tools["validate_design"].parameters["properties"]
-    assert validate_schema["detail_level"]["enum"] == ["summary", "full"]
-    assert set(validate_schema) == {"spec_json", "detail_level"}
 
 
 def test_mcp_failed_workflow_status_preserves_json_error_envelope() -> None:

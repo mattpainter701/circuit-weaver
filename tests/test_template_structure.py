@@ -310,6 +310,42 @@ def test_validator_bus_completeness_detects_missing_pullup():
     assert any("pull-up" in i.message for i in bus_result.issues)
 
 
+def test_validator_does_not_treat_spi_sclk_as_i2c_scl():
+    """SPI clock names contain SCL as a substring but need no I2C pull-up."""
+    from circuit_weaver.component_db import ComponentDef, PinDef
+    from circuit_weaver.validator import run_validation_checks
+
+    comp = ComponentDef(
+        mpn="TEST_SPI_CLOCK",
+        ref_prefix="U",
+        pins=[PinDef("1", "CLOCK", "bidirectional", "L")],
+        pin_nets={"1": "SCLK_U90"},
+    )
+    results = run_validation_checks([comp])
+    bus_result = next((r for r in results if r.code == "bus-completeness"), None)
+    assert bus_result is not None
+    assert not any("pull-up" in issue.message for issue in bus_result.issues)
+
+
+def test_validator_recognizes_numbered_i2c_clock_and_data_nets():
+    from circuit_weaver.component_db import ComponentDef, PinDef
+    from circuit_weaver.validator import run_validation_checks
+
+    comp = ComponentDef(
+        mpn="TEST_NUMBERED_I2C",
+        ref_prefix="U",
+        pins=[PinDef("1", "CLOCK", "input", "L"), PinDef("2", "DATA", "bidirectional", "L")],
+        pin_nets={"1": "SCL1", "2": "SDA2"},
+    )
+    results = run_validation_checks([comp])
+    bus_result = next((r for r in results if r.code == "bus-completeness"), None)
+    assert bus_result is not None
+    assert {issue.message for issue in bus_result.issues if "pull-up" in issue.message} == {
+        "I2C signal 'SCL1' has no pull-up resistor",
+        "I2C signal 'SDA2' has no pull-up resistor",
+    }
+
+
 # ================================================================
 # Sprint 4: Template quality & contract validation
 # ================================================================

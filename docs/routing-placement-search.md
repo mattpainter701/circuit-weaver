@@ -26,7 +26,8 @@ Install [Freerouting](https://github.com/freerouting/freerouting/releases) and i
 required Java runtime. Set `CIRCUIT_WEAVER_FREEROUTING` to the JAR or launcher and
 `CIRCUIT_WEAVER_JAVA` to Java when it is not on PATH. A portable installation may
 instead use `~/.freerouting/freerouting.jar` and `~/.freerouting/runtime/bin/java`
-(`java.exe` on Windows). CI pins Freerouting 2.4.1 with Java 25.
+(`java.exe` on Windows). CI pins Freerouting 2.4.1 for the general corpus and
+2.5.0 for unseen scale workflows, using Java 25.
 
 ## Supported scope
 
@@ -48,9 +49,34 @@ the [automated workflow demo](automation-validation.md) for a repeatable run.
 the existing `iterations` budget. Each restart has its own seed, cooling schedule,
 and progressively smaller local moves. Final refinement tries small translations,
 rotations, whole-block moves, and attractions toward electrically connected blocks.
+Each restart also has a refinement evaluation budget of the larger of 512 and
+its allocated annealing iterations. Rejected candidates count against that
+budget, and family candidate generation stops when it is exhausted. The search
+report records each budget and actual count.
 Every accepted refinement improves the lexicographic pair `(hard defects, cost)`.
 Candidate selection uses the same pair after legalization. A legalized initial
 layout remains available even when every annealed candidate is worse.
+
+Before annealing, a second starting layout tries four synchronous weighted
+relaxation passes over the existing connectivity graph. Movable primary blocks
+translate with their support families toward connected neighbors. Connector,
+USB, debug and RF category anchors stay in place during relaxation. Ordinary
+legalization and annealing may move category-only anchors; authored fixed
+positions, edge-distance limits and rotation constraints remain enforced.
+The candidate is legalized and selected only if the same hard-defect-first rank
+improves on the original baseline; the report retains both ranks. This starting
+layout does not resize the board or alter nets, footprints, fonts or constraints.
+
+After the ordinary search, a bounded assignment candidate can exchange existing
+slots among native connectors with matching footprint, pad geometry, rotation,
+side and shared-pad nets. Each connector must have one private signal pad whose
+other endpoints belong to one known support family. The candidate minimizes
+summed native pad distances and must improve the ordinary placement rank.
+Locked fields, authored constraints, owned support children and incomplete or
+ambiguous native geometry exclude a connector. Groups above 256 parts are skipped.
+References and pad nets stay attached to their original components; native label
+cleanup and DRC still gate publication. The distance objective estimates routing
+effort and does not prove routed length or electrical performance.
 
 Fixed components reserve space first, including fixed support parts. Movable
 support parts follow owners displaced during legalization. The edge-to-edge gap
@@ -58,6 +84,17 @@ is split between courtyard envelopes, and non-orthogonal rotations use a
 conservative enclosing rectangle. Fixed coordinates retain their supplied
 precision; movable coordinates are evaluated at their published precision.
 Unresolved or impossible constraints remain visible as review blockers.
+
+With native reference cleanup enabled, placement starts with a gap floor derived
+from the actual reference text heights, including silk clearance and additional
+room between labels and bodies. A larger authored minimum gap still applies.
+If this preferred spacing cannot produce an optimizer-valid layout, one additional
+search uses the authored or feedback gap with the same seed and iteration budget.
+Both searches and the effective gap are reported; the fallback must pass every
+ordinary placement and native check.
+Later attempts increase the effective gap when a complete native report proves
+that labels need more space. Font sizes, board dimensions and final native label
+and DRC checks remain unchanged.
 
 When native pad locations are available, support parts start beside their
 owner's shared non-ground pads, with the configured body clearance. Dedicated
@@ -148,7 +185,7 @@ increases runtime. Use fewer restarts/refinement passes when latency matters.
 circuit-weaver autoroute board.dsn --attempts 3 --timeout 600 -o selected.ses
 ```
 
-The default remains one attempt. For native KiCad boards, the first attempt uses
+The default remains one attempt. With multiple attempts on native KiCad boards, the first uses
 stable footprint-reference order in an isolated DSN copy; later attempts also try
 descending reference order and the original export order. Shared-image placement
 records follow the same order. Only declaration order changes: pad geometry,
@@ -156,8 +193,11 @@ coordinates, net assignments, outlines, and routing rules remain intact. Search
 evidence records the actual order used. The original exported DSN is preserved.
 
 Builds advertising `-random_seed` use consecutive seeds (zero-based if unspecified).
-Other builds cycle through greedy, global, and hybrid optimizer strategies unless
-a strategy was explicitly selected. Those strategies affect enabled optimization;
+Other builds cycle through supported optimizer settings unless a strategy was
+explicitly selected. Older engines use greedy, global and hybrid modes;
+Freerouting 2.5+ uses global optimization with sequential or prioritized item
+ordering and rejects removed greedy, hybrid and random modes before routing.
+Those strategies affect enabled optimization;
 they provide no primary-routing variation when optimizer threads are zero.
 Native declaration-order variants provide that variation without enabling the
 optimizer. Direct caller-provided DSNs are routed unchanged. An explicit seed
@@ -166,6 +206,11 @@ other multiple-attempt runs default to one optimizer thread. The timeout is a sh
 budget for routing attempts; capability probes and optional DSN export have
 their existing separate limits. Each attempt receives the remaining time divided
 by the remaining attempts, so time saved by early completion can be reused.
+
+On Freerouting 2.4+, zero optimizer threads explicitly sets
+`--router.optimizer.enabled=false`; a positive count sets the nested optimizer
+thread cap. The legacy `-mt` spelling alone does not reliably control the modern
+optimizer stage or its worker pool. Older engines retain their legacy flags.
 
 Each candidate must pass existing SES syntax, semantic, source correlation,
 connection-statistics, and reported-clearance checks. Candidates with clearance
@@ -188,6 +233,40 @@ returned `search` object explains the selection and failed attempts. The final
 artifact is a Specctra session by default. `--routed-board` performs the import
 and native DRC automatically when the input is a real PCB. No fabrication
 readiness or controlled-impedance guarantee is inferred.
+
+### Bounded native recovery
+
+The opt-in open-connection recovery workflow retains rejected candidates in
+private quarantine. Ordinary recovery runs first. If it stalls, bidirectional
+search tries 0.5, 0.25 and 0.125 mm grids within the existing shared deadline,
+link limits and 150,000-state cap per native request. Each accepted proposal
+must preserve source copper, placement, labels and geometry, acknowledge the
+requested search bounds, and reduce opens under fresh full native DRC.
+
+For a fresh two-layer board with an authored `.kicad_pro` and without zones or
+authored routing, recovery can
+use a bounded fanout profile in the last existing portfolio attempt when
+Freerouting 2.5+ is available and at least three attempts were requested. The
+first two declaration-order attempts retain their ordinary behavior. Four-layer
+boards, source wiring and ambiguous exports disable this profile. It adds no
+portfolio attempt or extra routing budget; evidence identifies the selected
+profile and its actual launch settings.
+
+Freerouting's fanout can generate narrower tracks even with automatic neckdown
+disabled. Quarantine repair inventories the actual native copper and widens
+only unlocked generated straight tracks to the board/net-class minimum. It
+does not lower rules or alter source copper. A fresh complete DRC may authorize
+removal of widened generated tracks implicated in clearance errors; these
+removals and subsequent dangling-track/via cleanup share one 64-item cap.
+Unknown faults reject the candidate. Recovery must then close every remaining
+connection, serialize the result with routing disabled, and pass the ordinary
+session import and full native DRC before publication.
+
+Native reports include diagnostic completeness. KiCad caps findings per error
+code, even when all-track-errors reporting is requested. A report reaching a
+known cap remains useful failure evidence, but cannot authorize clearance
+pruning or establish acceptance. Width repair uses native track inventory
+rather than treating the capped diagnostic list as a complete inventory.
 
 Native placement also reserves nearby reference-label space with a bounded
 soft preference. It uses the actual horizontal text bounds and courtyard
@@ -268,6 +347,15 @@ final cleaned board; measured protected paths remain trace-only.
 
 ## Real-board regression corpus
 
+When ordinary native reference cleanup leaves conflicts, a local assignment
+search tries alternative positions for only the conflicting reference fields.
+It considers at most eight labels per overlap neighborhood, 25,000 candidate
+centers and 50,000 search nodes, with movement limited to 8 mm. Native obstacle,
+association and board-edge checks remain active. The candidate is accepted only
+if it reduces conflicts without introducing new ones and preserves footprint,
+pad, copper and other text geometry. Failure leaves the ordinary cleanup result
+in place for the existing placement retry and final native gates.
+
 `tests/test_native_pcb_workflow.py` executes the public CLI against real KiCad and
 Freerouting for five circuits: LED, resistor divider, RC filter with custom width
 rules, back-side RC components, and a SOIC fanout network. The corpus starts with
@@ -287,3 +375,13 @@ Native-board autorouting adds a 0.01 mm clearance margin to generic DSN rules,
 preserving typed exceptions, to accommodate observed export/router/import
 geometry differences. The result reports the applied margin. This does not change native board/project rules or
 caller-provided DSN files; the imported board must still pass native DRC.
+
+Native-board routing also reads the matching KiCad project's copper-to-edge
+minimum and supplies it separately to the supported FreeRouting CLI. KiCad's
+DSN export does not carry that minimum reliably. The routing result records the
+native value and its transport; the board outline and authored rules stay
+unchanged. Native repair checks include the track or via radius in its edge
+distance. Custom `.kicad_dru` `edge_clearance` constraints currently block
+automatic routing because a single board-wide setting cannot represent their
+conditional rules. Read-only inspection remains available. Standalone DSN
+inputs have no native project context from which to recover a missing rule.

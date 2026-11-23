@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "1b7458045f6eaefd76effeacb3dfd268e7d0fb83",
+  "hash_scope": "canonical parsed YAML, sorted keys, compact separators",
+  "files": {
+    "cases.yaml": "259183d6c1224bd5721eae7158e0aadbb90022730f5989856dc17028a474c380",
+    "cases/distributed_facility_gateway.yaml": "ce7a8f0e007d952a8f6945a1746652dcf40837a9437a4fc9475453b532e4649e",
+    "cases/serial_relay_output_card.yaml": "a657b08a7c22875a9ae175a037902f1661ffb21544078005f1209fbbf067a947",
+    "cases/multichannel_analog_setpoint_card.yaml": "05477557694a32fa560c597e5f3735976982d0ccd3c58bf5b0c2c8e8b6aafea9"
+  }
+}

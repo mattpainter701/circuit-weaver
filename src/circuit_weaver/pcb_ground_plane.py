@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -41,8 +42,10 @@ def _validate_plan(value: Any) -> dict[str, Any]:
     if not isinstance(net, str) or not net.strip():
         raise ValueError("net must be a non-empty string")
     layers = value["layers"]
-    if not isinstance(layers, list) or layers != ["F.Cu", "B.Cu"]:
-        raise ValueError("layers must be exactly ['F.Cu', 'B.Cu'] for the supported two-layer board")
+    if (not isinstance(layers, list) or not layers
+            or any(not isinstance(layer, str) or not layer.strip() for layer in layers)
+            or len(layers) != len(set(layers))):
+        raise ValueError("layers must be a non-empty list of unique copper layer names")
     options = {}
     for key in _OPTIONS:
         item = value[key]
@@ -60,6 +63,25 @@ def _validate_plan(value: Any) -> dict[str, Any]:
             raise ValueError(f"protected_connections[{index}] duplicates a directed endpoint pair")
         seen.add(key)
     return {"net": net.strip(), "layers": list(layers), "protected_connections": connections, **options}
+
+
+def _pre_route_drc_allowed(drc: Any) -> bool:
+    """Permit opens, retaining nonphysical library warnings; block other faults."""
+    raw = getattr(drc, "raw_report", None)
+    if not isinstance(raw, Mapping) or getattr(drc, "status", None) != "ok":
+        return False
+    violations = raw.get("violations", [])
+    parity = raw.get("schematic_parity", [])
+    unconnected = raw.get("unconnected_items")
+    return (isinstance(violations, list)
+            and all(isinstance(row, Mapping) and row.get("type") == "lib_footprint_issues"
+                    and row.get("severity") == "warning" for row in violations)
+            and isinstance(parity, list) and not parity
+            and isinstance(unconnected, list)
+            and all(isinstance(row, Mapping) and row.get("type", "unconnected_items") == "unconnected_items"
+                    for row in unconnected)
+            and all(finding.severity != "blocker" or finding.rule_id == "CW-DRC-002"
+                    for finding in drc.findings))
 
 
 def load_ground_plane_plan(path: str | Path) -> dict[str, Any]:
@@ -117,10 +139,13 @@ def add_ground_plane(
     *,
     overwrite: bool = False,
     kicad_python_path: str | Path | None = None,
+    pre_route: bool = False,
 ) -> dict[str, Any]:
     """Create GND zones on a private board copy; publish only after native verification and DRC."""
     source, destination = Path(board_path).resolve(), Path(output_path).resolve()
     try:
+        if not isinstance(pre_route, bool):
+            raise ValueError("pre_route must be a boolean")
         plan = _validate_plan(plan)
         if destination.suffix.lower() != ".kicad_pcb":
             raise ValueError("Ground-plane output must be a .kicad_pcb file")
@@ -139,13 +164,14 @@ def add_ground_plane(
                 raise ValueError("Source board changed during processing")
             input_drc = run_drc(source, evidence_ledger=EvidenceLedger())
             _check_snapshots(snapshots)
-            if not input_drc.passed:
+            if not input_drc.passed and not (pre_route and _pre_route_drc_allowed(input_drc)):
                 return {"status": "error",
                         "message": "Input board must pass full KiCad DRC before adding ground planes",
                         "drc": input_drc.to_dict()}
             if input_drc.board_sha256 != source_hash:
                 raise ValueError("Input DRC evidence does not match the source board bytes")
             changed = run_kicad("add_ground_plane", board=str(source), output=str(staged), plan=plan,
+                                pre_route=pre_route,
                                 python_path=kicad_python_path)
             if changed.get("status") != "ok":
                 return changed
@@ -164,6 +190,9 @@ def add_ground_plane(
             zone_stats = report.get("zone_stats") if isinstance(report, dict) else None
             connected_copper_counts = report.get("zone_connected_copper_counts") if isinstance(report, dict) else None
             if (not isinstance(report, dict) or report.get("status") != "ok"
+                    or report.get("routing_complete") is not (not pre_route)
+                    or report.get("requires_route") is not bool(pre_route)
+                    or (pre_route and not isinstance(report.get("unconnected_ground_pads"), list))
                     or any(report.get(key) is not True for key in required)
                     or report.get("net") != plan["net"] or report.get("layers") != plan["layers"]
                     or report.get("filled_zones") != len(plan["layers"])
@@ -204,7 +233,7 @@ def add_ground_plane(
                         "output was not published", "silkscreen": silkscreen}
             _restore_settings(source, staged, snapshots)
             drc = run_drc(staged, evidence_ledger=EvidenceLedger())
-            if not drc.passed:
+            if not drc.passed and not (pre_route and _pre_route_drc_allowed(drc)):
                 return {"status": "error",
                         "message": "Ground-plane board failed full KiCad DRC; output was not published",
                         "drc": drc.to_dict()}
@@ -213,6 +242,8 @@ def add_ground_plane(
             _publish(staged, destination, snapshots, overwrite)
         return {"status": "ok", "output_path": str(destination), "output_kind": "ground_plane_kicad_board",
                 "source_sha256": source_hash, "ground_plane": report, "silkscreen": silkscreen,
-                "drc": {**drc.to_dict(), "board": str(destination)}, "fabrication_ready": False}
+                "drc": {**drc.to_dict(), "board": str(destination)}, "fabrication_ready": False,
+                "routing_complete": not pre_route, "requires_route": bool(pre_route),
+                "pre_route": bool(pre_route)}
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return {"status": "error", "message": str(exc)}

@@ -71,5 +71,11 @@ kilo.json
 memory/
 
 # Workflow logs (Sprint 37 Task 159) — regenerated on every run
+# Expanded benchmark copies are generated and verified in run evidence.
+/benchmarks/diverse_systems/cases/
+/benchmarks/diverse_systems/contracts/
+/benchmarks/diverse_systems/architecture/
+/benchmarks/unseen_scale/cases/serial_relay_output_card.yaml
+/benchmarks/unseen_scale/cases/multichannel_analog_setpoint_card.yaml
 circuit-weaver.log
 design.log

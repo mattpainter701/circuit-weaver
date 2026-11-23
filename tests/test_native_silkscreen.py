@@ -277,6 +277,7 @@ import importlib.util, json, pcbnew, sys
 from pathlib import Path
 
 worker_path, board_path = Path(sys.argv[1]), Path(sys.argv[2])
+sys.path.insert(0, str(worker_path.parent))
 spec = importlib.util.spec_from_file_location("cw_worker", worker_path)
 worker = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(worker)
@@ -553,7 +554,10 @@ def test_spatial_broadphase_is_geometry_equivalent_to_exhaustive_scan(tmp_path, 
     worker_path = Path(circuit_weaver.__file__).with_name("_kicad_worker.py")
     script = r'''
 import importlib.util, json, pcbnew, sys
-spec = importlib.util.spec_from_file_location("worker", sys.argv[1])
+from pathlib import Path
+worker_path = Path(sys.argv[1])
+sys.path.insert(0, str(worker_path.parent))
+spec = importlib.util.spec_from_file_location("worker", worker_path)
 worker = importlib.util.module_from_spec(spec); spec.loader.exec_module(worker)
 board = pcbnew.LoadBoard(sys.argv[2])
 if sys.argv[3] == "exhaustive":

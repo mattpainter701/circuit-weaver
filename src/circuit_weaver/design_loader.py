@@ -280,6 +280,7 @@ def _hydrate_ir_from_components(ir: DesignIR, components: list[ComponentDef]) ->
         power_domains=copy.deepcopy(ir.power_domains),
         approved_overrides=copy.deepcopy(ir.approved_overrides),
         pcb_constraints=copy.deepcopy(ir.pcb_constraints),
+        operating_cases=copy.deepcopy(ir.operating_cases),
     )
 
 

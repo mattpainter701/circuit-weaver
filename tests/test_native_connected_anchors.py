@@ -1,0 +1,337 @@
+"""Check connected-copper identity, geometry, and shared search bounds."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from circuit_weaver import _native_routing_repair as kernel
+
+
+class Item:
+    def __init__(self, uid, item_class, net_code=7, net_name="SIG", *, layers=(0,)):
+        self.uid = uid
+        self.item_class = item_class
+        self.net_code = net_code
+        self.net_name = net_name
+        self.layers = set(layers)
+        self.m_Uuid = SimpleNamespace(AsString=lambda: self.uid)
+
+    def GetClass(self):
+        return self.item_class
+
+    def GetNetCode(self):
+        return self.net_code
+
+    def GetNetname(self):
+        return self.net_name
+
+    def IsOnLayer(self, layer):
+        return layer in self.layers
+
+
+class Pad(Item):
+    def __init__(self, uid, xy, **kwargs):
+        super().__init__(uid, "PAD", **kwargs)
+        self.position = xy
+
+    def GetPosition(self):
+        return SimpleNamespace(x=self.position[0], y=self.position[1])
+
+
+class Track(Item):
+    def __init__(self, uid, start, end, **kwargs):
+        super().__init__(uid, "PCB_TRACK", **kwargs)
+        self.start, self.end = start, end
+
+    def GetStart(self):
+        return SimpleNamespace(x=self.start[0], y=self.start[1])
+
+    def GetEnd(self):
+        return SimpleNamespace(x=self.end[0], y=self.end[1])
+
+
+class Via(Item):
+    def __init__(self, uid, xy, **kwargs):
+        super().__init__(uid, "PCB_VIA", **kwargs)
+        self.position = xy
+
+    def GetPosition(self):
+        return SimpleNamespace(x=self.position[0], y=self.position[1])
+
+
+class Connectivity:
+    def __init__(self, clusters):
+        self.clusters = clusters
+        self.calls = []
+
+    def GetConnectedItems(self, seed):
+        self.calls.append(seed.uid)
+        return self.clusters[seed.uid]
+
+
+class Board:
+    def __init__(self, clusters, source_items=None):
+        self.connectivity = Connectivity(clusters)
+        self.source_items = source_items or {
+            item.uid: item for cluster in clusters.values() for item in cluster
+            if item.GetClass() != "ZONE"
+        }
+
+    def GetConnectivity(self):
+        return self.connectivity
+
+
+class Pcbnew:
+    @staticmethod
+    def ToMM(value):
+        return value / 1_000_000
+
+
+def _anchors(board, seed, opposite=(10.0, 0.0), *, limit=32):
+    return kernel._connected_component_anchor_vertices(
+        board, seed, board.source_items, 7, "SIG", [0, 1], Pcbnew, opposite, limit=limit,
+    )
+
+
+def test_cluster_anchor_collection_preserves_selected_item_and_enabled_layers():
+    pad = Pad("pad-a", (0, 0), layers=(0,))
+    stub = Track("track-a", (1_000_000, 0), (2_000_000, 0), layers=(0,))
+    via = Via("via-a", (3_000_000, 0), layers=(0, 1))
+    board = Board({"pad-a": [pad, stub, via]}, source_items={
+        "pad-a": pad, "track-a": stub, "via-a": via,
+    })
+
+    anchors, cluster_ids = _anchors(board, pad)
+
+    assert board.connectivity.calls == ["pad-a"]
+    assert cluster_ids == {"pad-a", "track-a", "via-a"}
+    assert {anchor["uuid"] for anchor in anchors} == cluster_ids
+    assert {(anchor["uuid"], anchor["layer"]) for anchor in anchors if anchor["uuid"] == "via-a"} == {
+        ("via-a", 0), ("via-a", 1),
+    }
+
+
+def test_anchor_enumeration_is_deterministic_bounded_and_keeps_selected_endpoint():
+    seed = Track("seed", (99_000_000, 0), (100_000_000, 0))
+    tracks = [Track(f"t-{i:02d}", (i * 1_000_000, 0), ((i + 1) * 1_000_000, 0)) for i in range(40)]
+    cluster = [seed, *tracks]
+    board = Board({"seed": cluster})
+
+    first, ids1 = _anchors(board, seed, opposite=(0.0, 0.0), limit=32)
+    second, ids2 = _anchors(board, seed, opposite=(0.0, 0.0), limit=32)
+
+    assert len(first) == len(second) == 32
+    assert ids1 == ids2
+    assert first == second
+    assert {anchor["uuid"] for anchor in first} & {"seed"} == {"seed"}
+
+
+@pytest.mark.parametrize("bad_member", [
+    Item("foreign", "PCB_TRACK", net_code=8, net_name="OTHER"),
+    Item("zone", "ZONE"),
+])
+def test_cluster_rejects_foreign_net_or_zone_member(bad_member):
+    seed = Pad("pad-a", (0, 0))
+    board = Board({"pad-a": [seed, bad_member]})
+
+    with pytest.raises(ValueError, match="foreign net|contains a zone"):
+        _anchors(board, seed)
+
+
+def test_cluster_adds_known_seed_omitted_from_native_query():
+    seed = Pad("pad-a", (0, 0))
+    other = Pad("pad-b", (1_000_000, 0))
+    board = Board({"pad-a": [other]}, source_items={"pad-a": seed, "pad-b": other})
+
+    anchors, cluster_ids = _anchors(board, seed)
+
+    assert {anchor["uuid"] for anchor in anchors} == {"pad-a", "pad-b"}
+    assert cluster_ids == {"pad-a", "pad-b"}
+
+
+def test_empty_native_query_is_valid_for_isolated_selected_item():
+    seed = Pad("pad-a", (0, 0))
+    board = Board({"pad-a": []}, source_items={"pad-a": seed})
+
+    anchors, cluster_ids = _anchors(board, seed)
+
+    assert anchors == [{
+        "uuid": "pad-a", "point": (0.0, 0.0), "layer": 0, "item_class": "PAD",
+    }]
+    assert cluster_ids == {"pad-a"}
+
+
+def test_generic_connectivity_wrapper_uses_canonical_concrete_source_geometry():
+    class ConnectedView:
+        def __init__(self, uid):
+            self.uid = uid
+            self.m_Uuid = SimpleNamespace(AsString=lambda: self.uid)
+
+        def GetClass(self):
+            return "BOARD_CONNECTED_ITEM"
+
+        def GetNetCode(self):
+            return 7
+
+        def GetNetname(self):
+            return "SIG"
+
+    pad = Pad("pad-a", (0, 0))
+    track = Track("track-a", (1_000_000, 0), (2_000_000, 0))
+    board = Board({"pad-a": [ConnectedView("pad-a"), ConnectedView("track-a")]},
+                  source_items={"pad-a": pad, "track-a": track})
+
+    anchors, cluster_ids = _anchors(board, pad)
+
+    assert cluster_ids == {"pad-a", "track-a"}
+    assert {anchor["uuid"] for anchor in anchors} == cluster_ids
+    assert any(anchor["point"] == (1.0, 0.0) for anchor in anchors)
+
+
+def test_cluster_rejects_query_uuid_missing_from_source_inventory():
+    seed = Pad("pad-a", (0, 0))
+    unknown = Pad("unknown", (1_000_000, 0))
+    board = Board({"pad-a": [seed, unknown]}, source_items={"pad-a": seed})
+
+    with pytest.raises(ValueError, match="unknown source UUID"):
+        _anchors(board, seed)
+
+
+def test_pair_choice_is_stable_and_prefers_same_layer_for_equal_distance():
+    first = [
+        {"uuid": "a-top", "point": (0.0, 0.0), "layer": 0},
+        {"uuid": "a-back", "point": (0.0, 0.0), "layer": 1},
+    ]
+    last = [
+        {"uuid": "b-top", "point": (2.0, 0.0), "layer": 0},
+        {"uuid": "b-back", "point": (2.0, 0.0), "layer": 1},
+    ]
+
+    chosen = kernel._choose_connected_anchor_pair(first, last)
+    again = kernel._choose_connected_anchor_pair(first, last)
+
+    assert chosen == again
+    assert chosen[0]["layer"] == chosen[1]["layer"]
+
+
+def test_multiroot_search_escapes_blocked_nearest_anchor_and_returns_used_anchors():
+    starts = [
+        {"uuid": "a-nearest-trapped", "point": (0.0, 0.0), "layer": 0},
+        {"uuid": "b-escape-track", "point": (0.0, 2.0), "layer": 0},
+    ]
+    goals = [{"uuid": "goal", "point": (5.0, 2.0), "layer": 0}]
+
+    def clear(a, b, layer):
+        assert layer == 0
+        return a != (0.0, 0.0) and b != (0.0, 0.0)
+
+    result = kernel._bidirectional_connected_anchor_search(
+        starts, goals, [0], (-1.0, -1.0, 6.0, 4.0), 1.0, 100,
+        clear, lambda _point: False,
+    )
+    path, expanded, start_anchor, goal_anchor, origin = result
+
+    assert path
+    assert expanded <= 100
+    assert start_anchor["uuid"] == "b-escape-track"
+    assert goal_anchor["uuid"] == "goal"
+    assert origin == (0.0, 0.0)
+    physical = kernel._physical_connected_search_points(path, 1.0, origin,
+                                                        start_anchor, goal_anchor, [0])
+    assert physical[0] == ((0.0, 2.0), 0)
+    assert physical[-1] == ((5.0, 2.0), 0)
+
+
+def test_multiroot_search_also_skips_blocked_nearest_goal_anchor():
+    starts = [{"uuid": "start", "point": (0.0, 2.0), "layer": 0}]
+    goals = [
+        {"uuid": "a-nearest-trapped", "point": (5.0, 0.0), "layer": 0},
+        {"uuid": "b-escape-track", "point": (5.0, 2.0), "layer": 0},
+    ]
+
+    def clear(a, b, layer):
+        assert layer == 0
+        return a != (5.0, 0.0) and b != (5.0, 0.0)
+
+    path, expanded, start_anchor, goal_anchor, origin = kernel._bidirectional_connected_anchor_search(
+        starts, goals, [0], (-1.0, -1.0, 6.0, 4.0), 1.0, 100,
+        clear, lambda _point: False,
+    )
+
+    assert path
+    assert expanded <= 100
+    assert start_anchor["uuid"] == "start"
+    assert goal_anchor["uuid"] == "b-escape-track"
+    physical = kernel._physical_connected_search_points(path, 1.0, origin,
+                                                        start_anchor, goal_anchor, [0])
+    assert physical[0] == ((0.0, 2.0), 0)
+    assert physical[-1] == ((5.0, 2.0), 0)
+
+
+def test_multiroot_physical_choice_is_stable_when_uuids_are_renamed():
+    def run(starts, goals):
+        def clear(a, b, layer):
+            assert layer == 0
+            return a != (0.0, 0.0) and b != (0.0, 0.0)
+
+        result = kernel._bidirectional_connected_anchor_search(
+            starts, goals, [0], (-1.0, -1.0, 6.0, 4.0), 1.0, 100,
+            clear, lambda _point: False,
+        )
+        path, expanded, start_anchor, goal_anchor, origin = result
+        physical = kernel._physical_connected_search_points(
+            path, 1.0, origin, start_anchor, goal_anchor, [0],
+        )
+        return path, expanded, origin, physical, start_anchor["uuid"], goal_anchor["uuid"]
+
+    first = run(
+        [{"uuid": "a-nearest", "point": (0.0, 0.0), "layer": 0},
+         {"uuid": "z-escape", "point": (0.0, 2.0), "layer": 0}],
+        [{"uuid": "z-goal", "point": (5.0, 2.0), "layer": 0}],
+    )
+    renamed = run(
+        [{"uuid": "z-nearest", "point": (0.0, 0.0), "layer": 0},
+         {"uuid": "a-escape", "point": (0.0, 2.0), "layer": 0}],
+        [{"uuid": "a-goal", "point": (5.0, 2.0), "layer": 0}],
+    )
+
+    assert first[:4] == renamed[:4]
+    assert first[4:] != renamed[4:]
+
+
+def test_multiroot_search_is_deterministic_and_uses_one_shared_state_cap():
+    starts = [
+        {"uuid": "start-b", "point": (0.25, 0.0), "layer": 0},
+        {"uuid": "start-a", "point": (0.0, 0.0), "layer": 0},
+    ]
+    goals = [{"uuid": "goal", "point": (4.0, 0.0), "layer": 0}]
+    legal_segments = []
+
+    def clear(a, b, layer):
+        legal_segments.append((a, b, layer))
+        return True
+
+    args = (starts, goals, [0], (-1.0, -1.0, 5.0, 2.0), 1.0, 1, clear, lambda _point: False)
+    first = kernel._bidirectional_connected_anchor_search(*args, grid_phase=(0.5, 0.0))
+    second = kernel._bidirectional_connected_anchor_search(*args, grid_phase=(0.5, 0.0))
+
+    assert first == second
+    assert first[1] <= 1
+    assert any(a != b for a, b, _layer in legal_segments)
+
+
+@pytest.mark.parametrize("bad_anchor", [
+    {"uuid": "", "point": (0.0, 0.0), "layer": 0},
+    {"uuid": "s", "point": (float("nan"), 0.0), "layer": 0},
+    {"uuid": "s", "point": (0.0, 0.0), "layer": True},
+    {"uuid": "s", "point": (0.0, 0.0), "layer": 9},
+])
+def test_multiroot_search_rejects_invalid_anchor_identity_geometry_or_layer(bad_anchor):
+    with pytest.raises(ValueError, match="anchor"):
+        kernel._bidirectional_connected_anchor_search(
+            [bad_anchor], [{"uuid": "g", "point": (2.0, 0.0), "layer": 0}],
+            [0], (-1.0, -1.0, 3.0, 1.0), 1.0, 10,
+            lambda _a, _b, _layer: True, lambda _point: False,
+        )

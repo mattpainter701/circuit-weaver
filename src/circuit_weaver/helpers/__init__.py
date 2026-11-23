@@ -6,6 +6,7 @@ from .impedance import (
     find_width_for_z0,
     microstrip_z0,
     stripline_z0,
+    symmetric_stripline_z0_ideal,
 )
 from .placement import (
     find_matching_capacitor,
@@ -37,6 +38,7 @@ __all__ = [
     "microstrip_z0",
     "save_state",
     "stripline_z0",
+    "symmetric_stripline_z0_ideal",
     "sync_managed_silkscreen",
     "values_match",
 ]

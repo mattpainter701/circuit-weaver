@@ -43,11 +43,15 @@ def test_si_detects_usb_from_nets():
     assert result["impedance_constraints"][0]["target_ohms"] == 90
 
 
-def test_si_detects_ddr_from_nets():
+def test_si_generic_ddr_nets_leave_generation_unresolved():
     from circuit_weaver.si_constraints import analyze_si_constraints
 
     result = analyze_si_constraints([_make_comp("U1", pin_nets={"1": "DDR_DQ0", "2": "DDR_DQ1", "3": "DDR_DQS0"})])
-    assert any(b["bus_type"] in ("ddr4", "ddr3") for b in result["buses_detected"])
+    assert [(bus["bus_type"], bus["generation_status"]) for bus in result["buses_detected"]] == [
+        ("ddr_unknown", "unknown")
+    ]
+    assert result["impedance_constraints"] == []
+    assert result["unverified_constraints"][0]["nets"] == ["DDR_DQ0", "DDR_DQ1", "DDR_DQS0"]
 
 
 def test_si_detects_ethernet_from_description():
@@ -64,14 +68,18 @@ def test_si_diff_pair_detection():
     assert len(result["diff_pairs"]) >= 1
 
 
-def test_si_length_matching_groups():
+def test_si_ddr_matching_requires_device_and_lane_evidence():
     from circuit_weaver.si_constraints import analyze_si_constraints
 
     result = analyze_si_constraints(
         [_make_comp("U1", pin_nets={"1": "DDR_DQ0", "2": "DDR_DQ1", "3": "DDR_DQ2", "4": "DDR_DQ3"})]
     )
-    assert len(result["length_groups"]) >= 1
-    assert result["length_groups"][0]["tolerance_mm"] == pytest.approx(0.127)
+    assert result["length_groups"] == []
+    unresolved = result["unverified_constraints"][0]
+    assert unresolved["status"] == "unknown"
+    assert unresolved["nets"] == ["DDR_DQ0", "DDR_DQ1", "DDR_DQ2", "DDR_DQ3"]
+    assert unresolved["generated_hard_constraints"] == []
+    assert "signal-role and byte-lane grouping evidence" in unresolved["required_inputs"]
 
 
 def test_si_routing_rules_usb():

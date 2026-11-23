@@ -22,6 +22,7 @@ class PcbConstraintConflictError(ValueError):
 class ConstraintCompilation:
     constraints: tuple[PcbConstraint, ...]
     conflict_ids: tuple[str, ...] = ()
+    unverified_requirements: tuple[dict[str, Any], ...] = ()
 
     @property
     def ready(self) -> bool:
@@ -38,6 +39,10 @@ class ConstraintCompilation:
             "ready": self.ready,
             "conflict_ids": list(self.conflict_ids),
             "constraints": [item.to_dict() for item in self.constraints],
+            "unverified_requirements": [
+                {**dict(item), "verification_status": "not_verified"}
+                for item in self.unverified_requirements
+            ],
         }
 
 
@@ -184,7 +189,7 @@ def _power_constraints(domain: PowerDomain) -> list[PcbConstraint]:
 def _si_constraints(
     components: Sequence[ComponentDef],
     evidence_by_subject: Mapping[str, Sequence[str]],
-) -> list[PcbConstraint]:
+) -> tuple[list[PcbConstraint], tuple[dict[str, Any], ...]]:
     analysis = analyze_si_constraints(list(components))
     compiled: list[PcbConstraint] = []
     for pair in analysis["diff_pairs"]:
@@ -241,7 +246,7 @@ def _si_constraints(
                 evidence_ids=evidence,
             )
         )
-    return compiled
+    return compiled, tuple(analysis["unverified_constraints"])
 
 
 def _named_net_constraints(
@@ -307,7 +312,10 @@ def _explicit_constraint(raw: Mapping[str, Any], default_origin: str) -> PcbCons
     )
 
 
-def _mark_conflicts(constraints: Iterable[PcbConstraint]) -> ConstraintCompilation:
+def _mark_conflicts(
+    constraints: Iterable[PcbConstraint],
+    unverified_requirements: tuple[dict[str, Any], ...] = (),
+) -> ConstraintCompilation:
     by_id: dict[str, PcbConstraint] = {}
     for constraint in constraints:
         current = by_id.get(constraint.id)
@@ -330,7 +338,7 @@ def _mark_conflicts(constraints: Iterable[PcbConstraint]) -> ConstraintCompilati
         for item in sorted(rows, key=lambda row: row.id)
     )
     conflict_ids = tuple(sorted(item.id for item in marked if item.conflicts))
-    return ConstraintCompilation(marked, conflict_ids)
+    return ConstraintCompilation(marked, conflict_ids, unverified_requirements)
 
 
 def _constraints_conflict(left: PcbConstraint, right: PcbConstraint) -> bool:
@@ -372,12 +380,13 @@ def compile_pcb_constraints(
     evidence = evidence_by_subject or {}
     constraints: list[PcbConstraint] = _fab_constraints(fab_profile, fab_profile_evidence_id)
     constraints.extend(item for domain in design_ir.power_domains for item in _power_constraints(domain))
-    constraints.extend(_si_constraints(components, evidence))
+    si_constraints, unverified_requirements = _si_constraints(components, evidence)
+    constraints.extend(si_constraints)
     constraints.extend(_named_net_constraints(components, evidence))
     constraints.extend(_explicit_constraint(item, "user") for item in design_ir.pcb_constraints)
     constraints.extend(_explicit_constraint(item, "manufacturer") for item in manufacturer_constraints)
     constraints.extend(_explicit_constraint(item, "user") for item in user_constraints)
-    return _mark_conflicts(constraints)
+    return _mark_conflicts(constraints, unverified_requirements)
 
 
 def _param_number(constraint: PcbConstraint, name: str) -> float | None:
@@ -387,12 +396,17 @@ def _param_number(constraint: PcbConstraint, name: str) -> float | None:
     return None
 
 
-def render_kicad_dru(compilation: ConstraintCompilation) -> str:
-    """Render deterministic KiCad custom rules named by their frozen IDs."""
+def render_kicad_dru_report(compilation: ConstraintCompilation) -> dict[str, object]:
+    """Render DRU text and account for every requested constraint ID."""
 
     constraints = compilation.require_ready()
     lines = ["(version 1)"]
+    emitted_ids: list[str] = []
+    unemitted: list[dict[str, str]] = []
     for item in constraints:
+        if ":" not in item.target:
+            unemitted.append({"id": item.id, "klass": item.klass, "reason": "unsupported_target_format"})
+            continue
         condition_target = item.target.split(":", 1)[1]
         if item.target.startswith("net:"):
             condition = f"A.NetName == '{condition_target}'"
@@ -412,12 +426,43 @@ def render_kicad_dru(compilation: ConstraintCompilation) -> str:
                 rendered.append(f"  (constraint via_diameter (min {diameter:g}mm))")
             if drill is not None:
                 rendered.append(f"  (constraint hole_size (min {drill:g}mm))")
-        elif item.klass == "length" and (value := _param_number(item, "maximum")) is not None:
+        elif (
+            item.klass == "length"
+            and "match_tolerance" not in item.params
+            and (value := _param_number(item, "maximum")) is not None
+        ):
             rendered.append(f"  (constraint length (max {value:g}mm))")
         elif item.klass == "keepout":
             rendered.append("  (constraint disallow track via zone)")
         if not rendered:
+            if item.klass == "length" and "match_tolerance" in item.params:
+                reason = "length_match_tolerance_not_supported_by_kicad_dru_renderer"
+            elif item.klass == "length":
+                reason = "length_rule_requires_renderable_maximum"
+            else:
+                reason = f"constraint_class_{item.klass}_not_supported_by_kicad_dru_renderer"
+            unemitted.append({"id": item.id, "klass": item.klass, "reason": reason})
             continue
         lines.extend((f'(rule "{item.id}"', f'  (condition "{condition}")', *rendered, ")"))
-    lines.append(f"# circuit-weaver-constraints {json.dumps([item.id for item in constraints])}")
-    return "\n".join(lines) + "\n"
+        emitted_ids.append(item.id)
+    requested_ids = [item.id for item in constraints]
+    unemitted_ids = [item["id"] for item in unemitted]
+    lines.append(f"# circuit-weaver-constraints {json.dumps(requested_ids)}")
+    lines.append("# circuit-weaver-constraints-note requested intent only; not every item is enforced")
+    lines.append(f"# circuit-weaver-rendered-constraints {json.dumps(emitted_ids)}")
+    lines.append(f"# circuit-weaver-unrendered-constraints {json.dumps(unemitted_ids)}")
+    return {
+        "status": "complete" if not unemitted else "partial",
+        "requested_ids": [item.id for item in constraints],
+        "emitted_ids": emitted_ids,
+        "unemitted_ids": [item["id"] for item in unemitted],
+        "unemitted": unemitted,
+        "rule_count": len(emitted_ids),
+        "text": "\n".join(lines) + "\n",
+    }
+
+
+def render_kicad_dru(compilation: ConstraintCompilation) -> str:
+    """Render the KiCad rules file; use render_kicad_dru_report for accounting."""
+
+    return str(render_kicad_dru_report(compilation)["text"])

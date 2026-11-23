@@ -66,6 +66,7 @@ def _has_blocks(spec_dict: dict[str, Any]) -> bool:
         "drivers",
         "misc",
         "protection",
+        "passives",
         "blocks",  # Generic blocks list format
     ]
     return any(block in spec_dict for block in block_types)

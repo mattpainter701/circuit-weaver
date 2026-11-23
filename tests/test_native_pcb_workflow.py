@@ -78,6 +78,13 @@ def test_real_placement_route_import_and_drc(tmp_path, native_tools, case):
     assert route["drc"]["board"] == str(routed.resolve())
     assert route["drc"]["board_sha256"] == hashlib.sha256(routed.read_bytes()).hexdigest()
     assert route["search"]["completed_attempts"] == 3
+    edge = route["router"]["native_edge_clearance"]
+    assert edge["value_iu"] == before["native_edge_clearance"]["value_iu"]
+    assert edge["source"] == "BOARD_DESIGN_SETTINGS.m_CopperEdgeClearance"
+    assert edge["transport"] == "--router.copper_to_edge_clearance_um"
+    if case == "rc":
+        assert before["native_edge_clearance"]["value_mm"] == 0.8
+        assert edge["argv"] == "--router.copper_to_edge_clearance_um=800"
     assert source.read_bytes() == original
     for suffix in (".kicad_pro", ".kicad_dru"):
         if suffix in settings_before:
@@ -137,6 +144,7 @@ runpy.run_path(fixture, run_name="__main__")
     assert {"board", "net_settings", "meta"}.issubset(project)
     assert project["board"]["design_settings"]["rules"]["min_track_width"] == 0.3
     assert project["board"]["design_settings"]["rules"]["min_clearance"] == 0.25
+    assert project["board"]["design_settings"]["rules"]["min_copper_edge_clearance"] == 0.8
     default_class = next(item for item in project["net_settings"]["classes"] if item["name"] == "Default")
     assert default_class["track_width"] == 0.35
     assert default_class["clearance"] == 0.25

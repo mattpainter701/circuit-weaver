@@ -9,6 +9,7 @@ marked so integrations can avoid recording duplicate checkpoints.
 from __future__ import annotations
 
 import contextlib
+import errno
 import hashlib
 import importlib.resources
 import json
@@ -28,11 +29,14 @@ from ._owned_subprocess import run_captured
 from .project_state import (
     AmbiguousProjectStateError,
     ProjectState,
+    _descendant_project_state_roots,
     _load_project_state_file,
     file_sha256,
     get_project_state_summary,
     load_project_state,
+    manufacturing_artwork_kind,
     project_state_path,
+    resolve_project_root,
     resolve_project_state_root,
     save_project_state,
 )
@@ -42,17 +46,28 @@ DEFAULT_STAGES = STAGES
 _RUNNER_KEY = "runner"
 _LOCK_NAME = "workflow.lock"
 _CHILD_ENV = "CIRCUIT_WEAVER_WORKFLOW_CHILD"
-_STAGE_TIMEOUTS = {"build": 300, "place": 300, "route": 1800, "preview": 180}
+# Native PCB generation scales each subprocess budget to the parsed schematic
+# size (capped at 600s). Keep a separate 900s hard stage cap for netlist export,
+# worker execution, DRC validation and publication together.
+# A full router attempt can use 1,800s. Native SES import, zone refill and DRC
+# still have to run after it; the parent must not expire at the router deadline.
+_ROUTE_NATIVE_POSTPROCESS_SECONDS = 600
+_STAGE_TIMEOUTS = {"build": 900, "place": 300, "route": 4200, "preview": 180}
 _APPEND_ONLY_OUTPUTS = {"design.log", "circuit-weaver.log"}
+_PROJECT_INPUT_SUFFIXES = {".kicad_pro", ".kicad_sch", ".kicad_pcb", ".zip", ".yaml", ".yml", ".json"}
 _SPEC_SUFFIXES = {".yaml", ".yml", ".json"}
 _GENERATED_REPORT_FILENAMES = {"ground-plane.json", "route-quality.json"}
+_PROJECT_MODEL_SUFFIXES = {".step", ".stp", ".wrl", ".wrz", ".iges", ".igs", ".obj", ".stl", ".ply"}
 
 
 class WorkflowError(RuntimeError):
-    def __init__(self, code: str, message: str, choices: list[str] | None = None):
+    def __init__(
+        self, code: str, message: str, choices: list[str] | None = None, *, stage_result: dict[str, Any] | None = None,
+    ):
         super().__init__(message)
         self.code = code
         self.choices = choices
+        self.stage_result = stage_result
 
 
 def _result(ok: bool, status: str, **values: Any) -> dict[str, Any]:
@@ -121,6 +136,10 @@ def _snapshot(root: Path, paths: list[str | Path]) -> list[dict[str, Any]]:
         if path.is_file():
             stat = path.stat()
             record.update({"sha256": file_sha256(path), "size": stat.st_size})
+        elif path.is_dir() and path.suffix.casefold() == ".pretty":
+            from .kicad_project_context import footprint_library_tree_sha256
+            record.update({"exists": True, "kind": "footprint_library_tree",
+                           "sha256": footprint_library_tree_sha256(path)})
         records.append(record)
     return records
 
@@ -138,10 +157,12 @@ def _checkpoint_output_paths(checkpoint: dict[str, Any]) -> list[str]:
     ]
 
 
-def _spec_candidates(root: Path) -> list[Path]:
+def _spec_candidates(root: Path, paths: Any = None) -> list[Path]:
+    """Return candidate design files, excluding known generated root reports."""
+    candidates = root.iterdir() if paths is None else paths
     return sorted(
         (
-            path for path in root.iterdir()
+            path for path in candidates
             if path.is_file()
             and path.suffix.casefold() in _SPEC_SUFFIXES
             and path.name.casefold() not in _GENERATED_REPORT_FILENAMES
@@ -150,16 +171,28 @@ def _spec_candidates(root: Path) -> list[Path]:
     )
 
 
-def _spec_path(root: Path) -> Path:
-    candidates = _spec_candidates(root)
+def _select_spec(root: Path, paths: Any = None, *, required: bool = True) -> Path | None:
+    candidates = _spec_candidates(root, paths)
     candidate = root / "design.yaml"
     if candidate.is_file() and candidate in candidates:
         return candidate
     if len(candidates) == 1:
         return candidates[0]
     if not candidates:
+        if not required:
+            return None
         raise WorkflowError("spec_missing", f"No design spec found in {root}")
-    raise WorkflowError("ambiguous_spec", f"Multiple design specs found in {root}; use design.yaml")
+    raise WorkflowError(
+        "ambiguous_spec",
+        f"Multiple design specs found in {root}; use design.yaml",
+        [str(path) for path in candidates],
+    )
+
+
+def _spec_path(root: Path) -> Path:
+    selected = _select_spec(root)
+    assert selected is not None
+    return selected
 
 
 def _has_spec(root: Path) -> bool:
@@ -233,8 +266,7 @@ def open_project(target: str | Path = ".") -> dict[str, Any]:
                 sorted(
                     str(path.resolve())
                     for path in root.iterdir()
-                    if path.is_file()
-                    and path.suffix.casefold() in {".kicad_pro", ".kicad_sch", ".kicad_pcb", ".gbr", ".zip"}
+                    if path.is_file() and _is_adoptable_input(path)
                 )
                 if root.is_dir()
                 else ([str(root)] if root.is_file() else [])
@@ -249,18 +281,163 @@ def open_project(target: str | Path = ".") -> dict[str, Any]:
                 project_dir=str(root if root.is_dir() else root.parent),
                 summary={"kind": "native", "files": files, "read_only": True},
                 choices=files,
+                next_actions=["adopt_project"],
             )
         summary = get_project_state_summary(root)
         run = _runner(state)
+        workflow_view = dict(run)
+        persisted_status = str(run.get("status", "idle"))
+        activity = _workflow_activity(root, persisted_status)
+        if persisted_status == "running":
+            # Keep the durable runner/checkpoints available to guarded resume,
+            # while making the outward status reflect lock ownership.
+            workflow_view["persisted_status"] = persisted_status
+            if activity["state"] == "interrupted":
+                workflow_view["status"] = "interrupted"
+        outward_status = "interrupted" if activity["state"] == "interrupted" else persisted_status
         return _result(
             True,
-            str(run.get("status", summary.get("status", "open"))),
+            str(outward_status or summary.get("status", "open")),
             project_dir=str(root),
             summary=summary,
-            workflow=run,
+            workflow=workflow_view,
+            workflow_activity=activity,
         )
     except Exception as exc:
         return _result(False, "error", error=_error(exc), choices=getattr(exc, "choices", None))
+
+
+def adopt_project(target: str | Path, name: str | None = None) -> dict[str, Any]:
+    """Create durable Circuit Weaver state for an existing spec or KiCad project.
+
+    Adoption records hashes and sizes for direct project inputs. It never edits
+    those files. Existing exact state is returned unchanged, making retries safe.
+    Native planning and execution also initialize state automatically; adoption
+    is useful when an explicit baseline of existing source hashes is wanted.
+    """
+    try:
+        candidate = Path(target).expanduser().resolve(strict=False)
+        if candidate.is_file():
+            root = candidate.parent
+            if not _is_adoptable_input(candidate):
+                raise WorkflowError("unsupported_target", f"Unsupported project file: {candidate}")
+        elif candidate.is_dir():
+            root = candidate
+        else:
+            raise WorkflowError(
+                "unsupported_target", f"Project target must be an existing directory or file: {candidate}"
+            )
+
+        state_path = project_state_path(root)
+        if state_path.is_file():
+            existing = open_project(root)
+            return {**existing, "adopted": False, "message": "Project already has durable state"}
+        _require_adoption_root(candidate, root)
+
+        with _RunLock(root):
+            # Adoption and workflow initialization must serialize. Another
+            # operation may have created the state while this call waited.
+            if state_path.is_file():
+                existing = open_project(root)
+                return {**existing, "adopted": False, "message": "Project already has durable state"}
+            if state_path.exists():
+                raise WorkflowError(
+                    "state_conflict", f"Project state path already exists and is not a manifest: {state_path}"
+                )
+            _require_adoption_root(candidate, root)
+            descendants = _descendant_project_state_roots(root)
+            if descendants:
+                choices = [str(path) for path in descendants]
+                raise WorkflowError(
+                    "ambiguous_project",
+                    "Target contains existing project state; adopt a specific project directory",
+                    choices,
+                )
+
+            files = sorted(
+                (path for path in root.iterdir() if path.is_file() and _is_adoptable_input(path)),
+                key=lambda path: path.name.casefold(),
+            )
+            specs = _spec_candidates(root, files)
+            spec = _select_spec(root, files, required=False)
+            if spec is not None:
+                files = [path for path in files if path not in specs or path == spec]
+            if not files or all(path.name.casefold() in _GENERATED_REPORT_FILENAMES for path in files):
+                raise WorkflowError("unsupported_target", f"No supported project inputs found in {root}")
+
+            project_name = root.name or "project"
+            if name is not None:
+                if not isinstance(name, str) or not name.strip():
+                    raise WorkflowError("invalid_name", "name must be a nonempty string")
+                project_name = name.strip()
+            sources = []
+            for path in files:
+                if path == spec:
+                    kind = "design_spec"
+                elif path.suffix.casefold() == ".kicad_pro":
+                    kind = "kicad_project"
+                elif path.suffix.casefold() == ".kicad_sch":
+                    kind = "schematic"
+                elif path.suffix.casefold() == ".kicad_pcb":
+                    kind = "pcb"
+                elif path.suffix.casefold() == ".zip":
+                    kind = "archive"
+                else:
+                    kind = manufacturing_artwork_kind(path) or "project_source"
+                stat = path.stat()
+                record = {
+                    "path": path.relative_to(root).as_posix(),
+                    "role": "generation_source" if path == spec else "project_input",
+                    "kind": kind,
+                    "size": stat.st_size,
+                    "sha256": file_sha256(path),
+                }
+                sources.append(record)
+
+            state = ProjectState(
+                name=project_name,
+                kind="design" if spec is not None else "native",
+                status="open",
+                current_phase="adopted",
+                next_actions=["plan_workflow"],
+                sources=sources,
+                workflow={
+                    "adoption": {
+                        "status": "adopted",
+                        "input_snapshot": _snapshot(root, [root / item["path"] for item in sources]),
+                    }
+                },
+            )
+            save_project_state(root, state)
+        return _result(
+            True,
+            "adopted",
+            adopted=True,
+            project_dir=str(root),
+            name=project_name,
+            sources=sources,
+            next_actions=["plan_workflow"],
+        )
+    except Exception as exc:
+        return _result(False, "error", error=_error(exc), choices=getattr(exc, "choices", None))
+
+
+def _require_adoption_root(candidate: Path, root: Path) -> None:
+    resolved_root = resolve_project_root(candidate)
+    if resolved_root == root:
+        return
+    state_owner = project_state_path(resolved_root)
+    code = "state_conflict" if state_owner.exists() else "ambiguous_project"
+    raise WorkflowError(
+        code,
+        f"Target is inside a project rooted at {resolved_root}; adopt that project root instead",
+        [str(resolved_root)],
+    )
+
+
+def _is_adoptable_input(path: Path) -> bool:
+    suffix = path.suffix.casefold()
+    return suffix in _PROJECT_INPUT_SUFFIXES or manufacturing_artwork_kind(path) is not None
 
 
 def _normalize_stages(stages: list[str] | tuple[str, ...] | None) -> list[str]:
@@ -277,34 +454,87 @@ def _normalize_options(options: dict[str, Any] | None) -> dict[str, Any]:
         return {}
     if not isinstance(options, dict):
         raise WorkflowError("invalid_options", "options must be a JSON object")
+    raw_contracts = options.get("route_contracts")
+    if isinstance(raw_contracts, dict) and isinstance(raw_contracts.get("routes"), dict):
+        if any(not isinstance(key, str) or not key.strip() for key in raw_contracts["routes"]):
+            raise WorkflowError("invalid_options", "route_contracts route IDs must be nonempty strings")
     try:
         normalized = json.loads(json.dumps(options, allow_nan=False))
     except (TypeError, ValueError) as exc:
         raise WorkflowError("invalid_options", "options must contain JSON-safe values") from exc
+    if "copper_layers" in normalized:
+        from .pcb_stackup import validate_copper_layers
+        try:
+            normalized["copper_layers"] = validate_copper_layers(normalized["copper_layers"])
+        except ValueError as exc:
+            raise WorkflowError("invalid_options", str(exc)) from exc
+    if "ground_plane" in normalized:
+        from .pcb_ground_plane import _validate_plan
+        try:
+            normalized["ground_plane"] = _validate_plan(normalized["ground_plane"])
+        except (TypeError, ValueError) as exc:
+            raise WorkflowError("invalid_options", str(exc)) from exc
+    for key in ("route_repair_open_connections", "ground_plane_after_route", "ground_plane_repair_thermals"):
+        if key in normalized and not isinstance(normalized[key], bool):
+            raise WorkflowError("invalid_options", f"{key} must be a boolean")
+    if normalized.get("ground_plane_repair_thermals") and (
+        "ground_plane" not in normalized or not normalized.get("ground_plane_after_route")
+        or normalized.get("copper_layers") != 4
+    ):
+        raise WorkflowError("invalid_options", "ground_plane_repair_thermals requires an authored ground_plane, "
+                            "ground_plane_after_route=true, and copper_layers=4")
+    if "route_recovery_timeout" in normalized:
+        value = normalized["route_recovery_timeout"]
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or not 0 < value <= 1800):
+            raise WorkflowError("invalid_options", "route_recovery_timeout must be between 0 and 1800 seconds")
     for key in ("clearance_mm", "minimum_drill_mm"):
         if key not in normalized:
             continue
         value = normalized[key]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise WorkflowError("invalid_options", f"{key} must be a finite positive number")
+    for key, minimum, maximum in (
+        ("route_max_passes", 0, 9999),
+        ("route_optimization_threads", 0, 1024),
+        ("route_attempts", 1, 32),
+        ("route_max_repair_links", 1, 512),
+    ):
+        if key not in normalized:
+            continue
+        value = normalized[key]
+        if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+            raise WorkflowError("invalid_options", f"{key} must be an integer from {minimum} through {maximum}")
+    if "route_effort" in normalized:
+        if not isinstance(normalized["route_effort"], str) or normalized["route_effort"] not in {
+            "fast", "medium", "high"
+        }:
+            raise WorkflowError("invalid_options", "route_effort must be fast, medium, or high")
+    if "route_contracts" in normalized:
+        contracts = normalized["route_contracts"]
+        if (not isinstance(contracts, dict) or not isinstance(contracts.get("routes"), dict)
+                or not contracts["routes"] or set(contracts) - {"schema_version", "routes", "pairs"}):
+            raise WorkflowError("invalid_options", "route_contracts requires a nonempty explicit routes object")
     return normalized
 
 
 def _planned_route_board(plan: Any, root: Path) -> Path | None:
-    """Return the exact project-local board recorded as the route input."""
+    """Return the exact route board input recorded by an existing plan."""
     if not isinstance(plan, dict) or not isinstance(plan.get("inputs"), list):
         return None
-    boards = [
-        Path(item["path"])
-        for item in plan["inputs"]
-        if isinstance(item, dict)
-        and isinstance(item.get("path"), str)
-        and Path(item["path"]).suffix.casefold() == ".kicad_pcb"
-    ]
+    boards = []
+    for item in plan["inputs"]:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+            continue
+        path = Path(item["path"])
+        if path.suffix.casefold() == ".kicad_pcb":
+            boards.append(path)
     if len(boards) != 1:
         return None
     board = boards[0].resolve(strict=False)
-    return board if board.parent == root.resolve(strict=False) else None
+    if board.parent != root.resolve(strict=False):
+        return None
+    return board
 
 
 def _plan_data(
@@ -316,9 +546,16 @@ def _plan_data(
     known_route_outputs: list[str] | None = None,
 ) -> dict[str, Any]:
     planned_board = _planned_route_board(saved_plan, root) if stages[0] == "route" else None
-    inputs = _snapshot(root, _stage_inputs(
-        root, stages[0], [], planned_board=planned_board, known_route_outputs=known_route_outputs
-    ))
+    inputs = _snapshot(
+        root,
+        _stage_inputs(
+            root,
+            stages[0],
+            [],
+            planned_board=planned_board,
+            known_route_outputs=known_route_outputs,
+        ),
+    )
     return {
         "stages": stages,
         "options": options,
@@ -330,6 +567,11 @@ def _plan_data(
 def plan_workflow(
     target: str | Path = ".", *, stages: list[str] | None = None, options: dict[str, Any] | None = None
 ) -> dict[str, Any]:
+    """Persist a plan, initializing state for manifestless native projects.
+
+    Workflow execution can initialize the same native state automatically;
+    callers may use :func:`adopt_project` first to record source hash baselines.
+    """
     try:
         root = _root(target)
         normalized_stages = _normalize_stages(stages)
@@ -404,6 +646,60 @@ class _RunLock:
 
             fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
         self.handle.close()
+
+
+def _probe_run_lock(root: Path) -> tuple[str, str | None]:
+    """Inspect existing advisory lock ownership without creating or changing files.
+
+    Returns ``("active" | "free" | "unknown", diagnostic)``. Lock metadata
+    is deliberately ignored: only the OS lock can establish live ownership.
+    """
+    path = root / ".circuit-weaver" / _LOCK_NAME
+    try:
+        handle = path.open("r+b")
+    except FileNotFoundError:
+        return "free", None
+    except OSError as exc:
+        return "unknown", f"{type(exc).__name__}: {exc}"
+
+    try:
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                if exc.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                    return "active", None
+                return "unknown", f"{type(exc).__name__}: {exc}"
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                if exc.errno in {errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK}:
+                    return "active", None
+                return "unknown", f"{type(exc).__name__}: {exc}"
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return "free", None
+    except Exception as exc:
+        return "unknown", f"{type(exc).__name__}: {exc}"
+    finally:
+        handle.close()
+
+
+def _workflow_activity(root: Path, persisted_status: str) -> dict[str, Any]:
+    if persisted_status != "running":
+        return {"state": "idle", "basis": "persisted_status"}
+    ownership, diagnostic = _probe_run_lock(root)
+    if ownership == "active":
+        return {"state": "active", "basis": "advisory_lock"}
+    if ownership == "free":
+        return {"state": "interrupted", "basis": "advisory_lock"}
+    return {"state": "unknown", "basis": "advisory_lock", "diagnostic": diagnostic}
 
 
 def record_stage(
@@ -482,16 +778,30 @@ def _cli(stage: str, args: list[str], cwd: Path, timeout: int) -> dict[str, Any]
         raise WorkflowError("stage_timeout", f"{stage} exceeded its {timeout}s timeout") from exc
     except OSError as exc:
         raise WorkflowError("stage_launch_failed", str(exc)) from exc
-    if proc.returncode:
-        raise WorkflowError(
-            "stage_failed", proc.stderr[-4000:] or proc.stdout[-4000:] or f"{stage} exited {proc.returncode}"
-        )
     try:
         result = json.loads(proc.stdout)
     except json.JSONDecodeError as exc:
+        if proc.returncode:
+            raise WorkflowError(
+                "stage_failed", proc.stderr[-4000:] or proc.stdout[-4000:] or f"{stage} exited {proc.returncode}"
+            ) from exc
         raise WorkflowError("invalid_stage_output", f"{stage} returned no machine-readable result") from exc
     if not isinstance(result, dict):
+        if proc.returncode:
+            raise WorkflowError(
+                "stage_failed", proc.stderr[-4000:] or proc.stdout[-4000:] or f"{stage} exited {proc.returncode}"
+            )
         raise WorkflowError("invalid_stage_output", f"{stage} returned a non-object result")
+    if proc.returncode:
+        error = result.get("error")
+        if isinstance(error, dict):
+            code = error.get("code") or result.get("code") or "stage_failed"
+            message = error.get("message") or error.get("reason") or result.get("message") or result.get("reason")
+        else:
+            code = result.get("code") or "stage_failed"
+            message = error or result.get("message") or result.get("reason") or result.get("detail")
+        message = message or proc.stderr[-4000:] or f"{stage} exited {proc.returncode}"
+        raise WorkflowError(str(code), f"{stage} failed: {message}", stage_result=result)
     return result
 
 
@@ -507,7 +817,11 @@ def _execute_stage(
         payload = report.to_dict() if hasattr(report, "to_dict") else vars(report)
         if not bool(getattr(report, "valid", payload.get("valid", False))):
             raise WorkflowError("validation_failed", "Design validation reported errors")
-        return {"status": "ok", "valid": True}, []
+        result = {"status": "ok", "valid": True}
+        operating_cases = payload.get("metadata", {}).get("operating_cases", {})
+        if operating_cases.get("status") != "not_requested" and operating_cases:
+            result["operating_cases"] = operating_cases
+        return result, []
     if stage == "generate":
         out_dir = root / "output"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -547,6 +861,9 @@ def _execute_stage(
                 str(sch),
                 "--output",
                 str(out),
+                "--project-root",
+                str(root),
+                *(["--copper-layers", str(options["copper_layers"])] if "copper_layers" in options else []),
                 "--width",
                 str(width),
                 "--height",
@@ -564,6 +881,8 @@ def _execute_stage(
         return result, outputs
     if stage in {"place", "route", "preview"}:
         board = _latest_board(root, stage)
+        if "copper_layers" in options:
+            _require_workflow_stackup(board, options)
         if stage == "place":
             iterations = options.get("iterations", 5000)
             if isinstance(iterations, bool) or not isinstance(iterations, int) or not 1 <= iterations <= 100000:
@@ -586,11 +905,35 @@ def _execute_stage(
                 args.extend(["--design", str(design)])
             result = _cli(stage, args, root, _STAGE_TIMEOUTS[stage])
             _require_ok(result, stage)
+            if "copper_layers" in options:
+                _require_workflow_stackup(out, options)
             outputs = _publish_attempt(attempt, root, out, root / out.name, result)
         elif stage == "route":
             attempt = _attempt_dir(root, stage)
             out = attempt / "routed.ses"
             routed_board = attempt / "routed.kicad_pcb"
+            router_timeout = min(max(float(options.get("route_timeout", 300)), 1), 1800)
+            plane_preparation = None
+            deferred_planes = "ground_plane" in options and options.get("ground_plane_after_route", False)
+            if "ground_plane" in options and not deferred_planes:
+                from .kicad_project_context import stage_project_footprint_context
+                from .pcb_ground_plane import add_ground_plane
+                plane_board = attempt / "plane-input.kicad_pcb"
+                plane_preparation = add_ground_plane(
+                    board, plane_board, options["ground_plane"], pre_route=True,
+                    kicad_python_path=options.get("kicad_python_path"),
+                )
+                (attempt / "ground-plane-before.json").write_text(
+                    json.dumps(plane_preparation, indent=2) + "\n", encoding="utf-8"
+                )
+                _require_ok(plane_preparation, "ground_plane")
+                _require_outputs("ground_plane", plane_preparation, [plane_board])
+                # The routed working copy needs the same project footprint table;
+                # it remains private and is never published over project assets.
+                stage_project_footprint_context(board.parent, attempt)
+                board = plane_board
+                if "copper_layers" in options:
+                    _require_workflow_stackup(board, options)
             args = [
                 "autoroute",
                 str(board),
@@ -599,15 +942,116 @@ def _execute_stage(
                 "--routed-board",
                 str(routed_board),
                 "--timeout",
-                str(min(max(float(options.get("route_timeout", 300)), 1), 1800)),
-                *_tool_args(options, "freerouting_path", "kicad_cli_path", "kicad_python_path"),
+                str(router_timeout),
             ]
+            for key, flag in (
+                ("route_max_passes", "--max-passes"),
+                ("route_optimization_threads", "--optimization-threads"),
+                ("route_attempts", "--attempts"),
+                ("route_effort", "--effort"),
+                ("route_recovery_timeout", "--recovery-timeout"),
+                ("route_max_repair_links", "--max-repair-links"),
+            ):
+                if key in options:
+                    args.extend([flag, str(options[key])])
+            recovery_seconds = 0
+            if options.get("route_repair_open_connections", False):
+                args.append("--repair-open-connections")
+                recovery_seconds = float(options.get("route_recovery_timeout", 600))
+            args.extend(_tool_args(options, "freerouting_path", "kicad_cli_path", "kicad_python_path"))
             result = _cli(
-                stage, args, root, min(max(int(options.get("route_timeout", 300)) + 30, 60), _STAGE_TIMEOUTS[stage])
+                stage, args, root,
+                min(math.ceil(router_timeout + recovery_seconds) + _ROUTE_NATIVE_POSTPROCESS_SECONDS,
+                    _STAGE_TIMEOUTS[stage]),
             )
             _require_ok(result, stage)
+            if deferred_planes:
+                from .kicad_project_context import stage_project_footprint_context
+                from .pcb_ground_plane import add_ground_plane
+
+                stage_project_footprint_context(board.parent, attempt)
+                # Keep all layers available to the router. Prepare the authored
+                # plane definitions on the original input, then import the full
+                # session once and verify the resulting saved fills and DRC.
+                with_planes = attempt / "plane-routed.kicad_pcb"
+                plane_preparation = add_ground_plane(
+                    board, with_planes, options["ground_plane"], pre_route=True,
+                    kicad_python_path=options.get("kicad_python_path"),
+                )
+                _require_ok(plane_preparation, "ground_plane")
+                _require_outputs("ground_plane", plane_preparation, [with_planes])
+                from .pcb_layout import import_routing_session
+
+                routed_board = attempt / "verified-plane-routed.kicad_pcb"
+                imported_planes = import_routing_session(
+                    with_planes, out, routed_board, kicad_python_path=options.get("kicad_python_path"),
+                    **({"repair_plane_thermals": True} if options.get("ground_plane_repair_thermals") else {}),
+                )
+                _require_ok(imported_planes, "ground_plane")
+                result = {**result, **imported_planes,
+                          "artifact": {"valid": True, "kind": "kicad_pcb", "path": str(routed_board),
+                                       "sha256": imported_planes["drc"]["board_sha256"]}}
+                if result.get("plane_stitching", {}).get("used"):
+                    result["session_scope"] = "complete_global_router_session_before_native_plane_stitching"
+            extras = [(out, root / out.name)]
+            publish_hashes = None
+            if any(key in options for key in ("route_contracts", "ground_plane", "copper_layers")):
+                publish_hashes = {
+                    path: file_sha256(path) if path.is_file() else None
+                    for path in (routed_board, out, routed_board.with_suffix(".kicad_pro"),
+                                 routed_board.with_suffix(".kicad_dru"))
+                }
+            if "copper_layers" in options:
+                result["copper_layers"] = _require_workflow_stackup(routed_board, options)
+            if plane_preparation is not None:
+                (attempt / "ground-plane-after.json").write_text(
+                    json.dumps({"plan": options["ground_plane"], "after_route": result.get("zone_refill")},
+                               indent=2) + "\n", encoding="utf-8"
+                )
+                _require_workflow_planes(result.get("zone_refill"), options["ground_plane"])
+                report = attempt / "ground-plane.json"
+                plane_report = {
+                    "plan": options["ground_plane"], "plan_sha256": _digest(options["ground_plane"]),
+                    "pre_route": plane_preparation, "after_route": result["zone_refill"],
+                    "preparation_phase": "after_route" if deferred_planes else "before_route",
+                    "board_sha256": publish_hashes[routed_board], "routing_complete": True,
+                    "electrical_or_manufacturing_approval": False,
+                }
+                if "plane_stitching" in result:
+                    plane_report["thermal_repair"] = result["plane_stitching"]
+                    plane_report["session_scope"] = result["session_scope"]
+                    if result["plane_stitching"].get("used"):
+                        plane_report["session_includes_plane_stitching"] = False
+                report.write_text(json.dumps(plane_report, indent=2) + "\n", encoding="utf-8")
+                result["ground_plane"] = plane_report
+                extras.append((report, root / report.name))
+                publish_hashes[report] = file_sha256(report)
+            if "route_contracts" in options:
+                from .board_review import review_pcb
+
+                review = review_pcb(routed_board, {"routing": options["route_contracts"]},
+                                    kicad_python_path=options.get("kicad_python_path"))
+                quality = {
+                    **review.get("routing", {"status": "unverified"}),
+                    "board_sha256": review["source_sha256"],
+                    "contract_sha256": _digest(options["route_contracts"]),
+                    "sources_unchanged": review["sources_unchanged"],
+                }
+                report = attempt / "route-quality.json"
+                report.write_text(json.dumps(quality, indent=2) + "\n", encoding="utf-8")
+                if quality["board_sha256"] != publish_hashes[routed_board]:
+                    raise WorkflowError("stage_output_changed", "Routed candidate changed before quality review")
+                if quality["status"] != "verified":
+                    raise WorkflowError(
+                        "route_contract_failed",
+                        f"Authored route checks are {quality['status']}; candidate and report retained in {attempt}",
+                    )
+                result["route_quality"] = quality
+                extras.append((report, root / report.name))
+                publish_hashes[report] = file_sha256(report)
             outputs = _publish_attempt(
-                attempt, root, routed_board, root / routed_board.name, result, extras=[(out, root / out.name)]
+                attempt, root, routed_board, root / "routed.kicad_pcb", result, extras=extras,
+                expected_hashes=publish_hashes,
             )
         else:
             appearance = options.get("appearance", "layers")
@@ -636,6 +1080,51 @@ def _execute_stage(
     raise WorkflowError("unknown_stage", stage)
 
 
+def _require_workflow_stackup(board: Path, options: dict[str, Any]) -> dict[str, Any]:
+    from .kicad_bridge import run_kicad
+    from .pcb_stackup import expected_copper_layer_names
+    inspection = run_kicad("inspect", board=str(board), python_path=options.get("kicad_python_path"))
+    expected = expected_copper_layer_names(options["copper_layers"])
+    if (inspection.get("status") != "ok" or inspection.get("copper_layer_inventory_complete") is not True
+            or type(inspection.get("copper_layer_count")) is not int
+            or inspection.get("copper_layer_count") != options["copper_layers"]
+            or tuple(inspection.get("copper_layer_names") or ()) != expected):
+        raise WorkflowError("stackup_mismatch", "Native board does not verify the explicitly requested copper layers")
+    return {"count": len(expected), "ordered_names": list(expected),
+            "scope": "copper_count_and_order_only; dielectric_and_impedance_not_assessed"}
+
+
+def _require_workflow_planes(report: Any, plan: dict[str, Any]) -> None:
+    if (not isinstance(report, dict) or report.get("status") != "verified"
+            or any(report.get(key) is not True for key in (
+                "saved_fill_geometry_verified", "zone_definitions_preserved", "copper_layers_preserved"))
+            or not isinstance(report.get("zones"), list)):
+        raise WorkflowError("plane_verification_failed", "Routed planes lack fresh native saved-fill evidence")
+    if (type(report.get("zone_count")) is not int or report["zone_count"] <= 0
+            or report["zone_count"] != len(report["zones"])):
+        raise WorkflowError("plane_verification_failed", "Routed plane count is inconsistent")
+    remaining = report.get("unconnected_pads_by_net")
+    anchors = report.get("connected_copper")
+    if not isinstance(remaining, dict) or remaining.get(plan["net"]) != [] or not isinstance(anchors, list):
+        raise WorkflowError("plane_verification_failed", "Routed plane net has incomplete native pad/anchor evidence")
+    for layer in plan["layers"]:
+        rows = [row for row in report["zones"] if isinstance(row, dict)
+                and row.get("net") == plan["net"] and row.get("layer_name") == layer]
+        if len(rows) != 1:
+            raise WorkflowError("plane_verification_failed", "Routed plane inventory does not match the authored plan")
+        row = rows[0]
+        connections = [item for item in anchors if isinstance(item, dict) and item.get("id") == row.get("id")]
+        if (len(connections) != 1 or not row.get("id")
+                or type(connections[0].get("connected_copper_count")) is not int
+                or connections[0]["connected_copper_count"] <= 0):
+            raise WorkflowError("plane_verification_failed", "Routed plane has no proven native copper anchor")
+        area, islands, digest = row.get("area_mm2"), row.get("island_count"), row.get("polygon_sha256")
+        if (isinstance(area, bool) or not isinstance(area, (int, float)) or not math.isfinite(area) or area <= 0
+                or type(islands) is not int or islands != 0 or not isinstance(digest, str) or len(digest) != 64
+                or any(char not in "0123456789abcdef" for char in digest.lower())):
+            raise WorkflowError("plane_verification_failed", "Routed planes contain unverified fill or isolated copper")
+
+
 def _tool_args(options: dict[str, Any], *keys: str) -> list[str]:
     flags = {
         "kicad_python_path": "--kicad-python-path",
@@ -651,13 +1140,19 @@ def _tool_args(options: dict[str, Any], *keys: str) -> list[str]:
 
 def _require_ok(result: dict[str, Any], stage: str) -> None:
     if result.get("status") not in {"ok", "success", "completed"}:
-        raise WorkflowError(f"{stage}_failed", str(result.get("message") or result.get("reason") or f"{stage} failed"))
+        raise WorkflowError(
+            f"{stage}_failed", str(result.get("message") or result.get("reason") or f"{stage} failed"),
+            stage_result=result,
+        )
 
 
 def _require_outputs(stage: str, result: dict[str, Any], paths: list[Path]) -> None:
     missing = [str(path) for path in paths if not path.is_file()]
     if missing:
-        raise WorkflowError("stage_output_missing", f"{stage} did not create expected output(s): {', '.join(missing)}")
+        raise WorkflowError(
+            "stage_output_missing", f"{stage} did not create expected output(s): {', '.join(missing)}",
+            stage_result=result,
+        )
 
 
 def _related_outputs(path: Path) -> list[str]:
@@ -682,6 +1177,7 @@ def _publish_attempt(
     result: dict[str, Any],
     *,
     extras: list[tuple[Path, Path]] | None = None,
+    expected_hashes: dict[Path, str | None] | None = None,
 ) -> list[str]:
     staged = [(primary, destination)]
     staged.extend(
@@ -690,6 +1186,13 @@ def _publish_attempt(
         if primary.with_suffix(suffix).is_file()
     )
     staged.extend(extras or [])
+
+    def check_hashes() -> None:
+        for path, expected in (expected_hashes or {}).items():
+            if (file_sha256(path) if path.is_file() else None) != expected:
+                raise WorkflowError("stage_output_changed", f"Reviewed stage output changed: {path}")
+
+    check_hashes()
     for source, target in staged:
         if not source.is_file():
             raise WorkflowError("stage_output_missing", f"Expected staged output is missing: {source}")
@@ -697,24 +1200,31 @@ def _publish_attempt(
             raise WorkflowError("output_exists", f"Refusing to replace existing workflow output: {target}")
     published: list[Path] = []
     linked_sources: dict[Path, tuple[int, int]] = {}
+    linked_targets: dict[Path, tuple[int, int]] = {}
     try:
         for source, target in staged:
             # Hard-link creation is atomic and fails if a concurrent writer
             # created the destination after our preflight check.
             os.link(source, target)
             published.append(target)
-            source_stat = source.stat()
-            linked_sources[source] = (source_stat.st_dev, source_stat.st_ino)
-    except OSError as exc:
+            target_stat = target.stat()
+            identity = (target_stat.st_dev, target_stat.st_ino)
+            linked_sources[source] = identity
+            linked_targets[target] = identity
+            check_hashes()
+            expected = (expected_hashes or {}).get(source)
+            if expected is not None and file_sha256(target) != expected:
+                raise WorkflowError("stage_output_changed", f"Published bytes do not match reviewed output: {target}")
+    except (OSError, WorkflowError) as exc:
         for target in reversed(published):
             try:
                 target_stat = target.stat()
-                source = next(source for source, candidate in staged if candidate == target)
-                source_stat = source.stat()
-                if (target_stat.st_dev, target_stat.st_ino) == (source_stat.st_dev, source_stat.st_ino):
+                if (target_stat.st_dev, target_stat.st_ino) == linked_targets.get(target):
                     target.unlink(missing_ok=True)
             except OSError:
                 pass
+        if isinstance(exc, WorkflowError):
+            raise
         raise WorkflowError("publish_failed", f"Could not publish native stage outputs: {exc}") from exc
     for source, target in staged:
         try:
@@ -794,7 +1304,11 @@ def _root_schematic(root: Path) -> Path:
 
 
 def _latest_board(
-    root: Path, stage: str, *, planned_board: Path | None = None, known_route_outputs: list[str] | None = None
+    root: Path,
+    stage: str,
+    *,
+    planned_board: Path | None = None,
+    known_route_outputs: list[str] | None = None,
 ) -> Path:
     preferred = {
         "place": [root / "prototype.kicad_pcb"],
@@ -803,14 +1317,17 @@ def _latest_board(
     }[stage]
     if stage == "route" and planned_board is not None:
         if not planned_board.is_file():
-            raise WorkflowError("needs_replan", f"The saved route input no longer exists: {planned_board}")
-        preferred_existing = next((path for path in preferred if path.is_file()), None)
-        if preferred_existing and planned_board.resolve(strict=False) == preferred_existing.resolve(strict=False):
+            raise WorkflowError(
+                "needs_replan",
+                f"The saved route input no longer exists: {planned_board}",
+            )
+        first_preferred = next((path for path in preferred if path.is_file()), None)
+        if first_preferred is not None and planned_board.resolve(strict=False) == first_preferred.resolve(strict=False):
             return planned_board
         known = {Path(path).resolve(strict=False) for path in known_route_outputs or []}
+        candidates = _native_boards(root)
         untracked = [
-            path for path in _native_boards(root)
-            if path.resolve(strict=False) != planned_board.resolve(strict=False)
+            path for path in candidates if path.resolve(strict=False) != planned_board.resolve(strict=False)
             and path.resolve(strict=False) not in known
         ]
         if untracked:
@@ -835,13 +1352,19 @@ def _latest_board(
 
 
 def _stage_inputs(
-    root: Path, stage: str, completed_outputs: list[str], *, planned_board: Path | None = None,
+    root: Path,
+    stage: str,
+    completed_outputs: list[str],
+    *,
+    planned_board: Path | None = None,
     known_route_outputs: list[str] | None = None,
 ) -> list[str | Path]:
     paths: list[str | Path] = []
     if _stage_requires_spec(stage):
         paths.append(_spec_path(root))
-    if stage == "build":
+    if stage == "generate":
+        paths.extend(_custom_footprint_inputs(root, include_output=False))
+    elif stage == "build":
         if _project_has_spec(root):
             paths.append(_spec_path(root))
         schematic = _root_schematic(root)
@@ -851,15 +1374,33 @@ def _stage_inputs(
         paths.extend(_custom_footprint_inputs(root))
     elif stage in {"place", "route", "preview"}:
         try:
-            board = _latest_board(root, stage, planned_board=planned_board, known_route_outputs=known_route_outputs)
+            board = _latest_board(
+                root,
+                stage,
+                planned_board=planned_board,
+                known_route_outputs=known_route_outputs,
+            )
             paths.append(board)
             paths.extend(_existing_sidecars(board))
+            if stage in {"place", "route"}:
+                paths.extend(_native_footprint_context_inputs(board.parent))
             if stage == "place" and _project_has_spec(root):
                 paths.append(_spec_path(root))
+            if stage == "preview":
+                paths.extend(_project_model_inputs(root))
         except WorkflowError:
             raise
     paths.extend(completed_outputs)
     return [path for path in paths if Path(path).name.casefold() not in _APPEND_ONLY_OUTPUTS]
+
+
+def _native_footprint_context_inputs(project: Path) -> list[Path]:
+    from .kicad_project_context import inspect_project_footprint_context
+    try:
+        context = inspect_project_footprint_context(project)
+    except (OSError, ValueError) as exc:
+        raise WorkflowError("invalid_library_context", str(exc)) from exc
+    return [Path(path) for path in context["watch_paths"]]
 
 
 def _project_has_spec(root: Path) -> bool:
@@ -874,15 +1415,46 @@ def _hierarchical_schematic_inputs(root: Path, selected_root: Path) -> list[Path
     )
 
 
-def _custom_footprint_inputs(root: Path) -> list[Path]:
-    paths = [*root.glob("fp-lib-table"), *(root / "output").glob("fp-lib-table")]
-    paths.extend(root.glob("sym-lib-table"))
-    paths.extend((root / "output").glob("sym-lib-table"))
-    for base in (root, root / "output"):
+def _custom_footprint_inputs(root: Path, *, include_output: bool = True) -> list[Path]:
+    bases = (root, root / "output") if include_output else (root,)
+    paths = [path for base in bases for path in base.glob("fp-lib-table")]
+    paths.extend(path for base in bases for path in base.glob("sym-lib-table"))
+    for base in bases:
         if base.is_dir():
-            paths.extend(path for path in base.rglob("*.kicad_mod") if path.is_file())
-            paths.extend(path for path in base.rglob("*.kicad_sym") if path.is_file())
+            for pattern in ("*.kicad_mod", "*.kicad_sym"):
+                for path in base.rglob(pattern):
+                    if not path.is_file() or path.is_symlink():
+                        continue
+                    try:
+                        relative = path.relative_to(root)
+                        resolved = path.resolve(strict=False)
+                    except (OSError, ValueError):
+                        continue
+                    if not relative.parts or relative.parts[0].casefold() == ".circuit-weaver":
+                        continue
+                    if not include_output and relative.parts[0].casefold() == "output":
+                        continue
+                    if resolved.is_relative_to(root):
+                        paths.append(path)
     return sorted(set(paths), key=lambda path: str(path).casefold())
+
+
+def _project_model_inputs(root: Path) -> list[Path]:
+    receipt_dir = (root / "libraries" / ".circuit-weaver-receipts").resolve(strict=False)
+    lock_paths = {
+        (root / ".circuit-weaver-library-bundle.lock").resolve(strict=False),
+        (root / ".circuit-weaver" / _LOCK_NAME).resolve(strict=False),
+    }
+    paths: list[Path] = []
+    for path in root.rglob("*"):
+        if not path.is_file() or path.is_symlink() or path.suffix.casefold() not in _PROJECT_MODEL_SUFFIXES:
+            continue
+        resolved = path.resolve(strict=False)
+        if resolved in lock_paths or resolved.is_relative_to(receipt_dir):
+            continue
+        if resolved.is_relative_to(root):
+            paths.append(path)
+    return sorted(paths, key=lambda path: str(path).casefold())
 
 
 def _existing_sidecars(path: Path) -> list[Path]:
@@ -914,7 +1486,10 @@ def run_workflow(
                 _checkpoint_output_paths(route_checkpoint) if isinstance(route_checkpoint, dict) else []
             )
             plan = _plan_data(
-                root, normalized_stages, normalized_options, saved_plan=saved_plan,
+                root,
+                normalized_stages,
+                normalized_options,
+                saved_plan=saved_plan,
                 known_route_outputs=known_route_outputs,
             )
             if state is None:
@@ -957,7 +1532,9 @@ def run_workflow(
                         False, "cancelled", project_dir=str(root), run_id=run_id, completed=list(completed_outputs)
                     )
                 inputs = _stage_inputs(
-                    root, stage, completed_outputs,
+                    root,
+                    stage,
+                    completed_outputs,
                     planned_board=planned_board if stage == normalized_stages[0] else None,
                     known_route_outputs=known_route_outputs if stage == normalized_stages[0] else None,
                 )
@@ -1044,7 +1621,7 @@ def run_workflow(
                         status="failed",
                         error=_error(exc),
                         run_id=run_id,
-                        result=locals().get("result"),
+                        result=(getattr(exc, "stage_result", None) or result),
                     )
                     state = _load(root)
                     run = _runner(state)
@@ -1192,6 +1769,16 @@ def run_stage(
         missing_inputs = [path["path"] for path in _snapshot(root, inputs) if not path["exists"]]
         if missing_inputs:
             raise WorkflowError("input_missing", f"Stage input files are missing: {', '.join(missing_inputs)}")
+        # Required caller inputs were checked above; an absent optional library
+        # table is watched so its later creation invalidates this checkpoint.
+        inputs = list(inputs)
+        if stage in {"place", "route"}:
+            for raw in tuple(inputs):
+                board = Path(raw).expanduser()
+                if not board.is_absolute():
+                    board = root / board
+                if board.suffix.casefold() == ".kicad_pcb":
+                    inputs.extend(_native_footprint_context_inputs(board.resolve().parent))
         with _RunLock(root):
             # Load only this root's manifest. Descendant discovery is intended
             # for user-facing open/selection APIs, never for native hooks.

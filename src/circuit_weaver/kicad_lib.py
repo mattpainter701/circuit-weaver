@@ -312,15 +312,19 @@ def symbol_to_component_def(
 
         # Detect power pins by electrical type OR by name pattern
         is_power_type = pin.electrical_type in ("power_in", "power_out")
-        is_gnd_name = bool(re.match(
-            r"^(GND|VSS|AVSS|DVSS|AGND|DGND|PGND|EPAD|EP|EXPOSED)$",
-            pname,
-        ))
-        is_vdd_name = bool(re.match(
-            r"^(VCC|VDD|VDDIO|AVDD|DVDD|VCCA|VDDA|V_?IN|VBAT|VSYS|VBUS|"
-            r"VCC_IO|AVCC|DVCC|VDDCORE|VDDA_\w+|VDD_\w+|VCC_\w+)$",
-            pname,
-        ))
+        is_gnd_name = bool(
+            re.match(
+                r"^(GND|VSS|AVSS|DVSS|AGND|DGND|PGND|EPAD|EP|EXPOSED)$",
+                pname,
+            )
+        )
+        is_vdd_name = bool(
+            re.match(
+                r"^(VCC|VDD|VDDIO|AVDD|DVDD|VCCA|VDDA|V_?IN|VBAT|VSYS|VBUS|"
+                r"VCC_IO|AVCC|DVCC|VDDCORE|VDDA_\w+|VDD_\w+|VCC_\w+)$",
+                pname,
+            )
+        )
 
         if is_power_type or is_gnd_name or is_vdd_name:
             if is_gnd_name:

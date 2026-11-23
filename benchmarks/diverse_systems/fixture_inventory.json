@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "9f76e3bc566ed982789e8cd47800d73fe7570c26",
+  "hash_scope": "canonical parsed YAML/JSON, sorted keys, compact separators",
+  "files": {
+    "architecture/ble_sensor_8.json": "dd44ba3c2e9b9d09e78a26928a081c997daec262af3c1fe30c7654abf125659b",
+    "architecture/dual_dac_72_comparison.json": "35744a6d46f6adecc5e647e82caa85a53d7434155c18bb2100fd65645c8af451",
+    "architecture/ot_mixed_io_comparison.json": "56cf7946b54d8befb798408343b15c61f9b01580710d00ba61c6df6b45e81351",
+    "architecture/relay_768.json": "595bc0d3a1428da9b9d909053589fe43f7a30231614eb244cea1996456f081a7",
+    "architecture/sdr_clock_carrier.json": "4bd674eb127eb3982886f7f0e2e4a79fc62d6dc455057a413e966b73f181a961",
+    "cases/ble_sensor_8.yaml": "5e929b56863fe4046f0868267e92d985e4619ccaf711d1ae2eadb000ceee2e2a",
+    "cases/dual_dac_72_comparison.yaml": "a8a3727fa7cf5ef13f5d042a4a244fed205cad5b561783ed2d885580ea708e45",
+    "cases/ot_mixed_io_comparison.yaml": "083caec9de04284bdf5e9a0138beae5f0700f9b3d1c63bed22755a2da863959a",
+    "cases/relay_768.yaml": "bf15723b24d063654d5167a4b2c2cd19fc2ab05b5d4c9c940550efc6f1144389",
+    "cases/sdr_clock_carrier.yaml": "c1484009887ed533ab4c6ad1ba57b13826a3b9baf2c562aca34e1af6e329368f",
+    "contracts/ble_sensor_8.json": "ba5cdf80bc5c451b3805957a5dd4842c3cedff6b3d3a64c06a85a79c2792557a",
+    "contracts/dual_dac_72_comparison.json": "abf31ddbbab38781f40e67838ff6ffe3d735493fffaefcbfec6cd584c44c9a3f",
+    "contracts/ot_mixed_io_comparison.json": "dfe65da3922d788571e1dbd6745fb6a91c1e59bce1aa3477e3856f22a5bf2c32",
+    "contracts/relay_768.json": "38078221438a8b29f51a9ce0b9dbce5d524b60c753d295021fc0e73c79f7f6f6",
+    "contracts/sdr_clock_carrier.json": "c4c1b73039b3d5d4bd9d48bfb8d1d2927d8a459f8d9aadff929fb1b941635106"
+  }
+}

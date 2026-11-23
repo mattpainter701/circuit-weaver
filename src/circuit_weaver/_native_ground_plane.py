@@ -1,4 +1,4 @@
-"""Native, fail-closed ground-plane creation for simple two-layer boards.
+"""Native, fail-closed ground-plane creation on selected enabled copper layers.
 
 The caller supplies KiCad's pcbnew module.  This module only adds two native
 zones and fills them; it never edits existing tracks, vias, footprints, or text.
@@ -62,15 +62,42 @@ def _outline_bounds(board, pcbnew):
 
 
 def _pad_map(board):
+    """Index logical ref.pad names without discarding their physical members."""
     result = {}
+    identities = set()
+    references = set()
     for fp in board.GetFootprints():
         ref = str(fp.GetReference())
-        for pad in fp.Pads():
+        physical_pads = list(fp.Pads())
+        if physical_pads:
+            if ref in references:
+                raise ValueError(f"duplicate footprint reference {ref}")
+            references.add(ref)
+        for pad in physical_pads:
             key = (ref, str(pad.GetNumber()))
-            if key in result:
-                raise ValueError(f"duplicate physical pad {ref}.{key[1]}")
-            result[key] = pad
+            pad_id = _native_item_id(pad)
+            if pad_id in identities:
+                raise ValueError("native pad connectivity identities are not unique")
+            identities.add(pad_id)
+            result.setdefault(key, []).append(pad)
+    for (ref, number), members in result.items():
+        nets = {str(pad.GetNetname()) for pad in members}
+        if len(nets) != 1:
+            raise ValueError(f"physical members of logical pad {ref}.{number} have conflicting assigned nets")
     return result
+
+
+def _pad_label(reference, pad, *, disambiguate=False):
+    label = f"{reference}.{pad.GetNumber()}"
+    return f"{label}[{_native_item_id(pad)}]" if disambiguate else label
+
+
+def _ensure_protected_endpoints_unambiguous(endpoint_groups, index):
+    """The trace graph addresses ref.pad logically, so it cannot bound each duplicate member."""
+    if any(len(group) > 1 for group in endpoint_groups):
+        raise ValueError(
+            f"protected_connections[{index}] uses a repeated physical pad endpoint whose trace-only route is ambiguous"
+        )
 
 
 def _trace_route(graph, row):
@@ -82,15 +109,147 @@ def _trace_route(graph, row):
             "trace_only_vias": int(route["vias"])}
 
 
-def _connected_ground_pads(board, net):
-    board.BuildConnectivity()
-    unconnected = []
-    for fp in board.GetFootprints():
-        for pad in fp.Pads():
-            if str(pad.GetNetname()) == str(net) and not pad.IsConnected():
-                unconnected.append(f"{fp.GetReference()}.{pad.GetNumber()}")
-    if unconnected:
+def _native_item_id(item):
+    try:
+        value = item.m_Uuid.AsString()
+    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        raise ValueError("native connectivity item UUID is unavailable") from exc
+    if not isinstance(value, str) or not value:
+        raise ValueError("native connectivity item UUID is empty or invalid")
+    return value
+
+
+def _connected_copper_neighbors(connectivity, pad, filled_zones):
+    """Walk native copper neighbors and prove contact with a filled zone."""
+    pads = getattr(connectivity, "GetConnectedPads", None)
+    tracks = getattr(connectivity, "GetConnectedTracks", None)
+    if not callable(pads) or not callable(tracks):
+        raise ValueError("native copper-neighbor connectivity queries are unavailable")
+    net = str(pad.GetNetname())
+    anchors = {}
+    for zone in filled_zones:
+        if str(zone.GetNetname()) != net:
+            continue
+        for item in list(pads(zone)) + list(tracks(zone)):
+            if str(item.GetNetname()) == net and str(item.GetClass()) != "ZONE":
+                anchors.setdefault(_native_item_id(item), []).append(zone)
+    pending, visited, members, reached_zones = [pad], set(), [], {}
+    while pending:
+        item = pending.pop()
+        item_id = _native_item_id(item)
+        if item_id in visited or str(item.GetNetname()) != net:
+            continue
+        # Never bridge distinct fill islands through their common ZONE parent.
+        if str(item.GetClass()) == "ZONE":
+            continue
+        visited.add(item_id)
+        members.append(item)
+        for zone in anchors.get(item_id, ()):
+            reached_zones[_native_item_id(zone)] = zone
+        pending.extend(list(pads(item)) + list(tracks(item)))
+    return members + list(reached_zones.values())
+
+
+def _connected_copper_items(search, pad, connectivity=None, filled_zones=()):
+    """Adapt modern flags, KiCad 9 vectors, and KiCad 8 native neighbors."""
+    try:
+        return list(search(pad))
+    except TypeError:
+        # KiCad 8 requires an explicit std::initializer_list<KICAD_T>;
+        # newer bindings provide the all-conductor default themselves.
+        import pcbnew
+
+        names = ("PCB_PAD_T", "PCB_TRACE_T", "PCB_ARC_T", "PCB_VIA_T", "PCB_ZONE_T")
+        try:
+            item_types = [getattr(pcbnew, name) for name in names]
+        except AttributeError as exc:
+            raise ValueError("native conductive item-type filter is unavailable") from exc
+        try:
+            return list(search(pad, item_types, False))
+        except TypeError:
+            # KiCad 8 exposes initializer_list without a usable Python
+            # conversion. Its stable one-argument neighbor APIs remain native.
+            return _connected_copper_neighbors(connectivity, pad, filled_zones)
+
+
+def _unconnected_plane_pads_by_net(board, nets, *, rebuild=True):
+    """Find pads whose native transitive cluster reaches no filled net zone.
+
+    BOARD_ITEM.IsConnected() is a type test, not a graph query. KiCad's
+    GetConnectedItems() searches connectivity clusters with zones included.
+    Cache pad members of each result so a routed net needs one native search.
+    Final whole-board DRC separately rejects opens between distinct clusters.
+    """
+    if rebuild:
+        board.BuildConnectivity()
+    connectivity = board.GetConnectivity()
+    search = getattr(connectivity, "GetConnectedItems", None)
+    if not callable(search):
+        raise ValueError("native transitive connectivity query is unavailable")
+    result = {net: [] for net in nets}
+    zone_ids = {net: set() for net in result}
+    filled_zones = []
+    for zone in board.Zones():
+        net = str(zone.GetNetname())
+        if (net in zone_ids and not zone.GetIsRuleArea()
+                and str(board.GetLayerName(int(zone.GetLayer()))).endswith(".Cu") and zone.IsFilled()
+                and zone.HasFilledPolysForLayer(zone.GetLayer())):
+            zone_ids[net].add(_native_item_id(zone))
+            filled_zones.append(zone)
+    cached = {net: {} for net in result}
+    _pad_map(board)  # Validate identity and net consistency for every physical pad.
+    pad_ids = set()
+    logical_counts = {}
+    for footprint in board.GetFootprints():
+        for pad in footprint.Pads():
+            key = (str(footprint.GetReference()), str(pad.GetNumber()))
+            logical_counts[key] = logical_counts.get(key, 0) + 1
+    for footprint in board.GetFootprints():
+        for pad in footprint.Pads():
+            net = str(pad.GetNetname())
+            if net not in result:
+                continue
+            pad_id = _native_item_id(pad)
+            if pad_id in pad_ids:
+                raise ValueError("native pad connectivity identities are not unique")
+            pad_ids.add(pad_id)
+            if pad_id not in cached[net]:
+                members = _connected_copper_items(search, pad, connectivity, filled_zones)
+                same_net = [item for item in members if str(item.GetNetname()) == net]
+                ids = {_native_item_id(item) for item in same_net}
+                attached = bool(ids & zone_ids[net])
+                cached[net][pad_id] = attached
+                for item in same_net:
+                    if str(item.GetClass()) == "PAD":
+                        cached[net][_native_item_id(item)] = attached
+            if not cached[net][pad_id]:
+                key = (str(footprint.GetReference()), str(pad.GetNumber()))
+                result[net].append(_pad_label(key[0], pad, disambiguate=logical_counts[key] > 1))
+    return {net: sorted(pads) for net, pads in result.items()}
+
+
+def _connected_ground_pads(board, net, *, allow_unconnected=False):
+    unconnected = _unconnected_plane_pads_by_net(board, [str(net)])[str(net)]
+    if unconnected and not allow_unconnected:
         raise ValueError("filled ground plane leaves pads unconnected: " + ", ".join(unconnected))
+    return unconnected
+
+
+def _copper_layer_ids(board, pcbnew):
+    """Resolve actual enabled copper layer names from this board's native stack."""
+    stack = board.GetEnabledLayers().CuStack()
+    seq = getattr(stack, "Seq", None)
+    values = seq() if callable(seq) else stack
+    result = {}
+    for raw in values:
+        layer_id = int(raw)
+        name = str(board.GetLayerName(layer_id))
+        if name in result or not name.endswith(".Cu"):
+            raise ValueError("board exposes an invalid or duplicate enabled copper layer name")
+        result[name] = layer_id
+    if len(result) != int(board.GetDesignSettings().GetCopperLayerCount()):
+        raise ValueError("board copper layer inventory is incomplete")
+    return result
 
 
 def _zone_pad_anchors(board, zone):
@@ -101,7 +260,8 @@ def _zone_pad_anchors(board, zone):
     anchors = [item for item in connected if item.GetClass() != "ZONE"
                and str(item.GetNetname()) == str(zone.GetNetname())]
     if not anchors:
-        raise ValueError(f"filled {zone.GetNetname()} zone on {zone.GetLayerName()} has no native copper connection")
+        layer_name = board.GetLayerName(int(zone.GetLayer()))
+        raise ValueError(f"filled {zone.GetNetname()} zone on {layer_name} has no native copper connection")
     return anchors
 
 
@@ -131,7 +291,9 @@ def _zone_stats(zone, pcbnew, layer_name):
 
 
 def _ground_zones(board, pcbnew, net, layers):
-    layer_ids = {"F.Cu": pcbnew.F_Cu, "B.Cu": pcbnew.B_Cu}
+    layer_ids = _copper_layer_ids(board, pcbnew)
+    if any(name not in layer_ids for name in layers):
+        raise ValueError("requested ground-plane layer is not enabled copper on this board")
     found = {}
     for zone in board.Zones():
         if str(zone.GetNetname()) != str(net):
@@ -173,20 +335,22 @@ def _create_zone(board, pcbnew, net_item, layer, bounds, options):
 
 
 def apply(board, pcbnew, *, net="GND", layers=("F.Cu", "B.Cu"), options=None,
-          protected_connections=()):
-    """Add and fill one ground zone on each requested outer copper layer.
+          protected_connections=(), pre_route=False):
+    """Add and fill one ground zone on each requested enabled copper layer.
 
-    The board must have a rectangular outline, two copper layers, no existing
-    zones, and an existing named net.  Existing copper objects are preserved.
+    The board must have a rectangular outline, enabled copper layers, no
+    existing zones, and an existing named net. Existing copper objects are preserved.
     """
     options = dict(options or {})
-    if int(board.GetDesignSettings().GetCopperLayerCount()) != 2:
-        raise ValueError("native ground planes support two-layer boards only")
+    if not isinstance(pre_route, bool):
+        raise ValueError("pre_route must be a boolean")
     if list(board.Zones()):
         raise ValueError("native ground planes require a board without existing zones")
-    layer_ids = {"F.Cu": pcbnew.F_Cu, "B.Cu": pcbnew.B_Cu}
-    if not isinstance(layers, (tuple, list)) or len(layers) != 2 or set(layers) != {"F.Cu", "B.Cu"}:
-        raise ValueError("layers must contain F.Cu and B.Cu exactly once")
+    layer_ids = _copper_layer_ids(board, pcbnew)
+    if (not isinstance(layers, (tuple, list)) or not layers
+            or any(not isinstance(name, str) or name not in layer_ids for name in layers)
+            or len(layers) != len(set(layers))):
+        raise ValueError("layers must contain unique enabled copper layer names from this board")
     bounds = _outline_bounds(board, pcbnew)
     net_item = next((item for item in board.GetNetInfo().NetsByName().values()
                      if str(item.GetNetname()) == str(net)), None)
@@ -201,8 +365,10 @@ def apply(board, pcbnew, *, net="GND", layers=("F.Cu", "B.Cu"), options=None,
         keys = ((str(row["from_ref"]), str(row["from_pad"])), (str(row["to_ref"]), str(row["to_pad"])))
         if any(key not in pads for key in keys):
             raise ValueError(f"protected_connections[{index}] names an unknown physical pad")
-        if not str(pads[keys[0]].GetNetname()) or str(pads[keys[0]].GetNetname()) != str(pads[keys[1]].GetNetname()):
+        first_net, last_net = str(pads[keys[0]][0].GetNetname()), str(pads[keys[1]][0].GetNetname())
+        if not first_net or first_net != last_net:
             raise ValueError(f"protected_connections[{index}] endpoints must use the same assigned net")
+        _ensure_protected_endpoints_unambiguous((pads[keys[0]], pads[keys[1]]), index)
         route = _trace_route(trace_graph, {"from_ref": keys[0][0], "from_pad": keys[0][1],
                                            "to_ref": keys[1][0], "to_pad": keys[1][1]})
         if "max_length_mm" in row:
@@ -228,7 +394,7 @@ def apply(board, pcbnew, *, net="GND", layers=("F.Cu", "B.Cu"), options=None,
     after = sum(1 for _ in board.GetTracks())
     if before != after:
         raise ValueError("ground-plane fill changed the existing track/via inventory")
-    _connected_ground_pads(board, net)
+    unconnected_ground_pads = _connected_ground_pads(board, net, allow_unconnected=pre_route)
     zones = _ground_zones(board, pcbnew, net, layers)
     stats = [_zone_stats(zone, pcbnew, name) for zone, name in zip(zones, layers)]
     return {"status": "ok", "net": str(net), "layers": list(layers), "added_zones": len(zones),
@@ -236,11 +402,13 @@ def apply(board, pcbnew, *, net="GND", layers=("F.Cu", "B.Cu"), options=None,
             "filled_area_mm2": round(sum(row["area_mm2"] for row in stats), 6),
             "island_count": sum(row["island_count"] for row in stats), "zone_stats": stats,
             "track_count_before": before, "track_count_after": after,
-            "tracks_preserved": True, "protected_connections": rows}
+            "tracks_preserved": True, "protected_connections": rows,
+            "unconnected_ground_pads": unconnected_ground_pads,
+            "routing_complete": not pre_route, "requires_route": bool(pre_route)}
 
 
 def verify(board, pcbnew, expected_report, *, net="GND", layers=("F.Cu", "B.Cu"),
-           protected_connections=()):
+           protected_connections=(), pre_route=False):
     """Verify native zone fill and connectivity after saving and reloading."""
     zones = _ground_zones(board, pcbnew, net, layers)
     if any(not zone.IsFilled() or not zone.HasFilledPolysForLayer(zone.GetLayer()) for zone in zones):
@@ -249,14 +417,19 @@ def verify(board, pcbnew, expected_report, *, net="GND", layers=("F.Cu", "B.Cu")
     if stats != expected_report.get("zone_stats"):
         raise ValueError("saved filled-polygon geometry differs from the native fill report")
     anchors = [_zone_pad_anchors(board, zone) for zone in zones]
-    _connected_ground_pads(board, net)
+    unconnected_ground_pads = _connected_ground_pads(board, net, allow_unconnected=pre_route)
     track_count = sum(1 for _ in board.GetTracks())
     if expected_report.get("track_count_before") != track_count:
         raise ValueError("saved board track/via inventory count differs from source")
     graph = CopperGraph(board, pcbnew)
+    pads = _pad_map(board) if protected_connections else {}
     checked = []
     for index, row in enumerate(protected_connections):
         keys = (str(row["from_ref"]), str(row["from_pad"]), str(row["to_ref"]), str(row["to_pad"]))
+        if any(key not in pads for key in ((keys[0], keys[1]), (keys[2], keys[3]))):
+            raise ValueError("saved board protected path names an unknown physical pad")
+        _ensure_protected_endpoints_unambiguous(
+            (pads[(keys[0], keys[1])], pads[(keys[2], keys[3])]), index)
         route = _trace_route(graph, dict(zip(("from_ref", "from_pad", "to_ref", "to_pad"), keys)))
         if index >= len(expected_report.get("protected_connections", [])):
             raise ValueError("saved board has more protected paths than the native report")
@@ -272,4 +445,5 @@ def verify(board, pcbnew, expected_report, *, net="GND", layers=("F.Cu", "B.Cu")
             "island_count": sum(row["island_count"] for row in stats),
             "zone_connected_copper_counts": [len(items) for items in anchors], "tracks_preserved": True,
             "saved_fill_geometry_verified": True, "saved_connectivity_verified": True,
-            "protected_connections": checked}
+            "protected_connections": checked, "unconnected_ground_pads": unconnected_ground_pads,
+            "routing_complete": not pre_route, "requires_route": bool(pre_route)}

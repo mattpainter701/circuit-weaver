@@ -14,6 +14,17 @@ from .design_scorer import score_design_comprehensive
 from .dfm_checker import check_dfm, dfm_report
 from .enclosure_designer import generate_enclosure_scad, render_enclosure_stl
 from .kicad_placement_api import check_kicad_available, detect_kicad_version, update_board_placements
+from .operating_cases import (
+    CurrentLimit,
+    OperatingCase,
+    check_operating_case,
+)
+from .operating_cases import (
+    Evidence as CurrentEvidence,
+)
+from .operating_cases import (
+    Load as CurrentLoad,
+)
 from .pcb_copper_cleanup import cleanup_copper
 from .pcb_ground_plane import add_ground_plane
 from .pcb_plane_cleanup import cleanup_plane_traces
@@ -23,8 +34,13 @@ from .sourcing_auditor import audit_bom
 
 __all__ = [
     "__version__",
+    "CurrentEvidence",
+    "CurrentLimit",
+    "CurrentLoad",
+    "OperatingCase",
     "audit_bom",
     "check_dfm",
+    "check_operating_case",
     "cleanup_copper",
     "add_ground_plane",
     "cleanup_plane_traces",

@@ -46,6 +46,7 @@ from .design_loader import (
 )
 from .design_logger import DesignLogger
 from .generator import _contained_output_path, _validate_project_name, generate_from_components
+from .primitives import qualify_footprint
 from .project_spec import _parse_yaml
 from .subcircuits.base import BoundaryPort, DataDrivenTemplate, get_default_registry
 from .validator import run_validation_checks
@@ -552,6 +553,7 @@ def _hydrate_ir_from_components(ir: DesignIR, components: list[ComponentDef]) ->
         power_domains=copy.deepcopy(ir.power_domains),
         approved_overrides=copy.deepcopy(ir.approved_overrides),
         pcb_constraints=copy.deepcopy(ir.pcb_constraints),
+        operating_cases=copy.deepcopy(ir.operating_cases),
     )
 
 
@@ -731,7 +733,12 @@ def _validate_component_resolution(
                     message="Resolved block has no footprint binding",
                 )
             )
-        elif primary.footprint and fp_lib and fp_lib.roots and not fp_lib.footprint_exists(primary.footprint):
+        elif (
+            primary.footprint
+            and fp_lib
+            and fp_lib.roots
+            and not fp_lib.footprint_exists(qualify_footprint(primary.footprint))
+        ):
             from .footprint_lib import custom_footprint_suggestion, official_kicad_footprint_url
 
             roots = ", ".join(str(root) for root in fp_lib.roots[:2])
@@ -1511,6 +1518,13 @@ def _find_root_schematic(files: list[str], project_name: str) -> Path | None:
     return sch_files[0] if sch_files else None
 
 
+def _set_native_export_status(report: dict[str, Any] | None, **values: Any) -> None:
+    if report is None:
+        return
+    report.clear()
+    report.update(values)
+
+
 def _generate_compiled_artifacts(
     compiled: CompiledDesign,
     output_dir: Path,
@@ -1520,6 +1534,7 @@ def _generate_compiled_artifacts(
     readiness_gate: bool = True,
     evidence_manifest: str | None = None,
     evidence_ids: Iterable[str] | None = None,
+    native_export_report: dict[str, Any] | None = None,
 ) -> tuple[list[str], Path | None]:
     output_dir.mkdir(parents=True, exist_ok=True)
     profile = compiled.metadata.get("presentation_profile", "default")
@@ -1549,17 +1564,75 @@ def _generate_compiled_artifacts(
         evidence_ids=evidence_ids,
     )
     root = _find_root_schematic(files, compiled.metadata.get("project", "project"))
-    if export_svg and root is not None:
+    if not export_svg:
+        _set_native_export_status(
+            native_export_report,
+            status="not_run",
+            scope="KiCad CLI schematic SVG export",
+            reason="native export was explicitly disabled",
+        )
+    elif root is None:
+        _set_native_export_status(
+            native_export_report,
+            status="not_run",
+            scope="KiCad CLI schematic SVG export",
+            reason="no root schematic was generated",
+        )
+    else:
+        _set_native_export_status(
+            native_export_report,
+            status="running",
+            scope="KiCad CLI schematic SVG export",
+            tool="kicad-cli",
+        )
         cli = _kicad_cli_path()
-        if cli is not None:
+        if cli is None:
+            _set_native_export_status(
+                native_export_report,
+                status="unverified",
+                scope="KiCad CLI schematic SVG export",
+                reason="KiCad CLI was not found",
+            )
+        else:
             svg_dir = _contained_output_path(output_dir, "svg")
             svg_dir.mkdir(parents=True, exist_ok=True)
-            subprocess.run(
-                [str(cli), "sch", "export", "svg", "-o", str(svg_dir), str(root)],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+            try:
+                subprocess.run(
+                    [str(cli), "sch", "export", "svg", "-o", str(svg_dir), str(root)],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except Exception as exc:
+                _set_native_export_status(
+                    native_export_report,
+                    status="failed",
+                    scope="KiCad CLI schematic SVG export",
+                    tool="kicad-cli",
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                raise
+            if native_export_report is not None:
+                svg_count = sum(
+                    1 for path in svg_dir.rglob("*.svg") if path.is_file() and path.stat().st_size > 0
+                )
+                if not svg_count:
+                    error = "KiCad CLI returned successfully but produced no nonempty SVG files"
+                    _set_native_export_status(
+                        native_export_report,
+                        status="failed",
+                        scope="KiCad CLI schematic SVG export",
+                        tool="kicad-cli",
+                        error=error,
+                    )
+                    raise RuntimeError(error)
+                _set_native_export_status(
+                    native_export_report,
+                    status="passed",
+                    scope="KiCad CLI schematic SVG export",
+                    tool="kicad-cli",
+                    svg_count=svg_count,
+                )
     return files, root
 
 
@@ -1690,6 +1763,7 @@ def validate_design(
     strict: bool = False,
     check_determinism: bool = True,
     use_kicad: bool = True,
+    check_native_export: bool = True,
 ) -> ValidationReport:
     """Validate a design spec against the strict MVP profile.
 
@@ -1702,7 +1776,13 @@ def validate_design(
     that are about to generate real artifacts anyway pass
     ``check_determinism=False`` to avoid the redundant 2x generation
     overhead (Sprint 45 Bug 3 — was 3 generations per CLI invocation).
+
+    ``check_native_export=False`` skips KiCad CLI schematic SVG export while
+    retaining pure compiled artifact generation and text/determinism checks.
+    The report marks this native export scope as ``not_run``.
     """
+    if type(check_native_export) is not bool:
+        raise TypeError("check_native_export must be a bool")
     profile = _ensure_profile(profile)
     compiled = compile_design_ir(spec, enrich_parts=enrich_parts, use_kicad=use_kicad)
 
@@ -1727,6 +1807,31 @@ def validate_design(
     categories["electrical"].extend(_validate_typed_power_envelopes(compiled))
     categories["electrical"].extend(_validate_pin_coverage(compiled))
     categories["electrical"].extend(_validate_power_domain_consistency(compiled))
+
+    from .evidence import EvidenceLedger
+    from .operating_case_spec import evaluate_spec_operating_cases
+
+    operating_ledger = EvidenceLedger()
+    try:
+        operating_spec = spec
+        if "operating_cases" not in spec and getattr(compiled.ir, "operating_cases", None) is not None:
+            operating_spec = {"operating_cases": compiled.ir.operating_cases}
+        operating_cases, operating_ledger = evaluate_spec_operating_cases(operating_spec)
+        for case in operating_cases["cases"]:
+            categories["electrical"].append(ValidationMessage(
+                category="electrical", code="operating-current-budget",
+                level={"passed": "info", "failed": "error", "unverified": "warning"}[case["status"]],
+                subject=case["case_name"],
+                message=f"Authored current budget is {case['status']}; required current: {case['required_ma']} mA",
+                suggestion="Review the authored concurrency, source and series boundary ratings and their evidence.",
+                calculation=case,
+            ))
+    except (ValueError, TypeError) as exc:
+        operating_cases = {"status": "failed", "cases": [], "reason": str(exc)}
+        categories["electrical"].append(ValidationMessage(
+            category="electrical", code="invalid-operating-cases", level="error", subject="design",
+            message=f"Invalid authored current cases: {exc}",
+        ))
 
     validator_results = list(run_validation_checks(compiled.components))
     for result in validator_results:
@@ -1775,10 +1880,20 @@ def validate_design(
         and not _has_errors(categories["implementation"])
         and not _has_errors(categories["placement_readiness"])
     )
+    native_export_report: dict[str, Any] = {
+        "status": "not_run",
+        "scope": "KiCad CLI schematic SVG export",
+        "reason": "artifact-generation gate was not reached",
+    }
     if can_check_artifacts:
         with tempfile.TemporaryDirectory(prefix="schematic_mvp_validate_a_") as tmp_a:
             try:
-                files_a, root_a = _generate_compiled_artifacts(compiled, Path(tmp_a), export_svg=True)
+                files_a, root_a = _generate_compiled_artifacts(
+                    compiled,
+                    Path(tmp_a),
+                    export_svg=check_native_export,
+                    native_export_report=native_export_report,
+                )
                 if root_a is None:
                     categories["implementation"].append(
                         ValidationMessage(
@@ -1815,6 +1930,14 @@ def validate_design(
                 categories["presentation"].extend(_presentation_issues(Path(tmp_a)))
             except subprocess.CalledProcessError as exc:
                 detail = (exc.stderr or exc.stdout or str(exc)).strip()
+                if native_export_report.get("status") == "running":
+                    _set_native_export_status(
+                        native_export_report,
+                        status="failed",
+                        scope="KiCad CLI schematic SVG export",
+                        tool="kicad-cli",
+                        error=detail,
+                    )
                 categories["implementation"].append(
                     ValidationMessage(
                         category="implementation",
@@ -1825,10 +1948,22 @@ def validate_design(
                     )
                 )
             except Exception as exc:
+                if native_export_report.get("status") == "running":
+                    _set_native_export_status(
+                        native_export_report,
+                        status="failed",
+                        scope="KiCad CLI schematic SVG export",
+                        tool="kicad-cli",
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
                 categories["implementation"].append(
                     ValidationMessage(
                         category="implementation",
-                        code="artifact-generation-failed",
+                        code=(
+                            "kicad-export-failed"
+                            if check_native_export and native_export_report.get("status") == "failed"
+                            else "artifact-generation-failed"
+                        ),
                         level="error",
                         subject=compiled.metadata.get("project", "project"),
                         message=f"Derived artifact generation failed: {exc}",
@@ -1851,6 +1986,8 @@ def validate_design(
             "project": compiled.metadata.get("project", "project"),
             "component_count": len(compiled.components),
             "block_count": len(compiled.ir.blocks),
+            "native_export": native_export_report,
+            "operating_cases": operating_cases,
         },
     )
     from .evidence import build_validation_evidence
@@ -1860,6 +1997,19 @@ def validate_design(
         report,
         getattr(compiled.ir, "power_domains", ()),
     )
+    # Merge through the manifest loader so cross-record conflicts/supersession
+    # remain subject to the same ledger checks as ordinary validation evidence.
+    if operating_ledger.to_manifest()["records"]:
+        evidence_ledger = EvidenceLedger.from_manifest({
+            "schema_version": evidence_ledger.to_manifest()["schema_version"],
+            "records": evidence_ledger.to_manifest()["records"] + operating_ledger.to_manifest()["records"],
+        })
+    for message in categories["electrical"]:
+        if message.code == "operating-current-budget":
+            message.evidence_ids[:] = sorted(set(message.evidence_ids) | set(message.calculation["evidence_ids"]))
+    report.evidence_ids = sorted(set(report.evidence_ids) | {
+        record["id"] for record in operating_ledger.to_manifest()["records"]
+    })
     report.metadata["evidence_manifest"] = evidence_ledger.to_manifest()
     report.metadata["evidence_ids_by_reference"] = evidence_by_ref
     from .finding_contract import require_finding_contract
@@ -3095,7 +3245,9 @@ def _publish_staged_generation(
     }
     backup_dir = Path(
         tempfile.mkdtemp(
-            prefix=f".{output_dir.name}.circuit-weaver-backup-",
+            # Keep internal paths short: native KiCad tools can still enforce
+            # MAX_PATH even when the final user-selected path fits.
+            prefix=".cw-b-",
             dir=output_dir.parent,
         )
     )
@@ -3276,7 +3428,7 @@ def _generate_artifacts_transaction_locked(
 
     staging_path = Path(
         tempfile.mkdtemp(
-            prefix=f".{output_path.name}.circuit-weaver-staging-",
+            prefix=".cw-s-",
             dir=output_path.parent,
         )
     )
@@ -4004,8 +4156,13 @@ def main() -> None:
     )
     build_p.add_argument("schematic", help="Root .kicad_sch; all physical symbols need resolvable footprints")
     build_p.add_argument("--output", "-o", required=True, help="Separate prototype .kicad_pcb output")
+    build_p.add_argument(
+        "--project-root", help="Explicit KiCad project root for local libraries (defaults to schematic directory)"
+    )
     build_p.add_argument("--width", type=float, default=80.0, help="Rectangular board width in mm")
     build_p.add_argument("--height", type=float, default=60.0, help="Rectangular board height in mm")
+    build_p.add_argument("--copper-layers", type=int, choices=[2, 4], default=2,
+                         help="Number of copper layers (2 or 4; default: 2)")
     build_p.add_argument("--clearance", type=float, help="Explicit default clearance in mm for a new prototype project")
     build_p.add_argument("--minimum-drill", type=float, help="Explicit minimum drill in mm for a new prototype project")
     build_p.add_argument("--overwrite", action="store_true")
@@ -4109,6 +4266,12 @@ def main() -> None:
         help="Routing timeout in seconds (default: 300)",
     )
     autoroute_p.add_argument("--overwrite", action="store_true", help="Atomically replace existing DSN/SES outputs")
+    autoroute_p.add_argument("--repair-open-connections", action="store_true",
+                             help="Recover partial native routing with bounded, DRC-verified same-net links")
+    autoroute_p.add_argument("--recovery-timeout", type=float, default=600,
+                             help="Native recovery budget in seconds (maximum 1800)")
+    autoroute_p.add_argument("--max-repair-links", type=int, default=256,
+                             help="Maximum native recovery links (1-512)")
     autoroute_p.add_argument(
         "--attempts", type=int, default=1,
         help="Routing candidates sharing --timeout (1-32; varies seeds or supported optimizer strategies)",
@@ -4488,7 +4651,9 @@ def main() -> None:
     verify_p.add_argument("plan", help="Signed repair plan JSON")
     verify_p.add_argument("--output", "-o", help="Write the verification result JSON")
     args = parser.parse_args()
-    if args.command in {"start", "open", "workflow", "runtime-info", "library-access"} or (
+    if args.command in {
+        "start", "open", "adopt", "workflow", "runtime-info", "library-access", "library-bundle", "review-pcb"
+    } or (
             args.command == "resume" and args.execute):
         from .workflow_cli import dispatch as dispatch_workflow
 
@@ -4500,6 +4665,8 @@ def main() -> None:
         except (OSError, ValueError) as exc:
             result = {"ok": False, "status": "error", "error": {"code": "invalid_request", "message": str(exc)}}
         _print_json(result)
+        if args.command == "review-pcb":
+            raise SystemExit({"verified": 0, "review_required": 3, "unverified": 2}.get(result.get("status"), 1))
         raise SystemExit(0 if result.get("ok", result.get("status") != "error") else 1)
 
     # Task 159: every CLI subcommand gets a circuit-weaver.log in the
@@ -5386,8 +5553,10 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
         result = native_stage(
             "build", args.schematic, args.output, vars(args), lambda: _run_with_stderr_capture(lambda: schematic_to_pcb(
             args.schematic, args.output, width_mm=args.width, height_mm=args.height,
+            copper_layers=args.copper_layers,
             clearance_mm=args.clearance, minimum_drill_mm=args.minimum_drill,
             overwrite=args.overwrite, kicad_python_path=args.kicad_python_path,
+            project_root=args.project_root,
         )))
         _print_json(result)
         raise SystemExit(0 if result["status"] == "ok" else 1)
@@ -5529,6 +5698,9 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
                 kicad_cli_path=args.kicad_cli_path,
                 kicad_python_path=args.kicad_python_path,
                 routed_board_path=args.routed_board,
+                repair_open_connections=args.repair_open_connections,
+                recovery_timeout_seconds=args.recovery_timeout,
+                max_repair_links=args.max_repair_links,
             )
         ))
 
@@ -6169,7 +6341,8 @@ def _main_dispatch(args, log_workflow_step):  # noqa: C901  # large CLI dispatch
                     for rec in report.recommendations:
                         print(f"  - {rec}")
                 print(f"\nSimulation output: {args.output}", file=sys.stderr)
-            raise SystemExit(0)
+            report_status = getattr(report, "status", "unverified")
+            raise SystemExit(0 if report_status == "verified" else 1 if report_status == "failed" else 2)
         except SystemExit:
             raise
         except Exception as exc:
