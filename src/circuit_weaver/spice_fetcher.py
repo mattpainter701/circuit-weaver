@@ -268,7 +268,7 @@ def resolve_spice_models(
 
         subckt = entry.get("subckt")
         pin_order = entry.get("pin_order")
-        if not include_contracts or (subckt is None and pin_order is None):
+        if not include_contracts or ("subckt" not in entry and "pin_order" not in entry):
             result[str(mpn)] = str(model_file)
             continue
         if subckt is None or pin_order is None:

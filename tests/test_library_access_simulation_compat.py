@@ -97,7 +97,12 @@ def test_legacy_path_only_contract_is_not_guessed_when_ports_do_not_match_nets(t
     assert "legacy model ports do not map uniquely" in netlist
 
 
-def test_malformed_explicit_contract_does_not_fall_back_to_legacy_inference(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "fields", [{"subckt": "MODEL_1", "pin_order": ["1", "1"]}, {"subckt": None, "pin_order": None}],
+)
+def test_malformed_explicit_contract_does_not_fall_back_to_legacy_inference(
+    tmp_path: Path, monkeypatch, fields,
+) -> None:
     model_dir = tmp_path / "malformed_contract"
     model_dir.mkdir()
     model_path = model_dir / "model.lib"
@@ -105,7 +110,7 @@ def test_malformed_explicit_contract_does_not_fall_back_to_legacy_inference(tmp_
     (model_dir / "manifest.json").write_text(
         json.dumps({
             "MODEL-1": {
-                "spice_status": "ok", "spice_file": "model.lib", "subckt": "MODEL_1", "pin_order": ["1", "1"]
+                "spice_status": "ok", "spice_file": "model.lib", **fields
             }
         }),
         encoding="utf-8",
@@ -127,4 +132,4 @@ def test_malformed_explicit_contract_does_not_fall_back_to_legacy_inference(tmp_
     netlist = (tmp_path / "malformed-output" / "U1_tran.cir").read_text(encoding="utf-8")
     assert ".include" not in netlist
     assert "XU1" not in netlist
-    assert "invalid explicit pin contract" in netlist
+    assert "explicit pin contract" in netlist
