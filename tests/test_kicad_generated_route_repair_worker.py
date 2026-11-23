@@ -12,6 +12,7 @@ from collections import Counter
 import pytest
 
 from circuit_weaver import _kicad_worker as worker
+from circuit_weaver import _native_generated_route_repair as native_route_repair
 
 
 class _Uuid:
@@ -23,14 +24,14 @@ class _Uuid:
 
 
 class PCB_TRACK:
-    def __init__(self, uuid, net="NET_A", width=80, locked=False):
+    def __init__(self, uuid, net="NET_A", width=80, locked=False, start=(1, 2), end=(3, 4), layer=0):
         self.m_Uuid = _Uuid(uuid)
         self.net = net
         self.width = width
         self.locked = locked
         self.start = (1, 2)
         self.end = (3, 4)
-        self.layer = 0
+        self.start, self.end, self.layer = tuple(start), tuple(end), layer
 
     def GetWidth(self):
         return self.width
@@ -41,6 +42,24 @@ class PCB_TRACK:
     def IsLocked(self):
         return self.locked
 
+    def GetStart(self):
+        return types.SimpleNamespace(x=self.start[0], y=self.start[1])
+
+    def GetEnd(self):
+        return types.SimpleNamespace(x=self.end[0], y=self.end[1])
+
+    def SetStart(self, point):
+        self.start = (point.x, point.y)
+
+    def SetEnd(self, point):
+        self.end = (point.x, point.y)
+
+    def GetLayer(self):
+        return self.layer
+
+    def GetNetCode(self):
+        return 1 if self.net == "NET_A" else 2
+
 
 class PCB_VIA(PCB_TRACK):
     pass
@@ -50,11 +69,24 @@ class PCB_ARC(PCB_TRACK):
     pass
 
 
+class PAD:
+    def __init__(self, uuid="pad", net="NET_B", layer=0):
+        self.m_Uuid = _Uuid(uuid)
+        self.net, self.layer = net, layer
+
+    def GetNetname(self):
+        return self.net
+
+    def IsOnLayer(self, layer):
+        return self.layer == layer
+
+
 class _Board:
-    def __init__(self, tracks=(), zones=(), *, copper_layers=2):
+    def __init__(self, tracks=(), zones=(), *, copper_layers=2, pads=()):
         self.tracks = list(tracks)
         self.zones = list(zones)
         self.copper_layers = copper_layers
+        self.pads = list(pads)
 
     def GetTracks(self):
         return self.tracks
@@ -63,7 +95,7 @@ class _Board:
         return self.zones
 
     def GetFootprints(self):
-        return []
+        return [types.SimpleNamespace(Pads=lambda: self.pads)] if self.pads else []
 
     def Remove(self, item):
         self.tracks.remove(item)
@@ -80,9 +112,9 @@ def _copper_state(board):
     }, sort_keys=True) for item in board.GetTracks())
 
 
-def _setup(tmp_path, monkeypatch, *, tracks=None, source_tracks=(), zones=(), copper_layers=2):
+def _setup(tmp_path, monkeypatch, *, tracks=None, source_tracks=(), zones=(), copper_layers=2, pads=()):
     tracks = tracks if tracks is not None else [PCB_TRACK("track-1")]
-    candidate = _Board(tracks, zones, copper_layers=copper_layers)
+    candidate = _Board(tracks, zones, copper_layers=copper_layers, pads=pads)
     source = _Board(source_tracks, copper_layers=copper_layers)
     output_board = {"board": None}
     output_path = tmp_path / "output.kicad_pcb"
@@ -111,7 +143,7 @@ def _setup(tmp_path, monkeypatch, *, tracks=None, source_tracks=(), zones=(), co
             if saved is None:
                 return None
             return _Board([_clone_track(item) for item in saved.GetTracks()],
-                          saved.Zones(), copper_layers=saved.copper_layers)
+                          saved.Zones(), copper_layers=saved.copper_layers, pads=saved.pads)
         raise AssertionError(f"unexpected LoadBoard path {resolved}")
 
     def save_board(path, board):
@@ -138,6 +170,10 @@ def _setup(tmp_path, monkeypatch, *, tracks=None, source_tracks=(), zones=(), co
         raise AssertionError("unexpected generated-route helper operation")
     helper_module.repair_generated_widths = unexpected_operation
     helper_module.prune_generated_width_clearances = unexpected_operation
+    helper_module.adjust_generated_width_bends = unexpected_operation
+    helper_module._report_body = native_route_repair._report_body
+    helper_module._violation_item_uuids = native_route_repair._violation_item_uuids
+    helper_module._width_whitelist = native_route_repair._width_whitelist
     monkeypatch.setitem(sys.modules, "_native_generated_route_repair", helper_module)
 
     request = {
@@ -151,7 +187,8 @@ def _setup(tmp_path, monkeypatch, *, tracks=None, source_tracks=(), zones=(), co
 
 
 def _clone_track(item):
-    return type(item)(item.m_Uuid.AsString(), item.net, item.width, item.locked)
+    return type(item)(item.m_Uuid.AsString(), item.net, item.width, item.locked,
+                      start=item.start, end=item.end, layer=item.layer)
 
 
 def _width_report(board, _source, _pcbnew, *, max_tracks=4096):
@@ -184,6 +221,94 @@ def test_dispatch_width_save_reload_and_allows_native_output_project_rewrite(tmp
     assert candidate.GetTracks()[0].width == 200
     assert source.GetTracks() == []
     assert output_path.with_suffix(".kicad_pro").read_bytes() != project
+
+
+def test_dispatch_bend_adjustment_saves_only_reported_shared_endpoint_changes(tmp_path, monkeypatch):
+    tracks = [
+        PCB_TRACK("a", width=200, start=(-100, 0), end=(0, 0)),
+        PCB_TRACK("b", width=200, start=(0, 0), end=(0, 100)),
+    ]
+    request, candidate, _source, output_path, helper, _project = _setup(
+        tmp_path, monkeypatch, tracks=tracks, pads=[PAD()],
+    )
+    request["operation"] = "adjust_generated_width_bends"
+    request["drc_report"] = {"violations": [
+        {"type": "clearance", "items": [{"uuid": "a"}, {"uuid": "pad"}]},
+        {"type": "clearance", "items": [{"uuid": "b"}, {"uuid": "pad"}]},
+    ], "unconnected_items": [], "schematic_parity": [], "diagnostics_complete": True}
+    request["width_repair_report"] = {
+        "status": "candidate_only_requires_fresh_drc", "source_copper_item_count": 0,
+        "source_identity_preserved": True, "source_layout_preserved": True,
+        "source_geometry_preserved": True, "other_copper_preserved": True,
+        "source_copper_exact_subset_preserved": True, "changed_track_count": 2,
+        "changed_tracks": [
+            {"uuid": "a", "net": "NET_A", "before_width_iu": 80, "after_width_iu": 200},
+            {"uuid": "b", "net": "NET_A", "before_width_iu": 80, "after_width_iu": 200},
+        ],
+    }
+    request["max_tracks"] = 64
+    def adjust(board, *_args, **_kwargs):
+        for track in board.GetTracks():
+            track.SetStart(types.SimpleNamespace(x=10_000, y=0)) if track.m_Uuid.AsString() == "b" else None
+            if track.m_Uuid.AsString() == "a":
+                track.SetEnd(types.SimpleNamespace(x=10_000, y=0))
+        return {"status": "candidate_only_requires_fresh_drc", "source_copper_item_count": 0,
+                "source_identity_preserved": True, "source_layout_preserved": True,
+                "source_geometry_preserved": True, "other_copper_preserved": True,
+                "source_copper_exact_subset_preserved": True,
+                "adjusted_bend_count": 1, "adjusted_track_count": 2,
+                "adjusted_bends": [{"track_uuids": ["a", "b"], "net": "NET_A", "layer": 0,
+                        "old_position_iu": [0, 0], "new_position_iu": [10_000, 0], "delta_iu": [10_000, 0],
+                    "blocker_uuids": ["pad"]}],
+        }
+    helper.adjust_generated_width_bends = adjust
+
+    result = worker.execute(request)
+
+    assert result["status"] == "ok"
+    assert result["generated_route_repair"]["adjusted_bend_count"] == 1
+    assert result["generated_route_repair"]["saved_copper_verified"] is True
+    assert candidate.GetTracks()[0].end == candidate.GetTracks()[1].start == (10_000, 0)
+    assert output_path.exists()
+
+
+def test_dispatch_rejects_endpoint_changes_outside_bend_report_before_save(tmp_path, monkeypatch):
+    tracks = [
+        PCB_TRACK("a", width=200, start=(-100, 0), end=(0, 0)),
+        PCB_TRACK("b", width=200, start=(0, 0), end=(0, 100)),
+    ]
+    request, candidate, _source, output_path, helper, _project = _setup(
+        tmp_path, monkeypatch, tracks=tracks, pads=[PAD()],
+    )
+    request["operation"] = "adjust_generated_width_bends"
+    request["drc_report"] = {"violations": [
+        {"type": "clearance", "items": [{"uuid": "a"}, {"uuid": "pad"}]},
+        {"type": "clearance", "items": [{"uuid": "b"}, {"uuid": "pad"}]},
+    ], "unconnected_items": [], "schematic_parity": [], "diagnostics_complete": True}
+    request["width_repair_report"] = {
+        "status": "candidate_only_requires_fresh_drc", "source_copper_item_count": 0,
+        "source_identity_preserved": True, "source_layout_preserved": True,
+        "source_geometry_preserved": True, "other_copper_preserved": True,
+        "source_copper_exact_subset_preserved": True, "changed_track_count": 2,
+        "changed_tracks": [
+            {"uuid": "a", "net": "NET_A", "before_width_iu": 80, "after_width_iu": 200},
+            {"uuid": "b", "net": "NET_A", "before_width_iu": 80, "after_width_iu": 200},
+        ],
+    }
+    def adjust(board, *_args, **_kwargs):
+        board.GetTracks()[0].SetStart(types.SimpleNamespace(x=-90, y=0))
+        return {"status": "candidate_only_requires_fresh_drc", "source_copper_item_count": 0,
+                "source_identity_preserved": True, "source_layout_preserved": True,
+                "source_geometry_preserved": True, "other_copper_preserved": True,
+                "source_copper_exact_subset_preserved": True,
+                "adjusted_bend_count": 0, "adjusted_track_count": 0, "adjusted_bends": []}
+    helper.adjust_generated_width_bends = adjust
+
+    with pytest.raises(ValueError, match="changed copper or geometry outside its report"):
+        worker.execute(request)
+
+    assert candidate.GetTracks()[0].start == (-90, 0)
+    assert not output_path.exists()
 
 
 @pytest.mark.parametrize("hash_key", [

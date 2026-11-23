@@ -44,8 +44,17 @@ investigated from the inputs Freerouting received. This improves diagnosis;
 it does not establish a successful route. The C33 full relay recovery stopped
 with 9 open connections after 1,800 seconds, with 59 accepted repairs and 183
 reported attempts. A separate setpoint probe still has 1 open connection.
-Both investigations remain unaccepted. Fresh final-head CI and fresh native
-acceptance are required before claiming these routing changes pass.
+These measurements describe the October candidate.
+
+In November, a replay of the setpoint board closed the final `DAC_SYNC_14`
+connection and passed complete native DRC. A fresh Linux relay run exposed
+eight clearance errors at four bends after Freerouting's generated tracks
+were widened to the authored widths. Moving those four bends by 10–36 µm
+preserved their outer endpoints. The board passed KiCad 10.0.6 DRC before
+and after session export and re-import, and all 160 authored relay paths
+passed on the imported board. The installed-wheel workflows also require
+an assembled preview. Results for each revision are in the
+[PR checks](https://github.com/mattpainter701/circuit-weaver/pull/39/checks).
 
 The requested README examples, editable workflow/architecture diagrams and
 small-to-large sample showcase remain phase-8 follow-up items in the checklist
@@ -60,7 +69,7 @@ below; C33 evidence does not close that handoff.
 | 5 | Make acceptance and continuation reproducible | Accurate stage evidence, failed/unverified results, interruption/resume and fresh-install client checks | Shared board review and authored route gates added; 20 source operations passed. Fresh install passed 17 pure lifecycle/local-bundle/private-skill operations with 18 tools; fresh native repeats are held by RAM |
 | 6 | Extend the routing scale ladder | Repeat successful full workflows at 155/236, 438 and 1,202 parts, recording unrouted connections, DRC, vias, path constraints, runtime and RAM | Revised SDR accepted; 438-part placement passed but 300/600-second 2.4.1 routing failed; isolated 2.5 trial stopped at the RAM reserve. 1,202-part routing and explicit generated stackups remain open |
 | 7 | Expand practical circuit families | IoT battery/load transients; OT input/output protection and fault tests; SDR clock/ADC carriers; radar external-IF acquisition; transmitter control/filter subsystems | Generic IoT input RC, OT current-burden and transmitter loaded-divider transients plus two fault controls passed; full device/product behavior remains planned |
-| 8 | Close release validation | Focused tests and local native evidence, exact committed wheel, fresh CLI/Python/MCP checks, required CI on final SHA and release documentation | C33 recovery budgets and canonical DSN/argv diagnostics are recorded, but the relay remains at 9 opens and the setpoint probe at 1; fresh final-head CI and native acceptance are pending. README examples, diagrams and sample showcase remain open |
+| 8 | Close release validation | Focused tests and local native evidence, exact committed wheel, fresh CLI/Python/MCP checks, required CI on final SHA and release documentation | The PR checks record the installed-wheel and native scale results for each revision. The README examples, editable diagrams and sample showcase remain open. |
 
 Validation jobs run serially under the pinned owned-process supervisor. Native jobs retain a 2 GiB free-RAM floor and 2.5 GiB hard cap; small Python batches use a 1 GiB reserve and 384 MiB hard cap when needed. Source and review work can proceed in parallel. Original executed inputs and failed runs remain unchanged; retries use new evidence directories.
 

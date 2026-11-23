@@ -20,13 +20,34 @@ class UUID:
         return self.value
 
 
+class _Vector:
+    def __init__(self, x, y):
+        self.x, self.y = int(x), int(y)
+
+
+class _TrackShape:
+    def __init__(self, track):
+        self.track = track
+
+
+class _PadShape:
+    def __init__(self, pad):
+        self.pad = pad
+
+    def Collide(self, other, _distance):
+        if isinstance(other, _Vector):
+            return (other.x, other.y) == self.pad.position
+        return self.pad.block_all or self.pad.block_joint in self.pad.track_joint(other)
+
+
 class Track:
-    def __init__(self, uuid, net, width, *, locked=False):
+    def __init__(self, uuid, net, width, *, locked=False, start=(1, 2), end=(3, 4), layer=0):
         self.m_Uuid = UUID(uuid)
         self.net = net
         self.width = width
         self.locked = locked
         self.net_code = 1 if net == "NET_A" else 2
+        self.start, self.end, self.layer = tuple(start), tuple(end), layer
 
     def GetWidth(self):
         return self.width
@@ -43,14 +64,68 @@ class Track:
     def IsLocked(self):
         return self.locked
 
+    def GetLayer(self):
+        return self.layer
+
+    def GetStart(self):
+        return _Vector(*self.start)
+
+    def GetEnd(self):
+        return _Vector(*self.end)
+
+    def SetStart(self, point):
+        self.start = (point.x, point.y)
+
+    def SetEnd(self, point):
+        self.end = (point.x, point.y)
+
+    def GetEffectiveShape(self):
+        return _TrackShape(self)
+
 
 class PCB_TRACK(Track):
     pass
 
 
+class PAD:
+    def __init__(self, uuid, *, net="NET_B", position=(100, 100), block_joint=(0, 0), block_all=False):
+        self.m_Uuid = UUID(uuid)
+        self.net, self.net_code = net, 2 if net == "NET_B" else 1
+        self.position, self.block_joint = tuple(position), tuple(block_joint)
+        self.block_all = block_all
+
+    def GetNetname(self):
+        return self.net
+
+    def GetNetCode(self):
+        return self.net_code
+
+    def GetPosition(self):
+        return _Vector(*self.position)
+
+    def IsOnLayer(self, layer):
+        return layer == 0
+
+    def GetEffectiveShape(self, _layer):
+        return _PadShape(self)
+
+    @staticmethod
+    def track_joint(shape):
+        return shape.track.start, shape.track.end
+
+
+def _width_report(changed):
+    return {"status": "candidate_only_requires_fresh_drc", "source_copper_item_count": 0,
+            "source_identity_preserved": True, "source_layout_preserved": True,
+            "source_geometry_preserved": True, "other_copper_preserved": True,
+            "source_copper_exact_subset_preserved": True, "changed_track_count": len(changed),
+            "changed_tracks": changed}
+
+
 class Board:
-    def __init__(self, tracks=()):
+    def __init__(self, tracks=(), pads=()):
         self.tracks = list(tracks)
+        self.pads = list(pads)
         self.settings = types.SimpleNamespace(m_TrackMinWidth=100)
 
     def GetTracks(self):
@@ -58,6 +133,9 @@ class Board:
 
     def GetDesignSettings(self):
         return self.settings
+
+    def GetFootprints(self):
+        return [types.SimpleNamespace(Pads=lambda: self.pads)] if self.pads else []
 
     def Remove(self, item):
         self.tracks.remove(item)
@@ -72,7 +150,7 @@ def install_worker(monkeypatch):
     def copper(board):
         return Counter(json.dumps({"type": type(item).__name__, "uuid": item.m_Uuid.AsString(),
                                    "net": item.net, "locked": item.locked,
-                                   "start": (1, 2), "end": (3, 4), "layer": 0,
+                                   "start": item.start, "end": item.end, "layer": item.layer,
                                    "width": item.width}, sort_keys=True)
                        for item in board.GetTracks())
     worker._copper_state = copper
@@ -81,10 +159,69 @@ def install_worker(monkeypatch):
                         lambda _board, _pcb, net: (0.2 if net == "NET_A" else 0.3, 0.6, 0.3, 0.2))
 
 
+def test_bend_adjustment_moves_only_whitelisted_shared_endpoint(monkeypatch):
+    install_worker(monkeypatch)
+    first = PCB_TRACK("a", "NET_A", 200, start=(-100_000, 0), end=(0, 0))
+    second = PCB_TRACK("b", "NET_A", 200, start=(0, 0), end=(0, 100_000))
+    blocker = PAD("pad", block_joint=(0, 0))
+    board = Board([first, second], [blocker])
+    widths = _width_report([
+        {"uuid": "a", "net": "NET_A", "before_width_iu": 80, "after_width_iu": 200},
+        {"uuid": "b", "net": "NET_A", "before_width_iu": 80, "after_width_iu": 200},
+    ])
+    raw = {"violations": [
+        {"type": "clearance", "items": [{"uuid": "a"}, {"uuid": "pad"}]},
+        {"type": "clearance", "items": [{"uuid": "b"}, {"uuid": "pad"}]},
+    ], "unconnected_items": [], "schematic_parity": []}
+
+    result = repair.adjust_generated_width_bends(board, Board(), PCBNew(), raw, widths)
+
+    assert result["adjusted_bend_count"] == 1
+    assert result["adjusted_track_count"] == 2
+    bend = result["adjusted_bends"][0]
+    assert bend["track_uuids"] == ["a", "b"]
+    assert bend["old_position_iu"] == [0, 0]
+    assert bend["new_position_iu"] != [0, 0]
+    assert bend["blocker_uuids"] == ["pad"]
+    assert first.start == (-100_000, 0) and second.end == (0, 100_000)
+    assert first.end == second.start == tuple(bend["new_position_iu"])
+    assert first.width == second.width == 200
+
+
+@pytest.mark.parametrize("case", ["third-track", "pad-at-joint", "no-clear-offset"])
+def test_bend_adjustment_returns_unchanged_when_topology_or_clearance_is_not_eligible(monkeypatch, case):
+    install_worker(monkeypatch)
+    first = PCB_TRACK("a", "NET_A", 200, start=(-100_000, 0), end=(0, 0))
+    second = PCB_TRACK("b", "NET_A", 200, start=(0, 0), end=(0, 100_000))
+    tracks = [first, second]
+    if case == "third-track":
+        tracks.append(PCB_TRACK("third", "NET_A", 200, start=(0, 0), end=(100_000, 0)))
+    blocker = PAD("pad", position=(0, 0) if case == "pad-at-joint" else (100, 100),
+                  block_joint=(0, 0), block_all=case == "no-clear-offset")
+    board = Board(tracks, [blocker])
+    widths = _width_report([
+        {"uuid": "a", "net": "NET_A", "before_width_iu": 80, "after_width_iu": 200},
+        {"uuid": "b", "net": "NET_A", "before_width_iu": 80, "after_width_iu": 200},
+    ])
+    raw = {"violations": [
+        {"type": "clearance", "items": [{"uuid": "a"}, {"uuid": "pad"}]},
+        {"type": "clearance", "items": [{"uuid": "b"}, {"uuid": "pad"}]},
+    ], "unconnected_items": [], "schematic_parity": []}
+    before = [(track.start, track.end) for track in tracks]
+
+    result = repair.adjust_generated_width_bends(board, Board(), PCBNew(), raw, widths)
+
+    assert result["adjusted_bend_count"] == 0
+    assert result["adjusted_bends"] == []
+    assert [(track.start, track.end) for track in tracks] == before
+
+
 class PCBNew:
     @staticmethod
     def FromMM(value):
         return round(value * 1000)
+
+    VECTOR2I = _Vector
 
 
 def test_width_repair_uses_per_net_class_target_and_keeps_adequate_tracks(monkeypatch):
@@ -156,6 +293,8 @@ def test_prune_removes_only_whitelisted_tracks_implicated_in_clearances(monkeypa
     {"violations": [{"type": "unconnected", "items": [{"uuid": "a"}]}]},
     {"violations": [], "unconnected_items": [], "schematic_parity": [],
      "native_diagnostics_may_be_truncated": True},
+    {"violations": [], "unconnected_items": [], "schematic_parity": [],
+     "native_diagnostics": {"native_diagnostics_may_be_truncated": True}},
 ])
 def test_prune_fails_closed_for_ineligible_or_untrusted_reports(monkeypatch, raw):
     install_worker(monkeypatch)

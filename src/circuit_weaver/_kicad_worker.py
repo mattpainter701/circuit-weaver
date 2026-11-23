@@ -1802,14 +1802,23 @@ def execute(request):
             "zones_and_stack_preserved": True,
             "removed_copper_item_count": len(removed_rows),
         })
-    elif operation in {"repair_generated_widths", "prune_generated_width_clearances"}:
+    elif operation in {"repair_generated_widths", "prune_generated_width_clearances",
+                       "adjust_generated_width_bends"}:
         try:
             from _native_generated_route_repair import (
+                _report_body,
+                _violation_item_uuids,
+                _width_whitelist,
+                adjust_generated_width_bends,
                 prune_generated_width_clearances,
                 repair_generated_widths,
             )
         except ImportError:
             from ._native_generated_route_repair import (
+                _report_body,
+                _violation_item_uuids,
+                _width_whitelist,
+                adjust_generated_width_bends,
                 prune_generated_width_clearances,
                 repair_generated_widths,
             )
@@ -1892,7 +1901,7 @@ def execute(request):
                 del generated_expected_copper[old_raw]
                 row["width"] = new
                 generated_expected_copper[json.dumps(row, sort_keys=True)] += 1
-        else:
+        elif operation == "prune_generated_width_clearances":
             generated_route_repair = prune_generated_width_clearances(
                 board, source_board, pcbnew, request.get("drc_report"),
                 request.get("width_repair_report"), max_items=request.get("max_items", 64),
@@ -1911,6 +1920,112 @@ def execute(request):
                 if row["type"] != "PCB_TRACK" or row["locked"]:
                     raise ValueError("Generated clearance repair selected unsupported or locked copper")
                 del generated_expected_copper[raw]
+        else:
+            generated_route_repair = adjust_generated_width_bends(
+                board, source_board, pcbnew, request.get("drc_report"),
+                request.get("width_repair_report"), max_tracks=request.get("max_tracks", 64),
+            )
+            bends = generated_route_repair.get("adjusted_bends")
+            bend_count = generated_route_repair.get("adjusted_bend_count")
+            track_count = generated_route_repair.get("adjusted_track_count")
+            if (not isinstance(bends, list) or type(bend_count) is not int
+                    or bend_count != len(bends) or type(track_count) is not int):
+                raise ValueError("Generated bend adjustment returned inconsistent counts")
+            width_whitelist = _width_whitelist(request.get("width_repair_report"))
+            bend_drc = _report_body(request.get("drc_report"))
+            bend_violations = bend_drc.get("violations")
+            native_diagnostics = bend_drc.get("native_diagnostics") if isinstance(bend_drc, dict) else None
+            unconnected = bend_drc.get("unconnected_items") if isinstance(bend_drc, dict) else None
+            parity = bend_drc.get("schematic_parity") if isinstance(bend_drc, dict) else None
+            if (not isinstance(bend_violations, list)
+                    or bend_drc.get("diagnostics_complete") is False
+                    or bend_drc.get("native_diagnostics_may_be_truncated") is True
+                    or (isinstance(native_diagnostics, dict)
+                        and native_diagnostics.get("native_diagnostics_may_be_truncated") is True)
+                    or bend_drc.get("native_error_limits_reached")
+                    or unconnected != [] or parity != []):
+                raise ValueError("Generated bend adjustment requires complete fresh DRC findings")
+            drc_pairs = set()
+            for violation in bend_violations:
+                uuids = _violation_item_uuids(violation)
+                drc_pairs.add(frozenset(uuids))
+            pad_by_uuid = {}
+            for footprint in board.GetFootprints():
+                for pad in footprint.Pads():
+                    pad_uuid = str(pad.m_Uuid.AsString())
+                    if not pad_uuid or pad_uuid in pad_by_uuid:
+                        raise ValueError("Generated bend adjustment has ambiguous native pad UUIDs")
+                    pad_by_uuid[pad_uuid] = pad
+            seen_tracks = set()
+            for bend in bends:
+                if not isinstance(bend, dict):
+                    raise ValueError("Generated bend adjustment row is malformed")
+                uuids = bend.get("track_uuids")
+                old, new, delta = (bend.get("old_position_iu"), bend.get("new_position_iu"),
+                                   bend.get("delta_iu"))
+                blockers = bend.get("blocker_uuids")
+                net, layer = bend.get("net"), bend.get("layer")
+                if (not isinstance(uuids, list) or len(uuids) != 2
+                        or any(not isinstance(uuid, str) or not uuid for uuid in uuids)
+                        or len(set(uuids)) != 2 or seen_tracks.intersection(uuids)
+                        or not isinstance(old, list) or len(old) != 2
+                        or not isinstance(new, list) or len(new) != 2
+                        or not isinstance(delta, list) or len(delta) != 2
+                        or any(type(value) is not int for value in [*old, *new, *delta])
+                        or [new[0] - old[0], new[1] - old[1]] != delta
+                        or delta == [0, 0] or abs(delta[0]) > 25_000 or abs(delta[1]) > 25_000
+                        or any(value not in {0, 10_000, -10_000, 15_000, -15_000, 25_000, -25_000}
+                               for value in delta)
+                        or not isinstance(net, str) or not net
+                        or isinstance(layer, bool) or not isinstance(layer, int)
+                        or not isinstance(blockers, list) or not blockers
+                        or any(not isinstance(uuid, str) or not uuid or uuid in uuids for uuid in blockers)
+                        or len(set(blockers)) != len(blockers)):
+                    raise ValueError("Generated bend adjustment row is malformed")
+                seen_tracks.update(uuids)
+                endpoint_rows = []
+                for uuid in uuids:
+                    if uuid not in original_rows or uuid not in width_whitelist:
+                        raise ValueError("Generated bend adjustment selected a non-whitelisted track")
+                    raw = original_rows[uuid]
+                    row = json.loads(raw)
+                    width_row = width_whitelist[uuid]
+                    if (row.get("type") != "PCB_TRACK" or row.get("locked") is not False
+                            or row.get("net") != net or row.get("layer") != layer
+                            or row.get("width") != width_row[1] or width_row[2] != net):
+                        raise ValueError("Generated bend adjustment selected an ineligible track")
+                    ends = [field for field in ("start", "end") if row.get(field) == old]
+                    if len(ends) != 1:
+                        raise ValueError("Generated bend adjustment did not preserve a shared elbow")
+                    endpoint_rows.append((raw, row, ends[0]))
+                outer_points = [row["end"] if end_field == "start" else row["start"]
+                                for _, row, end_field in endpoint_rows]
+                if outer_points[0] == outer_points[1]:
+                    raise ValueError("Generated bend adjustment did not describe one unbranched elbow")
+                for blocker_uuid in blockers:
+                    if any(frozenset((uuid, blocker_uuid)) not in drc_pairs for uuid in uuids):
+                        raise ValueError("Generated bend blocker is not implicated by both DRC findings")
+                    pad = pad_by_uuid.get(blocker_uuid)
+                    if pad is not None:
+                        blocker_net = str(pad.GetNetname())
+                        blocker_on_layer = bool(pad.IsOnLayer(layer))
+                    else:
+                        blocker_raw = original_rows.get(blocker_uuid)
+                        if blocker_raw is None:
+                            raise ValueError("Generated bend adjustment blocker UUID is absent")
+                        blocker = json.loads(blocker_raw)
+                        if blocker.get("type") != "PCB_VIA":
+                            raise ValueError("Generated bend adjustment blocker is not a pad or via")
+                        blocker_net = blocker.get("net")
+                        blocker_on_layer = blocker.get("top", layer + 1) <= layer <= blocker.get("bottom", layer - 1)
+                    if blocker_net == net or not blocker_on_layer:
+                        raise ValueError("Generated bend adjustment blocker is not foreign copper on its layer")
+                for raw, row, end_field in endpoint_rows:
+                    del generated_expected_copper[raw]
+                    row[end_field] = new
+                    generated_expected_copper[json.dumps(row, sort_keys=True)] += 1
+            if track_count != len(seen_tracks) or track_count > 64:
+                raise ValueError("Generated bend adjustment returned an invalid track inventory")
         if (generated_route_repair.get("status") != "candidate_only_requires_fresh_drc"
                 or generated_route_repair.get("source_copper_item_count") != 0
                 or generated_fixed_state(board) != generated_original_fixed

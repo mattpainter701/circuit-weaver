@@ -220,6 +220,93 @@ def _generated_width_drc_findings_allowed(result: Any, *, allow_clearance: bool)
     return all(verified_blocker(finding) for finding in findings)
 
 
+def _generated_width_drc_is_clean(result: Any) -> bool:
+    """Require a complete, fresh, zero-finding DRC for a bend-adjusted board."""
+    from .routing_recovery import _valid_report
+
+    raw = getattr(result, "raw_report", None)
+    return bool(
+        result.status == "ok"
+        and result.diagnostics_complete is True
+        and isinstance(raw, dict)
+        and _valid_report(result)
+        and not raw["violations"]
+        and not raw["unconnected_items"]
+        and not raw["schematic_parity"]
+        and not result.findings
+        and result.blocker_count == 0
+    )
+
+
+def _eligible_generated_width_bends(result: Any, changed_uuids: set[str]) -> dict[str, set[str]]:
+    """Map foreign item UUIDs to widened-track UUIDs in clearance-only DRC rows."""
+    raw = getattr(result, "raw_report", None)
+    if (not _generated_width_drc_findings_allowed(result, allow_clearance=True)
+            or not isinstance(raw, dict) or raw.get("unconnected_items")
+            or not raw.get("violations")):
+        return {}
+    foreign_to_tracks: dict[str, set[str]] = {}
+    for violation in raw["violations"]:
+        items = violation.get("items") if isinstance(violation, dict) else None
+        if not isinstance(items, list) or len(items) < 2:
+            continue
+        uuids = [item.get("uuid") for item in items if isinstance(item, dict)]
+        if len(uuids) != len(items) or any(not isinstance(uuid, str) or not uuid for uuid in uuids):
+            continue
+        tracks = set(uuids) & changed_uuids
+        foreign = set(uuids) - changed_uuids
+        if len(tracks) == 1 and len(foreign) == 1:
+            foreign_uuid = next(iter(foreign))
+            foreign_to_tracks.setdefault(foreign_uuid, set()).update(tracks)
+    return {foreign: tracks for foreign, tracks in foreign_to_tracks.items() if len(tracks) >= 2}
+
+
+def _validate_adjusted_bends(report: dict[str, Any], eligible: dict[str, set[str]], changed: list[Any]) -> int:
+    """Validate the worker's bend inventory against generated-width/DRC evidence."""
+    from ._native_generated_route_repair import _candidate_deltas
+
+    bends = report.get("adjusted_bends")
+    count = report.get("adjusted_bend_count")
+    if not isinstance(bends, list) or type(count) is not int or count != len(bends) or count > 32:
+        raise ValueError("Native generated bend adjustment returned an invalid bend inventory")
+    whitelist = {
+        row.get("uuid"): row for row in changed
+        if isinstance(row, dict) and isinstance(row.get("uuid"), str) and row.get("uuid")
+    }
+    used_tracks: set[str] = set()
+    allowed_deltas = set(_candidate_deltas())
+    for bend in bends:
+        if not isinstance(bend, dict):
+            raise ValueError("Native generated bend adjustment returned a malformed bend row")
+        track_uuids = bend.get("track_uuids")
+        blockers = bend.get("blocker_uuids")
+        net, layer = bend.get("net"), bend.get("layer")
+        if (not isinstance(track_uuids, list) or len(track_uuids) != 2
+                or any(not isinstance(uuid, str) or uuid not in whitelist for uuid in track_uuids)
+                or len(set(track_uuids)) != 2 or used_tracks.intersection(track_uuids)):
+            raise ValueError("Native generated bend adjustment used tracks outside the disjoint width whitelist")
+        if (not isinstance(blockers, list) or not blockers
+                or any(not isinstance(uuid, str) or not uuid for uuid in blockers)
+                or len(set(blockers)) != len(blockers)
+                or any(not set(track_uuids).issubset(eligible.get(uuid, set())) for uuid in blockers)):
+            raise ValueError("Native generated bend adjustment is not bound to disjoint eligible clearance rows")
+        if (not isinstance(net, str) or not net or type(layer) is not int
+                or any(whitelist[uuid].get("net") != net for uuid in track_uuids)
+                or any(whitelist[uuid].get("layer", layer) != layer for uuid in track_uuids)):
+            raise ValueError("Native generated bend adjustment changed net or layer identity")
+        old_pos, new_pos, delta = (
+            bend.get("old_position_iu"), bend.get("new_position_iu"), bend.get("delta_iu")
+        )
+        if any(not isinstance(value, list) or len(value) != 2
+               or any(type(axis) is not int for axis in value)
+               for value in (old_pos, new_pos, delta)):
+            raise ValueError("Native generated bend adjustment returned invalid IU movement evidence")
+        if tuple(delta) not in allowed_deltas or [new_pos[i] - old_pos[i] for i in range(2)] != delta:
+            raise ValueError("Native generated bend adjustment movement evidence is inconsistent")
+        used_tracks.update(track_uuids)
+    return count
+
+
 def _repair_generated_fanout_widths(
     source: Path,
     partial: Path,
@@ -328,41 +415,75 @@ def _repair_generated_fanout_widths(
 
     prune_report: dict[str, Any] = {"status": "not_needed", "removed_track_count": 0, "removed_tracks": []}
     current, final_drc, final_drc_path, final_sha = widened, after_width, after_width_path, after_width_sha
+    bend_adjustment: dict[str, Any] = {"status": "not_eligible", "adjusted_bend_count": 0}
     if after_width.raw_report["violations"]:
-        current, prune_report, pruned_sha = run_worker(
-            "prune_generated_width_clearances", widened, "clearance-pruned",
-            expected_sha=widened_sha,
-            drc_report=dict(after_width.raw_report),
-            width_repair_report=width_report,
-            max_items=64,
-        )
-        removed = prune_report.get("removed_tracks")
-        removed_count = prune_report.get("removed_track_count")
-        removed_uuids = (
-            [row.get("uuid") for row in removed if isinstance(row, dict)]
-            if isinstance(removed, list)
-            else []
-        )
-        if (not isinstance(removed, list) or type(removed_count) is not int
-                or removed_count != len(removed) or removed_count > 64
-                or len(removed_uuids) != len(removed) or len(set(removed_uuids)) != len(removed_uuids)
-                or not set(removed_uuids).issubset(changed_uuids)):
-            raise ValueError("Native generated clearance pruning returned an invalid removal inventory")
-        final_drc, final_drc_path, final_sha = run_and_retain(current, "after-prune")
-        if not _generated_width_drc_findings_allowed(final_drc, allow_clearance=False):
-            raise ValueError(
-                "Fresh after-prune DRC contains remaining clearance or unknown findings: "
-                f"{final_drc_path}"
+        eligible_bends = _eligible_generated_width_bends(after_width, set(changed_uuids))
+        if eligible_bends:
+            bend_candidate, bend_report, bend_sha = run_worker(
+                "adjust_generated_width_bends", widened, "bend-adjusted",
+                expected_sha=widened_sha,
+                drc_report=dict(after_width.raw_report),
+                width_repair_report=width_report,
+                max_tracks=64,
             )
-        prune_report["fresh_drc"] = str(final_drc_path)
-        prune_report["fresh_drc_board_sha256"] = final_sha
-        prune_report["input_board_sha256"] = widened_sha
-        prune_report["output_board_sha256"] = pruned_sha
+            adjusted_count = _validate_adjusted_bends(bend_report, eligible_bends, changed)
+            bend_adjustment = {
+                "status": "no_eligible_bends" if adjusted_count == 0 else "fresh_drc_pending",
+                "report": bend_report,
+                "input_board_sha256": widened_sha,
+                "output_board_sha256": bend_sha,
+            }
+            if adjusted_count:
+                bend_drc, bend_drc_path, bend_drc_sha = run_and_retain(bend_candidate, "after-bend-adjustment")
+                bend_adjustment.update({
+                    "fresh_drc": str(bend_drc_path),
+                    "fresh_drc_board_sha256": bend_drc_sha,
+                })
+                if bend_drc_sha != bend_sha:
+                    raise ValueError("Fresh bend-adjustment DRC is not bound to the exact candidate board")
+                if _generated_width_drc_is_clean(bend_drc):
+                    current, final_drc, final_drc_path, final_sha = (
+                        bend_candidate, bend_drc, bend_drc_path, bend_drc_sha
+                    )
+                    bend_adjustment["status"] = "fresh_drc_verified"
+                else:
+                    bend_adjustment["status"] = "fresh_drc_not_clean_prune_fallback"
+        if bend_adjustment.get("status") != "fresh_drc_verified":
+            current, prune_report, pruned_sha = run_worker(
+                "prune_generated_width_clearances", widened, "clearance-pruned",
+                expected_sha=widened_sha,
+                drc_report=dict(after_width.raw_report),
+                width_repair_report=width_report,
+                max_items=64,
+            )
+            removed = prune_report.get("removed_tracks")
+            removed_count = prune_report.get("removed_track_count")
+            removed_uuids = (
+                [row.get("uuid") for row in removed if isinstance(row, dict)]
+                if isinstance(removed, list)
+                else []
+            )
+            if (not isinstance(removed, list) or type(removed_count) is not int
+                    or removed_count != len(removed) or removed_count > 64
+                    or len(removed_uuids) != len(removed) or len(set(removed_uuids)) != len(removed_uuids)
+                    or not set(removed_uuids).issubset(changed_uuids)):
+                raise ValueError("Native generated clearance pruning returned an invalid removal inventory")
+            final_drc, final_drc_path, final_sha = run_and_retain(current, "after-prune")
+            if not _generated_width_drc_findings_allowed(final_drc, allow_clearance=False):
+                raise ValueError(
+                    "Fresh after-prune DRC contains remaining clearance or unknown findings: "
+                    f"{final_drc_path}"
+                )
+            prune_report["fresh_drc"] = str(final_drc_path)
+            prune_report["fresh_drc_board_sha256"] = final_sha
+            prune_report["input_board_sha256"] = widened_sha
+            prune_report["output_board_sha256"] = pruned_sha
 
     summary = {
         "used": True,
         "status": "fresh_drc_verified",
         "width_repair": width_report,
+        "bend_adjustment": bend_adjustment,
         "after_width_drc": str(after_width_path),
         "after_width_board_sha256": after_width_sha,
         "clearance_prune": prune_report,

@@ -25,10 +25,11 @@
 - Give bounded native recovery a final, explicitly reported Freerouting 2.5+
   fanout attempt for fresh two-layer boards without zones. Repair generated
   undersized straight tracks against the authored board/net-class widths in
-  private quarantine, and allow removal only of widened generated tracks
-  implicated by fresh, complete native clearance diagnostics. Share the existing
-  64-item removal cap with dangling-copper cleanup; preserve source geometry,
-  rules, search budgets and the final ordinary native DRC publication gate.
+  private quarantine. When widening creates a small clearance error at a bend,
+  try moving the shared endpoint of the two generated tracks. Both outer
+  endpoints stay fixed. A fresh, complete native DRC must accept that board.
+  If pruning is needed, the widened tracks identified in the clearance report
+  and subsequent dangling copper share the existing 64-item removal limit.
 - Request all native track errors and identify KiCad's per-error-code diagnostic
   limits. Expose potentially incomplete reports to Python/CLI/MCP callers and
   reject them as complete recovery or acceptance evidence.

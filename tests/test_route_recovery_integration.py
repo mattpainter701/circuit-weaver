@@ -296,6 +296,174 @@ def test_bounded_fanout_candidate_requires_selected_eligible_ascending_profile(t
         assert not autoroute_recovery._eligible_bounded_fanout_candidate(incoherent, session)
 
 
+def test_generated_width_bend_gate_requires_clearance_only_same_foreign_item_and_no_opens(tmp_path):
+    board = tmp_path / "after-width.kicad_pcb"
+    board.write_bytes(b"after width")
+    violations = [
+        {"type": "clearance", "severity": "error", "items": [
+            {"uuid": "generated-a"}, {"uuid": "foreign-x"},
+        ]},
+        {"type": "clearance", "severity": "error", "items": [
+            {"uuid": "generated-b"}, {"uuid": "foreign-x"},
+        ]},
+    ]
+    findings = tuple(
+        ValidationIssue("CW-DRC-001", level="error", message="clearance", severity="blocker",
+                        detection_confidence="verified", rule_id="CW-DRC-001")
+        for _ in violations
+    )
+    result = DrcResult(
+        "ok", str(board), board_sha256=hashlib.sha256(board.read_bytes()).hexdigest(),
+        findings=findings,
+        raw_report={"violations": violations, "unconnected_items": [], "schematic_parity": []},
+    )
+    eligible = autoroute_recovery._eligible_generated_width_bends(result, {"generated-a", "generated-b"})
+    assert eligible == {"foreign-x": {"generated-a", "generated-b"}}
+
+    opened = DrcResult(
+        "ok", str(board), findings=findings,
+        raw_report={"violations": violations, "unconnected_items": [{"items": []}], "schematic_parity": []},
+    )
+    assert not autoroute_recovery._eligible_generated_width_bends(opened, {"generated-a", "generated-b"})
+    unrelated = DrcResult(
+        "ok", str(board), findings=findings,
+        raw_report={"violations": [*violations, {"type": "short", "severity": "error", "items": []}],
+                    "unconnected_items": [], "schematic_parity": []},
+    )
+    assert not autoroute_recovery._eligible_generated_width_bends(unrelated, {"generated-a", "generated-b"})
+
+
+def test_generated_width_bend_report_requires_two_unique_whitelisted_tracks_and_movement():
+    changed = [
+        {"uuid": "generated-a", "net": "NET_A", "layer": 0},
+        {"uuid": "generated-b", "net": "NET_A", "layer": 0},
+    ]
+    report = {
+        "adjusted_bend_count": 1,
+        "adjusted_bends": [{
+            "track_uuids": ["generated-a", "generated-b"], "net": "NET_A", "layer": 0,
+            "old_position_iu": [100_000, 100_000], "new_position_iu": [100_000, 90_000], "delta_iu": [0, -10_000],
+            "blocker_uuids": ["foreign-x"],
+        }],
+    }
+    assert autoroute_recovery._validate_adjusted_bends(
+        report, {"foreign-x": {"generated-a", "generated-b"}}, changed,
+    ) == 1
+    for mutation in (
+        {"track_uuids": ["generated-a", "source-track"]},
+        {"track_uuids": ["generated-a", "generated-a"]},
+        {"delta_iu": [1, 0]},
+        {"new_position_iu": [100_000, 150_000], "delta_iu": [0, 50_000]},
+        {"blocker_uuids": ["unrelated"]},
+        {"blocker_uuids": ["foreign-x", "unrelated"]},
+    ):
+        invalid = {**report, "adjusted_bends": [{**report["adjusted_bends"][0], **mutation}]}
+        with pytest.raises(ValueError):
+            autoroute_recovery._validate_adjusted_bends(
+                invalid, {"foreign-x": {"generated-a", "generated-b"}}, changed,
+            )
+
+
+@pytest.mark.parametrize("bend_is_clean", [True, False])
+def test_host_generated_width_bends_use_fresh_drc_before_prune_fallback(tmp_path, monkeypatch, bend_is_clean):
+    source = tmp_path / "source.kicad_pcb"
+    source.write_bytes(b"source-board")
+    source.with_suffix(".kicad_pro").write_bytes(b"source-project")
+    partial = tmp_path / "partial.kicad_pcb"
+    partial.write_bytes(b"imported-partial")
+    source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+    project_sha = hashlib.sha256(source.with_suffix(".kicad_pro").read_bytes()).hexdigest()
+    snapshots = {source: source_sha, source.with_suffix(".kicad_pro"): project_sha,
+                 source.with_suffix(".kicad_dru"): None}
+    operations = []
+    changed = [
+        {"uuid": "generated-a", "net": "NET_A", "layer": 0},
+        {"uuid": "generated-b", "net": "NET_A", "layer": 0},
+    ]
+
+    def run_kicad(operation, **kwargs):
+        operations.append((operation, kwargs))
+        input_sha = hashlib.sha256(Path(kwargs["board"]).read_bytes()).hexdigest()
+        output = Path(kwargs["output"])
+        output.write_bytes({
+            "repair_generated_widths": b"width-repaired",
+            "adjust_generated_width_bends": b"bend-adjusted",
+            "prune_generated_width_clearances": b"clearance-pruned",
+        }[operation])
+        report = {
+            "status": "candidate_only_requires_fresh_drc", "source_copper_item_count": 0,
+            "source_identity_preserved": True, "source_layout_preserved": True,
+            "source_geometry_preserved": True, "other_copper_preserved": True,
+            "source_copper_exact_subset_preserved": True, "input_board_sha256": input_sha,
+            "source_board_sha256": source_sha, "source_project_sha256": project_sha,
+            "board_sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
+            "saved_copper_verified": True,
+            "saved_source_identity_layout_geometry_verified": True,
+            "saved_zones_and_stack_preserved": True,
+        }
+        if operation == "repair_generated_widths":
+            report.update({"changed_tracks": changed, "changed_track_count": len(changed)})
+        elif operation == "adjust_generated_width_bends":
+            report.update({"adjusted_bend_count": 1, "adjusted_bends": [{
+                "track_uuids": ["generated-a", "generated-b"], "net": "NET_A", "layer": 0,
+                "old_position_iu": [100_000, 100_000], "new_position_iu": [100_000, 90_000], "delta_iu": [0, -10_000],
+                "blocker_uuids": ["foreign-x"],
+            }]})
+        else:
+            assert operation == "prune_generated_width_clearances"
+            report.update({"removed_tracks": [], "removed_track_count": 0})
+        return {"status": "ok", "generated_route_repair": report}
+
+    def run_drc(board, **_kwargs):
+        board = Path(board)
+        if board.read_bytes() == b"width-repaired" or (not bend_is_clean and board.read_bytes() == b"bend-adjusted"):
+            rows = [
+                {"type": "clearance", "severity": "error", "items": [{"uuid": "generated-a"},
+                                                                          {"uuid": "foreign-x"}]},
+                {"type": "clearance", "severity": "error", "items": [{"uuid": "generated-b"},
+                                                                          {"uuid": "foreign-x"}]},
+            ]
+            findings = tuple(ValidationIssue(
+                "CW-DRC-001", level="error", message="clearance", severity="blocker",
+                detection_confidence="verified", rule_id="CW-DRC-001",
+            ) for _ in rows)
+        else:
+            rows, findings = [], ()
+        return DrcResult(
+            "ok", str(board), board_sha256=hashlib.sha256(board.read_bytes()).hexdigest(),
+            findings=findings, raw_report={"violations": rows, "unconnected_items": [], "schematic_parity": []},
+        )
+
+    monkeypatch.setattr("circuit_weaver.drc_runner.run_drc", run_drc)
+    monkeypatch.setattr("circuit_weaver.kicad_bridge.run_kicad", run_kicad)
+    monkeypatch.setattr("circuit_weaver.pcb_layout._prepare_settings", lambda *_args: {})
+    monkeypatch.setattr("circuit_weaver.pcb_layout._restore_settings", lambda *_args: None)
+    candidate, final_drc, summary = autoroute_recovery._repair_generated_fanout_widths(
+        source, partial, work=tmp_path / "work", python=None,
+        deadline=autoroute_recovery.time.monotonic() + 60, source_snapshots=snapshots,
+    )
+
+    expected_operations = ["repair_generated_widths", "adjust_generated_width_bends"]
+    if not bend_is_clean:
+        expected_operations.append("prune_generated_width_clearances")
+    assert [operation for operation, _ in operations] == expected_operations
+    assert operations[1][1]["max_tracks"] == 64
+    assert operations[1][1]["drc_report"]["violations"]
+    assert operations[1][1]["expected_board_sha256"] == hashlib.sha256(b"width-repaired").hexdigest()
+    if bend_is_clean:
+        assert candidate.read_bytes() == b"bend-adjusted"
+        assert autoroute_recovery._generated_width_drc_is_clean(final_drc)
+        assert summary["bend_adjustment"]["status"] == "fresh_drc_verified"
+        assert summary["pruned_track_count"] == 0
+    else:
+        assert candidate.read_bytes() == b"clearance-pruned"
+        prune_call = operations[-1][1]
+        assert Path(prune_call["board"]).read_bytes() == b"width-repaired"
+        assert prune_call["expected_board_sha256"] == hashlib.sha256(b"width-repaired").hexdigest()
+        assert summary["bend_adjustment"]["status"] == "fresh_drc_not_clean_prune_fallback"
+        assert summary["pruned_track_count"] == 0
+
+
 @pytest.mark.parametrize("pruned, dangling", [(8, 42), (50, 0), (64, 0), (8, 57)])
 def test_bounded_fanout_partial_uses_generated_repair_and_remaining_shared_cap(
     recovery, monkeypatch, pruned, dangling,
