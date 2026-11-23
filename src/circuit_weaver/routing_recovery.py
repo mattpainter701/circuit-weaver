@@ -83,18 +83,27 @@ def _connected_endpoint_ack_matches(report: Any, pair: dict[str, Any]) -> bool:
     items = pair.get("items")
     if not isinstance(items, list) or len(items) != 2 or any(not isinstance(item, dict) for item in items):
         return False
-    expected_from, expected_to = (str(item.get("uuid", "")) for item in items)
-    expected_net = str(pair.get("net", items[0].get("net", "")))
+    expected_from, expected_to = (item.get("uuid") for item in items)
+    net = report.get("net")
     if (
-        not expected_from or not expected_to or not expected_net
+        not isinstance(expected_from, str) or not expected_from
+        or not isinstance(expected_to, str) or not expected_to
+        or not isinstance(net, str) or not net
         or report.get("from_uuid") != expected_from
         or report.get("to_uuid") != expected_to
-        or report.get("net") != expected_net
+        or any(row.get("net") not in (None, "", net) for row in (pair, *items))
     ):
         return False
+    # Native KiCad DRC identifies the two board objects by UUID. Its JSON may
+    # put the net only in the human-readable description, including bus indices.
+    for item in items:
+        description = item.get("description")
+        if isinstance(description, str) and " [" in description and f" [{net}] " not in f" {description} ":
+            return False
     ack = report.get("connected_endpoint_anchors")
     if not isinstance(ack, dict):
         return False
+
     def positive_int(value: Any) -> bool:
         return isinstance(value, int) and not isinstance(value, bool) and value > 0
 

@@ -6,8 +6,23 @@ from pathlib import Path
 import pytest
 
 from circuit_weaver.drc_runner import DrcResult
-from circuit_weaver.routing_recovery import _phase_metadata_matches, recover_routing
+from circuit_weaver.routing_recovery import _connected_endpoint_ack_matches, _phase_metadata_matches, recover_routing
 from circuit_weaver.validator import ValidationIssue
+
+
+def test_connected_report_binds_raw_kicad_uuid_pair_without_structured_net_fields():
+    report = _bidirectional_worker_report()
+    report["net"] = "DATA[14]"
+    pair = {"type": "unconnected_items", "description": "Missing connection between items", "items": [
+        {"uuid": report["from_uuid"], "description": "Pad 5 [DATA[14]] of U43 on F.Cu"},
+        {"uuid": report["to_uuid"], "description": "Pad 5 [DATA[14]] of U15 on F.Cu"},
+    ]}
+    assert _connected_endpoint_ack_matches(report, pair)
+    pair["items"][1]["description"] = "Track [DATA[1]] on F.Cu, length 0.5 mm"
+    assert not _connected_endpoint_ack_matches(report, pair)
+    pair["items"][1]["description"] = "Pad 5 [DATA[14]] of U15 on F.Cu"
+    pair["items"][0]["net"] = "other"
+    assert not _connected_endpoint_ack_matches(report, pair)
 
 
 def _drc(path: Path, opens: int, *, status="ok", other_blocker=False, unknown=False, raw_override=None):
