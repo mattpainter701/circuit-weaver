@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import sys
 from collections import Counter
 from pathlib import Path
@@ -2369,16 +2370,24 @@ def execute(request):
     return result
 
 
+def _main() -> int:
+    global _native_wx_app, _native_wx_log
+    # pcbnew and SWIG can flush partial C stdio lines during work or teardown.
+    # Keep their file descriptor on stderr for the rest of this worker process.
+    with os.fdopen(os.dup(sys.stdout.fileno()), "w", encoding="utf-8") as result_stream:
+        os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+        try:
+            if sys.platform == "win32":
+                import wx
+                _native_wx_app = wx.GetApp() or wx.App(False)
+                _native_wx_log = wx.LogStderr()
+                wx.Log.SetActiveTarget(_native_wx_log)
+            payload = execute(json.load(sys.stdin))
+        except Exception as exc:
+            payload = {"status": "error", "message": str(exc)}
+        print("CW_KICAD_RESULT=" + json.dumps(payload), file=result_stream, flush=True)
+    return 0 if payload["status"] == "ok" else 1
+
+
 if __name__ == "__main__":
-    try:
-        # Retain the app for the native worker's lifetime; create no window.
-        if sys.platform == "win32":
-            import wx
-            _native_wx_app = wx.GetApp() or wx.App(False)
-            _native_wx_log = wx.LogStderr()
-            wx.Log.SetActiveTarget(_native_wx_log)
-        payload = execute(json.load(sys.stdin))
-    except Exception as exc:
-        payload = {"status": "error", "message": str(exc)}
-    print("CW_KICAD_RESULT=" + json.dumps(payload))
-    raise SystemExit(0 if payload["status"] == "ok" else 1)
+    raise SystemExit(_main())

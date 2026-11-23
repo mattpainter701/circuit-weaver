@@ -33,6 +33,8 @@
   A widened board with only opens and recognized dangling copper proceeds to
   cleanup. Clearance pruning and dangling copper share the existing 64-item
   removal limit.
+- Keep native KiCad diagnostics on stderr so warnings from large via cleanups
+  cannot interrupt the worker's JSON result on stdout.
 - Request all native track errors and identify KiCad's per-error-code diagnostic
   limits. Expose potentially incomplete reports to Python/CLI/MCP callers and
   reject them as complete recovery or acceptance evidence.

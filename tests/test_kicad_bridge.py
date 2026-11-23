@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -65,3 +67,43 @@ def test_native_worker_has_project_library_and_rejects_new_membership(tmp_path, 
     assert result["status"] == "error"
     assert "context changed" in result["message"]
     assert board.read_text() == "board source"
+
+
+def test_native_worker_keeps_unterminated_native_stdout_off_protocol():
+    warning = b"native warning without newline: " + (b"x" * 8192)
+    code = r"""
+import os
+import sys
+from circuit_weaver import _kicad_worker as worker
+
+# This is a protocol test, not native application startup.
+worker.sys.platform = "synthetic"
+warning = b"native warning without newline: " + (b"x" * 8192)
+
+def noisy_execute(request):
+    assert request == {"operation": "synthetic"}
+    view = memoryview(warning)
+    while view:
+        view = view[os.write(1, view):]
+    return {"status": "ok", "kind": "synthetic"}
+
+worker.execute = noisy_execute
+raise SystemExit(worker._main())
+"""
+    env = os.environ.copy()
+    src = str(Path(kicad_bridge.__file__).resolve().parents[1])
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, (src, env.get("PYTHONPATH"))))
+    process = subprocess.run(
+        [sys.executable, "-c", code],
+        input=b'{"operation":"synthetic"}',
+        capture_output=True,
+        text=False,
+        timeout=30,
+        env=env,
+        check=False,
+    )
+
+    assert process.returncode == 0
+    assert process.stdout.count(b"CW_KICAD_RESULT=") == 1
+    assert process.stdout.splitlines() == [b'CW_KICAD_RESULT={"status": "ok", "kind": "synthetic"}']
+    assert process.stderr == warning
