@@ -246,18 +246,25 @@ requested search bounds, and reduce opens under fresh full native DRC.
 For a fresh two-layer board with an authored `.kicad_pro` and without zones or
 authored routing, recovery can
 use a bounded fanout profile in the last existing portfolio attempt when
-Freerouting 2.5+ is available and at least three attempts were requested. The
-first two declaration-order attempts retain their ordinary behavior. Four-layer
-boards, source wiring and ambiguous exports disable this profile. It adds no
-portfolio attempt or extra routing budget; evidence identifies the selected
-profile and its actual launch settings.
+Freerouting 2.5+ is available and at least three attempts were requested.
+Four-layer boards, source wiring and ambiguous exports disable this profile.
+With three eligible attempts, the first ordinary placement order gets 40% of
+the shared time budget. The second gets one third of the remaining time, or
+one eighth if the first returned a timed-out session with open connections.
+Fanout gets the rest. It tries one pass of 1–3 mm pad escapes, allowing up to
+1.5 seconds per pin within its overall deadline. Each attempt records its
+actual input and time allowance.
 
 Freerouting's fanout can generate narrower tracks even with automatic neckdown
-disabled. Quarantine repair inventories the actual native copper and widens
-only unlocked generated straight tracks to the board/net-class minimum. It
-does not lower rules or alter source copper. A fresh complete DRC may authorize
-removal of widened generated tracks implicated in clearance errors; these
-removals and subsequent dangling-track/via cleanup share one 64-item cap.
+disabled. The private fanout DSN requests an extra 0.05 mm between copper
+features for subsequent track widening. This adjustment applies to general
+clearance rules and preserves typed exceptions. KiCad checks the authored
+rules on the resulting board. Quarantine repair inventories the native copper
+and widens unlocked generated straight tracks to the board or net-class minimum.
+A fresh, complete DRC can identify widened tracks for clearance repair. If it
+finds only open connections and recognized dangling copper, the widened board
+proceeds directly to dangling cleanup. Clearance pruning and dangling-track
+and via cleanup share one 64-item cap.
 Unknown faults reject the candidate. Recovery must then close every remaining
 connection, serialize the result with routing disabled, and pass the ordinary
 session import and full native DRC before publication.

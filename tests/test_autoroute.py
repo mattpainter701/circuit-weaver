@@ -208,6 +208,24 @@ def test_router_only_clearance_margin_updates_general_rules_and_preserves_typed_
     assert '(comment "(clearance 99) is quoted data, not a rule")' in text
 
 
+def test_verified_fanout_headroom_is_exact_and_preserves_typed_bytes_and_newlines(tmp_path):
+    dsn = tmp_path / "router-margin.dsn"
+    dsn.write_bytes(
+        b'(pcb "board"\r\n  (unit um)\r\n'
+        b'  (structure (rule (clearance 137) (clearance 253 (type via_via))))\r\n)\r\n'
+    )
+    before = dsn.read_bytes()
+
+    report = _apply_specctra_clearance_margin(dsn, 0.05)
+
+    after = dsn.read_bytes()
+    assert after == before.replace(b"(clearance 137)", b"(clearance 187)")
+    assert report["dsn_unit"] == "um"
+    assert report["declarations_adjusted"] == 1
+    assert report["typed_exceptions_unchanged"] == 1
+    assert report["native_board_rules_changed"] is False
+
+
 def test_native_placement_variants_reorder_only_component_and_nested_place_spans():
     dsn = '''(pcb "ordered-board"
   (structure (layer F.Cu (type signal)) (rule (width 200) (clearance 137)))
@@ -1758,6 +1776,19 @@ def test_stat_parser_understands_current_freerouting_cli_summary():
     assert stats["statistics_source"] == "text_summary"
 
 
+def test_cooperative_timeout_reports_the_saved_partial_score():
+    output = (
+        "Auto-routing pass #7 completed with score 990.04 (6 unrouted and 0 violations)\n"
+        "Auto-routing stage completed with timeout: started with 803 unrouted nets, "
+        "completed in 635.72 seconds, final score: 993.36 (4 unrouted and 0 violations).\n"
+    )
+    stats = _parse_routing_stats(output)
+    assert stats["stage_timed_out"] is True
+    assert stats["statistics_source"] == "final_stage_summary"
+    assert stats["incomplete"] == 4
+    assert stats["clearance_violations"] == 0
+
+
 def test_kicad_10_named_pad_nets_without_legacy_net_table(tmp_path):
     import re
 
@@ -1820,7 +1851,7 @@ class TestFreerouting25CompatibilityProposal:
         assert "--router.fanout.enabled=false" not in command
         assert command.count("--router.fanout.enabled=true") == 1
         assert "--router.fanout.max_passes=1" in command
-        assert "--router.fanout.max_milliseconds_per_pin=50" in command
+        assert "--router.fanout.max_milliseconds_per_pin=1500" in command
         assert "--router.fanout.min_escape_length_mm=1.0" in command
         assert "--router.fanout.max_escape_length_mm=3.0" in command
         assert "--router.fanout.fallback_to_board_vias=false" in command
@@ -1870,15 +1901,112 @@ class TestFreerouting25CompatibilityProposal:
         ]
         assert result["search"]["native_dsn_canonicalization"]["bounded_fanout_input_eligible"] is True
 
-    @pytest.mark.parametrize("first_used, expected", [(900, [900, 300, 600]), (450, [900, 450, 900])])
-    def test_native_three_profile_time_limits_share_one_deadline(self, tmp_path, monkeypatch, first_used, expected):
+    def test_fanout_guardband_is_private_verified_and_standard_variants_are_unchanged(
+        self, tmp_path, monkeypatch
+    ):
+        dsn = _write_dsn(tmp_path)
+        source_bytes = dsn.read_bytes()
+        launches = []
+
+        def fake_route(route_dsn, output, _command, **options):
+            launches.append((Path(route_dsn).read_bytes(), options["attempt_context"]))
+            Path(output).write_text(VALID_SES, encoding="utf-8")
+            return {"status": "error", "message": "diagnostic only"}
+
+        monkeypatch.setattr(autoroute_module, "_route_specctra", fake_route)
+        result = autoroute_module._route_candidates(
+            dsn, tmp_path / "fanout-guardband.ses", ["freerouting"], attempts=3,
+            timeout_seconds=30, overwrite=False, seed=None, passes=10, headless=True,
+            optimization_threads=1, optimizer_strategy=None, optimizer_hybrid_ratio=None,
+            optimizer_item_selection=None, optimizer_improvement_threshold=None,
+            capability_probe={"version": "2.5.0", "probe_ok": True, "seed": False},
+            clearance_baseline=None, allow_partial_nets=True, cooperative_partial_timeout=True,
+            native_placement_portfolio=True, native_fanout_profile=True,
+        )
+
+        canonical, _canonical_info = canonicalize_native_dsn(source_bytes.decode("utf-8"))
+        ascending = autoroute_module._native_placement_variant(canonical, "ascending")[0].encode("utf-8")
+        descending = autoroute_module._native_placement_variant(canonical, "descending")[0].encode("utf-8")
+        assert [item[0] for item in launches[:2]] == [ascending, descending]
+        fanout_bytes, fanout_context = launches[2]
+        assert b"\r" not in fanout_bytes
+        guardband = fanout_context["native_fanout_clearance_guardband"]
+        assert guardband["status"] == "applied_and_verified"
+        assert guardband["margin_mm"] == 0.05
+        assert guardband["pre_variant_sha256"] == hashlib.sha256(
+            autoroute_module._native_placement_variant(canonical, "ascending")[0]
+            .replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+        ).hexdigest()
+        assert guardband["post_variant_sha256"] == hashlib.sha256(fanout_bytes).hexdigest()
+        assert fanout_context["variant_dsn_sha256"] == hashlib.sha256(fanout_bytes).hexdigest()
+        assert result["search"]["attempts"][0].get("native_fanout_clearance_guardband") is None
+        assert result["search"]["attempts"][1].get("native_fanout_clearance_guardband") is None
+        assert result["search"]["attempts"][2]["native_fanout_clearance_guardband"] == guardband
+        assert dsn.read_bytes() == source_bytes
+
+    def test_unverified_fanout_guardband_skips_only_private_candidate(self, tmp_path, monkeypatch):
+        dsn = _write_dsn(tmp_path)
+        launches = []
+
+        def fake_route(route_dsn, output, _command, **options):
+            launches.append(Path(route_dsn).read_bytes())
+            Path(output).write_text(VALID_SES, encoding="utf-8")
+            if len(launches) == 1:
+                return {
+                    "status": "ok",
+                    "artifact": {"valid": True, "kind": "ses", "path": str(output)},
+                    "stats": {"incomplete": 1, "clearance_violations": 0, "traces": 4, "vias": 0},
+                }
+            return {"status": "error", "message": "controlled incomplete attempt"}
+
+        def reject_margin(_text, _margin):
+            raise ValueError("controlled transform failure")
+
+        monkeypatch.setattr(autoroute_module, "_route_specctra", fake_route)
+        monkeypatch.setattr(autoroute_module, "_transform_specctra_clearance_margin", reject_margin)
+        result = autoroute_module._route_candidates(
+            dsn, tmp_path / "guardband-fallback.ses", ["freerouting"], attempts=3,
+            timeout_seconds=30, overwrite=False, seed=None, passes=10, headless=True,
+            optimization_threads=1, optimizer_strategy=None, optimizer_hybrid_ratio=None,
+            optimizer_item_selection=None, optimizer_improvement_threshold=None,
+            capability_probe={"version": "2.5.0", "probe_ok": True, "seed": False},
+            clearance_baseline=None, allow_partial_nets=True, cooperative_partial_timeout=True,
+            native_placement_portfolio=True, native_fanout_profile=True,
+        )
+
+        attempts = result["search"]["attempts"]
+        assert len(launches) == 2
+        assert result["search"]["completed_attempts"] == 2
+        assert result["status"] == "ok"
+        assert result["search"]["selected_attempt"] == 1
+        assert [row["routing_profile"] for row in attempts] == ["standard", "standard", "bounded_fanout"]
+        skipped = attempts[2]["native_fanout_clearance_guardband"]
+        assert skipped["status"] == "skipped_unverified"
+        assert skipped["reason"] == "controlled transform failure"
+        assert len(skipped["pre_variant_sha256"]) == 64
+        assert attempts[2]["status"] == "skipped"
+
+    @pytest.mark.parametrize(("first_used", "primary_timed_out", "expected"), [
+        (720, False, [720, 360, 720]),
+        (450, False, [720, 450, 900]),
+        (660, True, [720, 142.5, 997.5]),
+    ])
+    def test_native_three_profile_time_limits_share_one_deadline(
+        self, tmp_path, monkeypatch, first_used, primary_timed_out, expected
+    ):
         dsn = _write_dsn(tmp_path)
         clock = [0.0]
         allowances = []
 
-        def route(_dsn, _ses, _command, *, timeout_seconds, **_options):
+        def route(_dsn, ses, _command, *, timeout_seconds, **_options):
             allowances.append(timeout_seconds)
             clock[0] += first_used if len(allowances) == 1 else timeout_seconds
+            if primary_timed_out and len(allowances) == 1:
+                ses.write_text(VALID_SES, encoding="utf-8")
+                return {
+                    "status": "ok", "artifact": {"valid": True},
+                    "stats": {"incomplete": 111, "clearance_violations": 0, "stage_timed_out": True},
+                }
             return {"status": "error", "message": "controlled incomplete attempt"}
 
         monkeypatch.setattr(autoroute_module.time, "perf_counter", lambda: clock[0])

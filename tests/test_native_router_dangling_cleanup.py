@@ -789,6 +789,72 @@ def test_host_generated_width_repair_sequences_hashed_worker_steps_and_full_drc(
     ).hexdigest()
 
 
+@pytest.mark.parametrize(
+    ("drc_case", "accepted"),
+    [("open-and-dangling", True), ("incomplete", False), ("mixed-clearance-and-dangling", False)],
+)
+def test_host_width_repair_classifies_after_width_drc_before_cleanup(tmp_path, monkeypatch, drc_case, accepted):
+    source = tmp_path / "source.kicad_pcb"
+    source.write_bytes(b"source-board")
+    source.with_suffix(".kicad_pro").write_bytes(b"source-project")
+    partial = tmp_path / "partial.kicad_pcb"
+    partial.write_bytes(b"imported-partial")
+    source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+    project_sha = hashlib.sha256(source.with_suffix(".kicad_pro").read_bytes()).hexdigest()
+    snapshots = {source: source_sha, source.with_suffix(".kicad_pro"): project_sha}
+    operations = []
+    changed_tracks = [{"uuid": "generated-1", "net": "NET_A", "before_width_iu": 100,
+                       "after_width_iu": 200}]
+
+    def run_kicad(operation, **kwargs):
+        operations.append(operation)
+        if operation != "repair_generated_widths":
+            pytest.fail(f"after-width DRC classification must bypass {operation}")
+        output = Path(kwargs["output"])
+        output.write_bytes(b"width-repaired")
+        report = {
+            "status": "candidate_only_requires_fresh_drc", "source_copper_item_count": 0,
+            "source_identity_preserved": True, "source_layout_preserved": True,
+            "source_geometry_preserved": True, "other_copper_preserved": True,
+            "source_copper_exact_subset_preserved": True,
+            "input_board_sha256": kwargs["expected_board_sha256"],
+            "source_board_sha256": source_sha, "source_project_sha256": project_sha,
+            "board_sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
+            "saved_copper_verified": True,
+            "saved_source_identity_layout_geometry_verified": True,
+            "saved_zones_and_stack_preserved": True,
+            "changed_tracks": changed_tracks, "changed_track_count": len(changed_tracks),
+        }
+        return {"status": "ok", "generated_route_repair": report}
+
+    def run_drc(board, **_kwargs):
+        options = {"open_count": 13, "track_warnings": 20, "via_warnings": 33}
+        if drc_case == "incomplete":
+            options["diagnostics_complete"] = False
+        elif drc_case == "mixed-clearance-and-dangling":
+            options["clearance_count"] = 1
+        return _generated_route_drc(Path(board), **options)
+
+    _install_host_mocks(monkeypatch, run_drc, run_kicad)
+    if accepted:
+        candidate, final_drc, summary = autoroute_recovery._repair_generated_fanout_widths(
+            source, partial, work=tmp_path / "work", python=None,
+            deadline=autoroute_recovery.time.monotonic() + 60, source_snapshots=snapshots,
+        )
+        assert candidate.read_bytes() == b"width-repaired"
+        assert summary["after_width_classification"] == "verified_open_and_dangling_only"
+        assert summary["clearance_prune"]["status"] == "not_needed"
+        assert summary["bend_adjustment"]["status"] == "not_eligible"
+        assert final_drc.raw_report["unconnected_items"] and final_drc.raw_report["violations"]
+    else:
+        with pytest.raises(ValueError, match="Fresh after-width DRC contains incomplete or unknown findings"):
+            autoroute_recovery._repair_generated_fanout_widths(
+                source, partial, work=tmp_path / "work", python=None,
+                deadline=autoroute_recovery.time.monotonic() + 60, source_snapshots=snapshots,
+            )
+    assert operations == ["repair_generated_widths"]
+
+
 def test_host_generated_width_repair_rejects_worker_output_hash_mismatch(tmp_path, monkeypatch):
     source = tmp_path / "source.kicad_pcb"
     source.write_bytes(b"source-board")

@@ -48,6 +48,7 @@ _SPECCTRA_CLEARANCE_VALUE_RE = re.compile(
     r"(?i)(\(clearance\s+)([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)(?=\s|\))"
 )
 _NATIVE_BOARD_ROUTING_CLEARANCE_MARGIN_MM = 0.01
+_NATIVE_FANOUT_EXTRA_CLEARANCE_MARGIN_MM = 0.05
 
 
 def _specctra_scan_text(text: str) -> str:
@@ -256,8 +257,8 @@ def _native_placement_variant(text: str, order: str, *, rotation: int = 0) -> tu
     return reordered_text, reference_order
 
 
-def _apply_specctra_clearance_margin(path: Path, margin_mm: float) -> dict[str, Any]:
-    """Tighten a KiCad-exported DSN's router rules without changing board DRC.
+def _transform_specctra_clearance_margin(text: str, margin_mm: float) -> tuple[str, dict[str, Any]]:
+    """Return DSN text with only untyped router clearances increased.
 
     Round-trip evidence showed a routed clearance can return slightly below
     the router's nominal value in native DRC. This margin gives the router
@@ -266,7 +267,6 @@ def _apply_specctra_clearance_margin(path: Path, margin_mm: float) -> dict[str, 
     """
     if not math.isfinite(margin_mm) or margin_mm <= 0:
         raise ValueError("Specctra clearance margin must be finite and positive")
-    text = path.read_text(encoding="utf-8")
     unit_spans = list(_iter_sexpr_block_spans(text, "unit"))
     if len(unit_spans) != 1:
         raise ValueError("Cannot safely apply routing margin: DSN must declare exactly one unit")
@@ -310,8 +310,7 @@ def _apply_specctra_clearance_margin(path: Path, margin_mm: float) -> dict[str, 
         raise ValueError("Cannot safely apply routing margin: DSN has no general clearance rules")
     for start, end, rendered in reversed(replacements):
         text = text[:start] + rendered + text[end:]
-    path.write_text(text, encoding="utf-8")
-    return {
+    return text, {
         "applied": True,
         "margin_mm": float(margin_mm),
         "dsn_unit": unit,
@@ -319,6 +318,17 @@ def _apply_specctra_clearance_margin(path: Path, margin_mm: float) -> dict[str, 
         "typed_exceptions_unchanged": unchanged,
         "native_board_rules_changed": False,
     }
+
+
+def _apply_specctra_clearance_margin(path: Path, margin_mm: float) -> dict[str, Any]:
+    """Apply a verified router-only margin to an exported DSN staging file."""
+    before = path.read_bytes()
+    transformed_text, report = _transform_specctra_clearance_margin(before.decode("utf-8"), margin_mm)
+    expected = transformed_text.encode("utf-8")
+    path.write_bytes(expected)
+    if path.read_bytes() != expected or expected == before:
+        raise ValueError("Specctra clearance margin did not persist the independently computed DSN bytes")
+    return report
 
 
 def _payload_tokens(payload: str) -> list[str]:
@@ -1167,15 +1177,19 @@ def _parse_routing_stats(output_text: str) -> dict[str, Any]:
     # establish completion and violations for publication.
     final_scores = list(
         re.finditer(
-            r"stage completed:[^\r\n]*final score:[^\r\n]*?\((\d+) unrouted and (\d+) violations\)",
+            r"stage completed(?P<timeout> with timeout)?:[^\r\n]*final score:[^\r\n]*?"
+            r"\((?P<opens>\d+) unrouted and (?P<violations>\d+) violations\)",
             output_text,
             re.IGNORECASE,
         )
     )
     if final_scores:
-        stats["incomplete"] = int(final_scores[-1].group(1))
-        stats["clearance_violations"] = int(final_scores[-1].group(2))
+        terminal = final_scores[-1]
+        stats["incomplete"] = int(terminal["opens"])
+        stats["clearance_violations"] = int(terminal["violations"])
         stats["statistics_source"] = "final_stage_summary"
+        if terminal["timeout"]:
+            stats["stage_timed_out"] = True
     return stats
 
 
@@ -1923,10 +1937,12 @@ def _route_specctra(
         _remove_staging_file(staging)
         return _result_error("Bounded native fanout profile requires Freerouting 2.5.0 or newer")
     if native_fanout_profile:
+        # Give the bounded geometric search time to finish on slower runners.
+        # A short per-pin timer drops otherwise reachable escapes mid-search.
         routing_command.extend(
             [
                 "--router.fanout.max_passes=1",
-                "--router.fanout.max_milliseconds_per_pin=50",
+                "--router.fanout.max_milliseconds_per_pin=1500",
                 "--router.fanout.min_escape_length_mm=1.0",
                 "--router.fanout.max_escape_length_mm=3.0",
                 "--router.fanout.fallback_to_board_vias=false",
@@ -2451,11 +2467,8 @@ def _route_candidates(
                 "net_count": len(canonicalization["semantic"]["net_membership"]),
                 "bounded_fanout_input_eligible": fanout_input_eligible,
             }
-        # In the three-profile native search the first two attempts run the
-        # same router settings with different placement ordering. Preserve a
-        # third of the budget for fanout, but give the primary ordering time
-        # to finish additional passes on large boards before restarting.
-        weights = (3, 1, 2) if use_fanout_profile and attempts == 3 else (1,) * attempts
+        three_native_profiles = use_fanout_profile and attempts == 3
+        weights = (2, 1, 2) if three_native_profiles else (1,) * attempts
         # Same filesystem as the destination allows atomic final publication.
         # The context also cleans up losing sessions and interrupted attempts.
         with tempfile.TemporaryDirectory(prefix=".cw-routing-", dir=ses_path.parent) as temporary:
@@ -2473,6 +2486,7 @@ def _route_candidates(
                 placement_order = None
                 candidate_hash = None
                 placement_order_kind = None
+                fanout_clearance_guardband = None
                 if native_placement_portfolio:
                     if attempt_profile == "bounded_fanout":
                         # The bounded profile is calibrated against the ascending
@@ -2496,8 +2510,43 @@ def _route_candidates(
                     # Keep the exact input basename/design identity for SES
                     # validation while isolating each independently-routed DSN.
                     route_dsn = variant_dir / dsn_path.name
+                    if attempt_profile == "bounded_fanout":
+                        # Keep the optional fanout input deterministic across
+                        # platforms while leaving both standard variants intact.
+                        variant_text = variant_text.replace("\r\n", "\n").replace("\r", "\n")
                     route_dsn.write_bytes(variant_text.encode("utf-8"))
-                    candidate_hash = hashlib.sha256(route_dsn.read_bytes()).hexdigest()
+                    candidate_hash = file_sha256(route_dsn)
+                    if attempt_profile == "bounded_fanout":
+                        pre_guardband_hash = candidate_hash
+                        try:
+                            guardband_report = _apply_specctra_clearance_margin(
+                                route_dsn, _NATIVE_FANOUT_EXTRA_CLEARANCE_MARGIN_MM,
+                            )
+                            candidate_hash = file_sha256(route_dsn)
+                            fanout_clearance_guardband = {
+                                **guardband_report,
+                                "status": "applied_and_verified",
+                                "pre_variant_sha256": pre_guardband_hash,
+                                "post_variant_sha256": candidate_hash,
+                            }
+                        except (OSError, ValueError) as exc:
+                            row = {
+                                "attempt": index + 1,
+                                "seed": attempt_seed,
+                                "status": "skipped",
+                                "routing_profile": attempt_profile,
+                                "placement_order_strategy": placement_order_kind,
+                                "placement_order": placement_order,
+                                "variant_sha256": pre_guardband_hash,
+                                "native_fanout_clearance_guardband": {
+                                    "status": "skipped_unverified",
+                                    "margin_mm": _NATIVE_FANOUT_EXTRA_CLEARANCE_MARGIN_MM,
+                                    "pre_variant_sha256": pre_guardband_hash,
+                                    "reason": str(exc),
+                                },
+                            }
+                            attempt_rows.append(row)
+                            continue
                 if (
                     not supports_seed
                     and attempt_options.get("optimizer_strategy") is None
@@ -2518,7 +2567,16 @@ def _route_candidates(
                 remaining = deadline - time.perf_counter()
                 if remaining <= 0:
                     break
-                allowance = remaining * weights[index] / sum(weights[index:])
+                remaining_weights = weights[index:]
+                if three_native_profiles and index == 1:
+                    primary = attempt_rows[0]
+                    stats = primary.get("stats", {})
+                    if primary["status"] == "ok" and stats.get("stage_timed_out") and stats["incomplete"] > 0:
+                        # Both ordinary orderings start from empty copper. After a
+                        # timed-out primary, give the different fanout algorithm
+                        # most of the remaining time to route and remove unused vias.
+                        remaining_weights = (1, 7)
+                allowance = remaining * remaining_weights[0] / sum(remaining_weights)
                 log.info(
                     "Freerouting portfolio candidate %d/%d started "
                     "(placement order=%s, optimizer=%s, timeout allowance=%.1fs)",
@@ -2545,6 +2603,8 @@ def _route_candidates(
                         "source_dsn_sha256": input_hash,
                         "variant_dsn_sha256": candidate_hash or input_hash,
                         "native_dsn_canonicalization": native_dsn_canonicalization,
+                        **({"native_fanout_clearance_guardband": fanout_clearance_guardband}
+                           if fanout_clearance_guardband is not None else {}),
                     },
                     **attempt_options,
                 )
@@ -2566,6 +2626,8 @@ def _route_candidates(
                     row["placement_order_strategy"] = placement_order_kind
                     row["placement_order"] = placement_order
                     row["variant_sha256"] = candidate_hash
+                if fanout_clearance_guardband is not None:
+                    row["native_fanout_clearance_guardband"] = fanout_clearance_guardband
                 if "stats" in result:
                     row["stats"] = result["stats"]
                 if "router_logs" in result:
@@ -2611,7 +2673,7 @@ def _route_candidates(
                     attempt_rows[winner_index - 1]["routing_profile"] if winner_index else "standard"
                 ),
                 "requested_attempts": attempts,
-                "completed_attempts": len(attempt_rows),
+                "completed_attempts": sum(row["status"] != "skipped" for row in attempt_rows),
                 "selected_attempt": winner_index,
                 "timeout_budget_seconds": timeout_seconds,
                 "ranking": ["incomplete", "clearance_unreported", "trace_length_mm", "vias", "traces"],
@@ -2635,6 +2697,8 @@ def _route_candidates(
                 }
             if winner is None or winner_path is None:
                 return _result_error("No routing attempt produced a verified usable session", search=search)
+            if file_sha256(dsn_path) != input_hash:
+                return _result_error("Routing input changed before session publication", search=search)
             error = _publish_staged_file(winner_path, ses_path, overwrite=overwrite)
             if error:
                 return _result_error(error, search=search)

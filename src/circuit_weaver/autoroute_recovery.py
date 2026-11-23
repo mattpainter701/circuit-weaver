@@ -410,13 +410,17 @@ def _repair_generated_fanout_widths(
         raise ValueError("Native generated width repair returned malformed or duplicate track UUIDs")
 
     after_width, after_width_path, after_width_sha = run_and_retain(widened, "after-width")
-    if not _generated_width_drc_findings_allowed(after_width, allow_clearance=True):
+    after_width_is_open_dangling_only = _generated_width_drc_findings_allowed(
+        after_width, allow_clearance=False,
+    )
+    if (not after_width_is_open_dangling_only
+            and not _generated_width_drc_findings_allowed(after_width, allow_clearance=True)):
         raise ValueError(f"Fresh after-width DRC contains incomplete or unknown findings: {after_width_path}")
 
     prune_report: dict[str, Any] = {"status": "not_needed", "removed_track_count": 0, "removed_tracks": []}
     current, final_drc, final_drc_path, final_sha = widened, after_width, after_width_path, after_width_sha
     bend_adjustment: dict[str, Any] = {"status": "not_eligible", "adjusted_bend_count": 0}
-    if after_width.raw_report["violations"]:
+    if after_width.raw_report["violations"] and not after_width_is_open_dangling_only:
         eligible_bends = _eligible_generated_width_bends(after_width, set(changed_uuids))
         if eligible_bends:
             bend_candidate, bend_report, bend_sha = run_worker(
@@ -486,6 +490,10 @@ def _repair_generated_fanout_widths(
         "bend_adjustment": bend_adjustment,
         "after_width_drc": str(after_width_path),
         "after_width_board_sha256": after_width_sha,
+        "after_width_classification": (
+            "verified_open_and_dangling_only" if after_width_is_open_dangling_only
+            else "verified_clearance_and_open_findings"
+        ),
         "clearance_prune": prune_report,
         "final_drc": str(final_drc_path),
         "final_board_sha256": final_sha,
