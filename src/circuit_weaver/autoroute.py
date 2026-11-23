@@ -50,6 +50,7 @@ _SPECCTRA_CLEARANCE_VALUE_RE = re.compile(
 )
 _NATIVE_BOARD_ROUTING_CLEARANCE_MARGIN_MM = 0.01
 _NATIVE_FANOUT_EXTRA_CLEARANCE_MARGIN_MM = 0.05
+_NATIVE_CONTINUATION_START_RIPUP_COSTS = 400
 
 
 def _specctra_scan_text(text: str) -> str:
@@ -1899,6 +1900,7 @@ def _route_specctra(
     allow_partial_nets: bool = False,
     cooperative_partial_timeout: bool = False,
     native_fanout_profile: bool = False,
+    native_continuation_profile: bool = False,
     attempt_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     prepare_error = _prepare_destination(ses_path, overwrite=overwrite)
@@ -1942,6 +1944,13 @@ def _route_specctra(
     if native_fanout_profile and not v25_or_newer:
         _remove_staging_file(staging)
         return _result_error("Bounded native fanout profile requires Freerouting 2.5.0 or newer")
+    if native_continuation_profile:
+        if not v25_or_newer or native_fanout_profile:
+            _remove_staging_file(staging)
+            return _result_error("Native session continuation requires Freerouting 2.5+ with fanout disabled")
+        # A fresh process restarts the rip-up schedule at 100. Starting at the
+        # fourth-pass cost lets the router retain more of its completed routes.
+        routing_command.append(f"--router.scoring.start_ripup_costs={_NATIVE_CONTINUATION_START_RIPUP_COSTS}")
     if native_fanout_profile:
         # Give the bounded geometric search time to finish on slower runners.
         # A short per-pin timer drops otherwise reachable escapes mid-search.
@@ -2047,6 +2056,8 @@ def _route_specctra(
                     "allow_partial_nets": allow_partial_nets,
                     "cooperative_partial_timeout": cooperative_partial_timeout,
                     "native_fanout_profile": native_fanout_profile,
+                    **({"start_ripup_costs": _NATIVE_CONTINUATION_START_RIPUP_COSTS}
+                       if native_continuation_profile else {}),
                     "native_edge_clearance": native_edge_clearance,
                     "timeout_budget": timeout_budget,
                 },
@@ -2525,8 +2536,6 @@ def _route_candidates(
                 path = Path(temporary) / f"candidate-{index + 1}.ses"
                 attempt_options = dict(options)
                 attempt_profile = "bounded_fanout" if use_fanout_profile and index == attempts - 1 else "standard"
-                if attempt_profile == "bounded_fanout":
-                    attempt_options["native_fanout_profile"] = True
                 attempt_seed = base_seed + index if base_seed is not None else None
                 route_dsn = dsn_path
                 placement_order = None
@@ -2535,15 +2544,32 @@ def _route_candidates(
                 fanout_clearance_guardband = None
                 continuation_text = None
                 continuation = None
-                if three_native_profiles and index == 1 and options.get("cooperative_partial_timeout"):
+                retry_continuation = (
+                    three_native_profiles and index == 2
+                    and attempt_rows[1]["routing_profile"] == "standard_continuation"
+                    and attempt_rows[1]["status"] == "ok"
+                    and attempt_rows[1].get("artifact", {}).get("valid") is True
+                    and (attempt_rows[1].get("stats", {}).get("incomplete") or 0) > 0
+                )
+                if three_native_profiles and options.get("cooperative_partial_timeout") and (
+                    index == 1 or retry_continuation
+                ):
                     continuation_text, continuation = _native_continuation_candidate(
                         attempt_rows[0], Path(temporary) / "candidate-1.ses",
                         Path(temporary) / "input-1" / dsn_path.name,
                     )
-                    if continuation_text is not None:
+                    if retry_continuation:
+                        previous_variant = attempt_rows[1]["variant_sha256"]
+                        if continuation_text is None or continuation["variant_dsn_sha256"] != previous_variant:
+                            raise ValueError("Native continuation retry no longer matches its verified seed")
+                        attempt_profile = "standard_continuation_retry"
+                    elif continuation_text is not None:
                         attempt_profile = "standard_continuation"
+                        attempt_options["native_continuation_profile"] = True
+                if attempt_profile == "bounded_fanout":
+                    attempt_options["native_fanout_profile"] = True
                 if native_placement_portfolio:
-                    if attempt_profile in {"bounded_fanout", "standard_continuation"}:
+                    if attempt_profile == "bounded_fanout" or continuation_text is not None:
                         placement_order_kind = "ascending"
                     elif index == 0:
                         placement_order_kind = "ascending"
@@ -2625,7 +2651,9 @@ def _route_candidates(
                 if remaining <= 0:
                     break
                 remaining_weights = weights[index:]
-                if three_native_profiles and index == 1 and continuation_text is None:
+                if attempt_profile == "standard_continuation":
+                    remaining_weights = (1, 1)
+                elif three_native_profiles and index == 1:
                     primary = attempt_rows[0]
                     stats = primary.get("stats", {})
                     if primary["status"] == "ok" and stats.get("stage_timed_out") and stats["incomplete"] > 0:

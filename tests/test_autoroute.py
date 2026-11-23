@@ -1871,6 +1871,56 @@ class TestFreerouting25CompatibilityProposal:
         assert "--router.automatic_neckdown=false" in command
         assert "--router.neck_width_um=0" in command
 
+    def test_continuation_ripup_cost_is_private_to_verified_25_portfolio_attempt(self, tmp_path, monkeypatch):
+        dsn = _write_dsn(tmp_path)
+        captured = []
+
+        def run(command, **_kwargs):
+            captured.append(list(command))
+            if "-help" in command:
+                return mock.Mock(returncode=0, stdout="Freerouting v2.5.0", stderr="")
+            Path(command[command.index("-do") + 1]).write_text(VALID_SES, encoding="utf-8")
+            return mock.Mock(returncode=0, stdout=_routing_output(version="2.5.0"), stderr="")
+
+        monkeypatch.setattr(autoroute_module.subprocess, "run", run)
+        common = dict(
+            passes=5, timeout_seconds=30, overwrite=False, headless=True,
+            optimization_threads=0, optimizer_strategy=None, optimizer_hybrid_ratio=None,
+            optimizer_item_selection=None, optimizer_improvement_threshold=None, seed=None,
+            capability_probe={"version": "2.5.0", "probe_ok": True, "seed": False},
+        )
+        ordinary = _route_specctra(
+            dsn, tmp_path / "ordinary.ses", ["freerouting"], **common,
+            attempt_context={"portfolio": True, "routing_profile": "standard"},
+        )
+        continuation = _route_specctra(
+            dsn, tmp_path / "continued.ses", ["freerouting"], **common,
+            allow_partial_nets=True, native_continuation_profile=True,
+            attempt_context={"portfolio": True, "routing_profile": "standard_continuation"},
+        )
+        fanout = _route_specctra(
+            dsn, tmp_path / "fanout.ses", ["freerouting"], **common,
+            allow_partial_nets=True, native_fanout_profile=True,
+            attempt_context={"portfolio": True, "routing_profile": "bounded_fanout"},
+        )
+        monkeypatch.setattr(
+            autoroute_module, "_find_freerouting_command", lambda *_args: ["freerouting"]
+        )
+        monkeypatch.setattr(
+            autoroute_module, "_probe_freerouting_capabilities",
+            lambda *_args, **_kwargs: {"version": "2.5.0", "probe_ok": True, "seed": False},
+        )
+        public = autoroute_pcb(dsn, output_path=str(tmp_path / "public.ses"))
+
+        assert [ordinary["status"], continuation["status"], fanout["status"], public["status"]] == [
+            "ok", "ok", "ok", "ok",
+        ]
+        ripup_args = [
+            [arg for arg in command if arg.startswith("--router.scoring.start_ripup_costs=")]
+            for command in captured
+        ]
+        assert ripup_args == [[], ["--router.scoring.start_ripup_costs=400"], [], []]
+
     def test_bounded_native_fanout_rejects_unsupported_version(self, tmp_path):
         dsn = _write_dsn(tmp_path)
         result = _route_specctra(
@@ -2033,7 +2083,10 @@ class TestFreerouting25CompatibilityProposal:
         assert allowances == expected
         assert clock[0] == 1800
 
-    def test_native_timed_out_session_continues_before_final_fanout(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("middle_incomplete", [0, 1])
+    def test_qualifying_session_retries_only_when_continuation_is_still_partial(
+        self, tmp_path, monkeypatch, middle_incomplete,
+    ):
         dsn = _write_native_continuation_dsn(tmp_path)
         source_hash = hashlib.sha256(dsn.read_bytes()).hexdigest()
         seed_session = VALID_SES.replace(
@@ -2074,7 +2127,7 @@ class TestFreerouting25CompatibilityProposal:
             calls[-1]["artifact"] = artifact
             stats = [
                 {"incomplete": 3, "initial_incomplete": 12, "stage_timed_out": True},
-                {"incomplete": 1, "initial_incomplete": 12, "stage_timed_out": False},
+                {"incomplete": middle_incomplete, "initial_incomplete": 12, "stage_timed_out": False},
                 {"incomplete": 0, "initial_incomplete": 12, "stage_timed_out": False},
             ][index]
             stats.update({"clearance_violations": 0, "trace_length_mm": 30.0, "traces": 2, "vias": 0})
@@ -2095,16 +2148,18 @@ class TestFreerouting25CompatibilityProposal:
 
         assert result["status"] == "ok"
         assert len(calls) == 3
-        first, continuation, fanout = calls
+        first, continuation, third = calls
         rows = result["search"]["attempts"]
-        assert [row["routing_profile"] for row in rows] == [
-            "standard", "standard_continuation", "bounded_fanout",
-        ]
+        expected_third_profile = "standard_continuation_retry" if middle_incomplete else "bounded_fanout"
+        assert [row["routing_profile"] for row in rows] == ["standard", "standard_continuation", expected_third_profile]
         assert [row["placement_order_strategy"] for row in rows] == ["ascending", "ascending", "ascending"]
         assert [call["dsn"].name for call in calls] == [dsn.name] * 3
         assert continuation["options"].get("native_fanout_profile") is None
-        assert fanout["options"]["native_fanout_profile"] is True
-        assert [call["timeout"] for call in calls] == [720, 360, 720]
+        assert third["options"].get("native_fanout_profile", False) is (not middle_incomplete)
+        assert [call["timeout"] for call in calls] == [720, 540, 540]
+        assert [call["options"].get("native_continuation_profile", False) for call in calls] == [
+            False, True, False,
+        ]
         assert b'(wire (path F.Cu 0.25 10 10 20 12.54) (net GND) (type normal))' in continuation["bytes"]
         assert b'(via Via[0-1]_600:300_um 15 12 (net GND) (type normal))' in continuation["bytes"]
 
@@ -2117,7 +2172,22 @@ class TestFreerouting25CompatibilityProposal:
         assert continuation["context"]["source_dsn_sha256"] == source_hash
         assert continuation["context"]["variant_dsn_sha256"] == hashlib.sha256(continuation["bytes"]).hexdigest()
         assert rows[1]["native_session_continuation"] == metadata
-        assert result["search"]["selected_attempt"] == 3
+        if middle_incomplete:
+            assert third["bytes"] == continuation["bytes"]
+            assert third["context"]["routing_profile"] == "standard_continuation_retry"
+            assert third["context"]["variant_dsn_sha256"] == metadata["variant_dsn_sha256"]
+            assert rows[2]["native_session_continuation"]["variant_dsn_sha256"] == metadata[
+                "variant_dsn_sha256"
+            ]
+        else:
+            assert third["context"]["routing_profile"] == "bounded_fanout"
+            assert b"(wiring)" in third["bytes"]
+            assert b"(wire (path" not in third["bytes"]
+            guardband = third["context"]["native_fanout_clearance_guardband"]
+            assert guardband["status"] == "applied_and_verified"
+            assert guardband["post_variant_sha256"] == hashlib.sha256(third["bytes"]).hexdigest()
+            assert rows[2]["native_fanout_clearance_guardband"] == guardband
+        assert result["search"]["selected_attempt"] == (3 if middle_incomplete else 2)
 
     def test_untranslatable_valid_seed_uses_short_descending_standard_fallback(self, tmp_path, monkeypatch):
         dsn = _write_native_continuation_dsn(tmp_path)
@@ -2287,10 +2357,14 @@ class TestFreerouting25CompatibilityProposal:
         clock = [0.0]
         calls = []
 
-        def route(route_dsn, output, _command, *, timeout_seconds, attempt_context, **_options):
+        def route(route_dsn, output, _command, *, timeout_seconds, attempt_context, **options):
             route_dsn, output = Path(route_dsn), Path(output)
             index = len(calls)
-            calls.append({"timeout": timeout_seconds, "context": attempt_context})
+            calls.append({
+                "timeout": timeout_seconds,
+                "context": attempt_context,
+                "native_continuation_profile": options.get("native_continuation_profile", False),
+            })
             output.write_text(VALID_SES, encoding="utf-8")
             artifact = _validate_specctra_artifact(
                 output, "ses", source_dsn=route_dsn, allow_partial_nets=True,
@@ -2326,6 +2400,7 @@ class TestFreerouting25CompatibilityProposal:
         ]
         assert "native_session_continuation" not in result["search"]["attempts"][1]
         assert calls[1]["context"]["routing_profile"] == "standard"
+        assert all(not call["native_continuation_profile"] for call in calls)
         assert [call["timeout"] for call in calls] == expected_allowances
 
     def test_failed_portfolio_attempts_keep_exact_private_dsn_and_effective_argv(

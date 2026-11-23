@@ -253,10 +253,16 @@ the shared time budget. If it times out after closing at least three quarters
 of its initial connections, the second attempt can continue from the verified
 session. Only the first attempt's generated tracks and vias are movable. The
 original placement, pin assignments, board rules and source files stay fixed.
-The second attempt gets one third of the remaining time. If a timed-out
-partial cannot be continued, the descending placement order gets one eighth.
-Fanout gets the rest. It tries one pass of 1–3 mm pad escapes, allowing up to
-1.5 seconds per pin within its overall deadline. Each attempt records its
+This continuation gets half the remaining time. It starts with a rip-up cost
+of 400, the cost reached on the fourth ordinary pass of Freerouting 2.5. This
+helps preserve completed connections when the new router process starts.
+The descending placement order gets one third of the remaining time after an
+ordinary result, or one eighth after a timed-out partial it cannot continue.
+If the continuation returns a valid session with opens, the last attempt
+reuses the same verified starting copper with the router's ordinary rip-up
+cost. Otherwise the last attempt uses bounded fanout. It tries one pass of
+1–3 mm pad escapes, allowing up to 1.5 seconds per pin within its overall
+deadline. Each attempt records its
 actual input and time allowance.
 
 Freerouting's fanout can generate narrower tracks even with automatic neckdown
