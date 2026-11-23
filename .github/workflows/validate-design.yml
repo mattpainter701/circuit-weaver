@@ -2,6 +2,7 @@ name: Validate Designs
 
 on:
   push:
+    branches: [main]
     paths:
       - "samples/**/*.yaml"
       - "src/circuit_weaver/examples/**/*.yaml"
@@ -16,9 +17,17 @@ on:
       - "pyproject.toml"
       - ".github/workflows/validate-design.yml"
 
+concurrency:
+  group: validate-design-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout

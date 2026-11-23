@@ -651,8 +651,8 @@ def _validate_decoupling(components: list[ComponentDef]) -> list[ValidationIssue
 # ================================================================
 
 _EN_PIN_PATTERNS = re.compile(r"^(EN|ENABLE|ON|SHDN|SHDN_N|CE|CHIP_EN)$", re.IGNORECASE)
-_I2C_SCL_PATTERN = re.compile(r"(SCL|I2C.*CLK)", re.IGNORECASE)
-_I2C_SDA_PATTERN = re.compile(r"(SDA|I2C.*DAT)", re.IGNORECASE)
+_I2C_SCL_PATTERN = re.compile(r"(?:^|_)(?:SCL\d*|I2C.*CLK)(?:$|_)", re.IGNORECASE)
+_I2C_SDA_PATTERN = re.compile(r"(?:^|_)(?:SDA\d*|I2C.*DAT)(?:$|_)", re.IGNORECASE)
 _SPI_CS_PATTERN = re.compile(r"(CS|CSN|CS_N|CSB|SS|SSN|NSS)", re.IGNORECASE)
 _UART_TX_PATTERN = re.compile(r"(TXD?|UART.*TX)", re.IGNORECASE)
 _UART_RX_PATTERN = re.compile(r"(RXD?|UART.*RX)", re.IGNORECASE)

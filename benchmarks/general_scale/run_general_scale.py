@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -36,6 +37,9 @@ REQUIRED_STEPS = {
     "assembly-gate", "manufacturing-gate", "status", "resume", "prototype-positions",
     "board-preview-front", "board-preview-back", "board-preview-front-layers", "mcp",
 }
+# Match project_workflow._ROUTE_NATIVE_POSTPROCESS_SECONDS. This reserve covers
+# SES transport, native import, and the final fresh DRC after route/recovery.
+ROUTE_NATIVE_POSTPROCESS_SECONDS = 600
 
 
 def sha256(path: Path) -> str:
@@ -80,6 +84,28 @@ def _python_executable(path: Path) -> Path:
     return path.expanduser().absolute()
 
 
+def _routing_budget(args: argparse.Namespace) -> dict[str, int | float | bool]:
+    repair_enabled = bool(getattr(args, "repair_open_connections", False))
+    recovery_timeout = float(getattr(args, "recovery_timeout", 600))
+    active_recovery = math.ceil(recovery_timeout) if repair_enabled else 0
+    return {
+        "route_timeout_seconds": args.route_timeout,
+        "route_attempts": args.attempts,
+        "route_max_passes": getattr(args, "route_max_passes", 20),
+        "repair_open_connections": repair_enabled,
+        "recovery_timeout_seconds": recovery_timeout,
+        "active_recovery_timeout_seconds": active_recovery,
+        "native_postprocess_budget_seconds": ROUTE_NATIVE_POSTPROCESS_SECONDS,
+        "minimum_route_parent_timeout_seconds": (
+            args.route_timeout + active_recovery + ROUTE_NATIVE_POSTPROCESS_SECONDS
+        ),
+        "route_command_timeout_seconds": max(
+            300, args.route_timeout + 120,
+            args.route_timeout + active_recovery + ROUTE_NATIVE_POSTPROCESS_SECONDS,
+        ),
+    }
+
+
 def source_state() -> dict[str, str]:
     status = git_value("status", "--porcelain")
     revision = git_value("rev-parse", "HEAD")
@@ -106,7 +132,35 @@ def source_state() -> dict[str, str]:
     }
 
 
-def _load_suite(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _materialize_suite(suite_path: Path, output: Path) -> Path:
+    """Expand frozen fixtures beside run evidence instead of in the checkout."""
+    builders = {
+        "unseen_scale": ("build_stress_fixtures.py", "materialize"),
+        "diverse_systems": ("build_diverse_trials.py", "build_corpus"),
+    }
+    suite_kind = next((name for name in builders
+                       if suite_path.resolve() == (REPO / "benchmarks" / name / "cases.yaml").resolve()), None)
+    if suite_kind is None:
+        return suite_path
+    builder_file, function = builders[suite_kind]
+    builder = REPO / "benchmarks" / suite_kind / builder_file
+    module_spec = importlib.util.spec_from_file_location(f"cw_{suite_kind}_fixture_builder", builder)
+    if module_spec is None or module_spec.loader is None:
+        raise RuntimeError("Cannot load the retained diverse fixture generator")
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    target = output / "generated-fixtures"
+    if function == "materialize":
+        module.materialize(target)
+    else:
+        module.build_corpus(REPO, target)
+    return target / "cases.yaml"
+
+
+def _load_suite(path: Path, *, generated_root: Path | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    input_root = generated_root.resolve() if generated_root is not None else REPO.resolve()
+    if generated_root is not None and not path.resolve().is_relative_to(input_root):
+        raise ValueError("suite is outside its allowed input directory")
     suite = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(suite, dict) or suite.get("schema_version") != 1:
         raise ValueError("suite must be a schema_version 1 object")
@@ -127,9 +181,12 @@ def _load_suite(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if isinstance(minimum, bool) or not isinstance(minimum, int) or minimum < floor:
         raise ValueError(f"{suite_kind} suite minimum_physical_parts must be an integer of at least {floor}")
     for case in cases:
+        case_minimum = case.get("minimum_physical_parts", minimum)
+        if isinstance(case_minimum, bool) or not isinstance(case_minimum, int) or case_minimum < minimum:
+            raise ValueError(f"case {case['id']} minimum_physical_parts must be an integer of at least {minimum}")
         spec_path = (path.parent / case["spec"]).resolve()
-        if not spec_path.is_file() or not spec_path.is_relative_to(REPO.resolve()):
-            raise ValueError(f"case {case['id']} has a missing or out-of-repository spec")
+        if not spec_path.is_file() or not spec_path.is_relative_to(input_root):
+            raise ValueError(f"case {case['id']} has a missing or out-of-input-directory spec")
         spec = yaml.safe_load(spec_path.read_text(encoding="utf-8"))
         if not isinstance(spec, dict):
             raise ValueError(f"case {case['id']} spec must be a YAML mapping")
@@ -159,7 +216,20 @@ def _stage_inputs(suite_path: Path, suite: dict[str, Any], cases: list[dict[str,
         destination = inputs / f"{case['id']}.yaml"
         destination.write_bytes(case["_spec_path"].read_bytes())
         case["_spec_path"] = destination
-        staged.append({"case_id": case["id"], "path": str(destination), "sha256": sha256(destination)})
+        row = {"case_id": case["id"], "path": str(destination), "sha256": sha256(destination)}
+        channels = case.get("required_channels", [])
+        paths = case.get("required_paths", [])
+        if channels or paths:
+            contract_path = inputs / f"{case['id']}.native-contracts.json"
+            contract_path.write_text(
+                json.dumps({"required_channels": channels, "required_paths": paths}, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            case["_contracts_path"] = contract_path
+            case["_contracts_sha256"] = sha256(contract_path)
+            row["native_contracts_path"] = str(contract_path)
+            row["native_contracts_sha256"] = case["_contracts_sha256"]
+        staged.append(row)
     return {"suite_path": str(suite_copy), "suite_sha256": sha256(suite_copy), "case_specs": staged}
 
 
@@ -305,16 +375,29 @@ def _inspect_and_verify_connectivity(
 ) -> dict[str, Any]:
     """Read actual routed PCB pad nets with the selected Circuit Weaver runtime."""
     before = sha256(board_path)
-    contracts_path = log_dir / f"{case['id']}.connectivity-contracts.json"
-    contracts_path.write_text(json.dumps(case["required_channels"], indent=2) + "\n", encoding="utf-8")
+    contracts_path = Path(case.get("_contracts_path") or (log_dir / f"{case['id']}.connectivity-contracts.json"))
+    channels = case.get("required_channels", [])
+    paths = case.get("required_paths", [])
+    contracts = {"required_channels": channels, "required_paths": paths} if paths else channels
+    if "_contracts_path" not in case:
+        contracts_path.write_text(json.dumps(contracts, indent=2) + "\n", encoding="utf-8")
+    expected_contract_hash = case.get("_contracts_sha256", sha256(contracts_path))
+    if sha256(contracts_path) != expected_contract_hash:
+        raise RuntimeError("snapshotted native contract changed before final-board verification")
     helper_dir = Path(__file__).resolve().parent
     script = (
         "import json,sys; sys.path.insert(0,sys.argv[3]); "
         "from circuit_weaver.kicad_bridge import run_kicad; "
         "from connectivity import verify_native_connectivity; "
+        "from signal_connectivity import verify_native_signal_paths; "
         "inventory=run_kicad('inspect',board=sys.argv[1],timeout=float(sys.argv[2])); "
         "contracts=json.load(open(sys.argv[4],encoding='utf-8')); "
-        "print(json.dumps({'inventory':inventory,'connectivity':verify_native_connectivity(inventory,contracts)}))"
+        "channels=contracts.get('required_channels',[]) if isinstance(contracts,dict) else contracts; "
+        "paths=contracts.get('required_paths',[]) if isinstance(contracts,dict) else []; "
+        "proof={'inventory':inventory}; "
+        "proof.update({'connectivity':verify_native_connectivity(inventory,channels)} if channels else {}); "
+        "proof.update({'signal_connectivity':verify_native_signal_paths(inventory,paths)} if paths else {}); "
+        "print(json.dumps(proof))"
     )
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
@@ -342,15 +425,31 @@ def _inspect_and_verify_connectivity(
     after = sha256(board_path)
     if before != after:
         raise RuntimeError("native PCB inspection changed routed board bytes")
-    if not isinstance(inventory, dict) or inventory.get("status") != "ok" \
-            or not isinstance(connectivity, dict) or connectivity.get("status") != "pass":
+    if sha256(contracts_path) != expected_contract_hash:
+        raise RuntimeError("native contract changed during final-board verification")
+    if not isinstance(inventory, dict) or inventory.get("status") != "ok":
         raise RuntimeError(f"native PCB connectivity verification did not pass for {case['id']}")
+    details = {}
+    if channels or not paths:
+        if not isinstance(connectivity, dict) or connectivity.get("status") != "pass":
+            raise RuntimeError(f"native PCB channel verification did not pass for {case['id']}")
+        (run_dir / "native-connectivity-verification.json").write_text(
+            json.dumps(connectivity, indent=2) + "\n", encoding="utf-8"
+        )
+        details.update(verified_native_channels=connectivity["verified_channels"],
+                       native_connectivity_status=connectivity["status"])
+    if paths:
+        signal_proof = proof.get("signal_connectivity")
+        if not isinstance(signal_proof, dict) or signal_proof.get("status") != "pass" \
+                or signal_proof.get("verified_paths") != len(paths):
+            raise RuntimeError(f"native PCB signal path verification did not pass for {case['id']}")
+        (run_dir / "native-signal-path-verification.json").write_text(
+            json.dumps(signal_proof, indent=2) + "\n", encoding="utf-8"
+        )
+        details.update(verified_native_signal_paths=signal_proof["verified_paths"],
+                       native_signal_path_status=signal_proof["status"])
     (run_dir / "native-pcb-inventory.json").write_text(json.dumps(inventory, indent=2) + "\n", encoding="utf-8")
-    (run_dir / "native-connectivity-verification.json").write_text(
-        json.dumps(connectivity, indent=2) + "\n", encoding="utf-8"
-    )
-    return {"verified_native_channels": connectivity["verified_channels"],
-            "native_connectivity_status": connectivity["status"], "native_inventory_sha256":
+    return {**details, "native_inventory_sha256":
             hashlib.sha256(json.dumps(inventory, sort_keys=True).encode("utf-8")).hexdigest()}
 
 
@@ -370,6 +469,25 @@ def _run_case(case: dict[str, Any], args: argparse.Namespace, output: Path) -> d
         "--route-timeout", str(args.route_timeout),
         "--mcp-smoke", "--render-3d",
     ]
+    route_budget = _routing_budget(args)
+    command.extend(["--route-max-passes", str(route_budget["route_max_passes"])])
+    if route_budget["repair_open_connections"]:
+        command.extend([
+            "--repair-open-connections", "--recovery-timeout",
+            str(route_budget["recovery_timeout_seconds"]),
+        ])
+    contracts_path = case.get("_contracts_path")
+    contracts_hash = case.get("_contracts_sha256")
+    if contracts_path is not None:
+        contracts_path = Path(contracts_path)
+        if not contracts_path.is_file() or sha256(contracts_path) != contracts_hash:
+            raise RuntimeError("snapshotted native contract is missing or changed before workflow launch")
+        command.extend([
+            "--native-contracts",
+            str(contracts_path.resolve()),
+            "--native-contracts-sha256",
+            str(contracts_hash),
+        ])
     if args.installed:
         command.append("--installed")
         if args.expected_wheel:
@@ -386,7 +504,9 @@ def _run_case(case: dict[str, Any], args: argparse.Namespace, output: Path) -> d
         "case_id": case["id"], "family": case["family"], "spec": str(spec_path),
         "spec_sha256": case["_spec_sha256"], "command": command,
         "minimum_drill_mm": case.get("minimum_drill_mm"),
-        "timeout_seconds": args.timeout, "python": str(python),
+        "native_contracts_sha256": contracts_hash,
+        "minimum_physical_parts": max(args.minimum_physical_parts, case.get("minimum_physical_parts", 0)),
+        "timeout_seconds": args.timeout, "routing_budget": route_budget, "python": str(python),
     }, indent=2) + "\n", encoding="utf-8")
     started = time.monotonic()
     status = "FAILED"
@@ -400,13 +520,14 @@ def _run_case(case: dict[str, Any], args: argparse.Namespace, output: Path) -> d
         if result.returncode != 0:
             raise RuntimeError(f"workflow validator exited {result.returncode}; inspect runner logs and evidence")
         details = _validate_evidence(
-            run_dir, args.minimum_physical_parts, expected_spec_hash=case["_spec_sha256"],
+            run_dir, max(args.minimum_physical_parts, case.get("minimum_physical_parts", 0)),
+            expected_spec_hash=case["_spec_sha256"],
             expected_board_mm=case["board_mm"],
             expected_wheel_hash=sha256(args.expected_wheel) if args.expected_wheel else None,
             expected_package_hash=getattr(args, "package_source_sha256", None),
             expected_runner_hash=getattr(args, "workflow_sha256", None),
         )
-        if case.get("required_channels"):
+        if case.get("required_channels") or case.get("required_paths"):
             board_path = Path(json.loads((run_dir / "evidence.json").read_text(encoding="utf-8"))["drc"]["board"])
             details.update(_inspect_and_verify_connectivity(case, args, run_dir, log_dir, board_path))
         if sha256(spec_path) != case["_spec_sha256"] or sha256(case["_source_spec_path"]) != case["_spec_sha256"]:
@@ -458,14 +579,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--attempts", type=int, default=2, help="autoroute attempts")
     parser.add_argument("--route-timeout", type=int, default=300,
                         help="total routing budget shared across attempts")
+    parser.add_argument("--route-max-passes", type=int, default=20,
+                        help="exact Freerouting pass limit (0 means unlimited; default: 20)")
+    parser.add_argument("--repair-open-connections", action="store_true",
+                        help="opt in to bounded native recovery for open routed connections")
+    parser.add_argument("--recovery-timeout", type=float, default=600,
+                        help="native recovery budget in seconds when repair is enabled (0 < value <= 1800)")
     parser.add_argument("--require-clean", action="store_true",
                         help="refuse dirty source and fail if revision/tree changes during the workflow")
     args = parser.parse_args(argv)
     if not 1 <= args.workers <= 2:
         parser.error("--workers must be between 1 and 2")
     if not 60 <= args.timeout <= 43_200 or not 1 <= args.route_timeout <= 3_600 \
+            or not 0 <= args.route_max_passes <= 9_999 \
+            or not math.isfinite(args.recovery_timeout) or not 0 < args.recovery_timeout <= 1_800 \
             or not 1 <= args.iterations <= 10_000 or not 1 <= args.attempts <= 5:
-        parser.error("timeout, route-timeout, iterations, and attempts exceed supported bounds")
+        parser.error(
+            "timeout, route-timeout, route-max-passes, recovery-timeout, iterations, and attempts "
+            "must remain within supported bounds"
+        )
+    if args.repair_open_connections:
+        minimum_timeout = _routing_budget(args)["minimum_route_parent_timeout_seconds"]
+        if args.timeout < minimum_timeout:
+            parser.error(
+                f"--timeout must be at least {minimum_timeout} seconds when route recovery is enabled "
+                "(route + recovery + native postprocess budget)"
+            )
     if args.expected_wheel and not args.installed:
         parser.error("--expected-wheel requires --installed")
     initial_source = source_state()
@@ -475,8 +614,9 @@ def main(argv: list[str] | None = None) -> int:
     if output.exists():
         parser.error(f"refusing to overwrite evidence directory: {output}")
     output.mkdir(parents=True)
-    suite_path = SAMPLE_SUITE if str(args.suite).casefold() == "samples" else args.suite.resolve()
-    suite, cases = _load_suite(suite_path)
+    requested_suite = SAMPLE_SUITE if str(args.suite).casefold() == "samples" else args.suite.resolve()
+    suite_path = _materialize_suite(requested_suite, output)
+    suite, cases = _load_suite(suite_path, generated_root=suite_path.parent if suite_path != requested_suite else None)
     suite_floor = suite["minimum_physical_parts"]
     if args.minimum_physical_parts is None:
         args.minimum_physical_parts = suite_floor
@@ -509,6 +649,7 @@ def main(argv: list[str] | None = None) -> int:
         "python_import": source,
         "minimum_physical_parts": args.minimum_physical_parts,
         "workers": args.workers,
+        "routing_budget": _routing_budget(args),
         "runs": [],
     }
     (output / "run-manifest.json").write_text(json.dumps(run_manifest, indent=2) + "\n", encoding="utf-8")

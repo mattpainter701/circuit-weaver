@@ -1,0 +1,14 @@
+# Merge these fields into the existing entry in data/package/no_lead/qfn-7x.yaml.
+# Preserve all other upstream footprint-family geometry fields.
+LFCSP-72-1EP_10x10mm_Pitch0.5mm_EP5.3x5.3mm_ThermalVias:
+  size_source:
+    - url: 'https://www.analog.com/media/en/technical-documentation/data-sheets/ADAU1452_1451_1450.pdf'
+      page: 195
+    - url: 'https://www.analog.com/media/en/technical-documentation/data-sheets/ad9528.pdf'
+      page: 68
+    - url: 'https://www.analog.com/media/jp/technical-documentation/data-sheets/AD9528_jp.pdf'
+      page: 66
+  overall_height:
+    minimum: 0.80
+    nominal: 0.85
+    maximum: 1.00

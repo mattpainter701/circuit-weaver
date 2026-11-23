@@ -36,6 +36,60 @@
       "copyright": "Copyright (C) 2026 KiCAD",
       "license": "CC-BY-SA-4.0 with KiCad electronic-design exception (embedded in STEP header)",
       "license_url": "https://gitlab.com/kicad/libraries/kicad-packages3D/-/blob/master/LICENSE.md"
+    },
+    "Package_CSP.3dshapes/LFCSP-72-1EP_10x10mm_P0.5mm_EP5.3x5.3mm.step": {
+      "file": "LFCSP-72-1EP_10x10mm_P0.5mm_EP5.3x5.3mm.step",
+      "sha256": "e0630c98098ffa1ec71785231fa7702f07d995b20da2351b9db9bc099124de1d",
+      "representation": "Generic dimensioned LFCSP-72 footprint-family envelope; nominal XY and maximum overall height; not manufacturer CAD or an AD9528-specific package fit",
+      "body_mm": [
+        10.0,
+        10.0,
+        1.0
+      ],
+      "body_xy_basis": "Upstream generic footprint-family nominal dimensions; the AD9528-specific CP-72-6 drawing has nominal Y 9.75 mm.",
+      "overall_height_mm": {
+        "minimum": 0.8,
+        "nominal": 0.85,
+        "maximum": 1.0,
+        "model_uses": "maximum"
+      },
+      "height_revision_note": "AD9528 data sheet gives min/nom/max 0.80/0.85/1.00 mm; the later ADI CP-72-6 outline gives 0.75/0.85/1.00 mm. Both specify 1.00 mm maximum, used for this envelope.",
+      "pins": 72,
+      "pitch_mm": 0.5,
+      "exposed_pad_mm": [
+        5.3,
+        5.3
+      ],
+      "generator_repository": "https://gitlab.com/kicad/libraries/kicad-footprint-generator",
+      "generator_commit": "a903a695bf4e69905e9e56548f44dd46cdc1130e",
+      "generator_archive_sha256": "3462285efb398d9a3c1c324660e407c8fb3ae552bfdcab018c1aea66607d9e16",
+      "generator_part": "LFCSP-72-1EP_10x10mm_Pitch0.5mm_EP5.3x5.3mm_ThermalVias",
+      "generator_source_sha256": {
+        "data/package/no_lead/qfn-7x.yaml": "d4ef9e656f4e39b3b860cdd3f7987ebd6b41a25f7d9ba544a10fb0625063a60c",
+        "src/generators/package/no_lead/spec.py": "a454a1fa868a248acee3e6192ace21f1c47dfdb0b70a1fecfd87c7bf42e2d7ae",
+        "src/generators/package/no_lead/model.py": "4777f16d944e061eb41c16f6bbaec0648e4e9cea25b74bf993144165971e884e",
+        "src/generators/package/no_lead/qfn_packages.py": "4ddb70e0e69e302a3b8991550db0753f92d68325311b82fa4311df4eae9ecf97",
+        "src/generators/tools/model/export_tools.py": "42bc19e202dffdab374ce4e475198fcd48978464738ff962a53e9f208d99c108"
+      },
+      "generator_overlay_sha256": "d4ef9e656f4e39b3b860cdd3f7987ebd6b41a25f7d9ba544a10fb0625063a60c",
+      "runtime": {
+        "python": "3.11.16",
+        "cadquery": "2.6.1",
+        "cadquery-ocp": "7.8.1.1.post1"
+      },
+      "package_outline": "https://www.analog.com/media/en/technical-documentation/data-sheets/ADAU1452_1451_1450.pdf#page=195",
+      "manufacturer_datasheet": "https://www.analog.com/media/en/technical-documentation/data-sheets/ad9528.pdf#page=68",
+      "manufacturer_outline_dimensions": "https://www.analog.com/media/jp/technical-documentation/data-sheets/AD9528_jp.pdf#page=66",
+      "current_package_outline": "https://www.analog.com/media/en/package-pcb-resources/package/pkg_pdf/lfcspcp/cp-72/cp_72_6.pdf",
+      "copyright": "Copyright (C) 2026 KiCAD",
+      "license": "CC-BY-SA-4.0 with KiCad electronic-design exception (embedded in STEP header)",
+      "license_url": "https://gitlab.com/kicad/libraries/kicad-packages3D/-/blob/master/LICENSE.md",
+      "lead_height_note": "Generator infers lead height as overall_height / 5 because lead_height is not specified; this is a generator heuristic, not an ADI package measurement.",
+      "ad9528_specific_geometry_note": "The AD9528-specific CP-72-6 drawing gives body Y min/nom/max 9.65/9.75/9.85 mm and lead length 0.24/0.42/0.60 mm. This generic family alias retains upstream nominal 10x10 body and upstream lead dimensions; do not treat it as exact AD9528 fit or manufacturer CAD.",
+      "generation_harness": "automation_validation_results/suite-enhancements-20261023/model-generator01/generate_ad9528_model.py",
+      "generator_upstream_yaml_sha256": "40909fbf9fd790ba343fc63a73130bacf7a6a51d09c4da5c2a604d64ac85fb3a",
+      "generator_overlay_asset": "lfcsp72-family-height-overlay.yaml",
+      "generator_overlay_asset_sha256": "3da5066577f0648a427d16d9940a9b2d4b8ad824eb836a327158dd0b90cb9955"
     }
   }
 }

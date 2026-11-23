@@ -2009,7 +2009,37 @@ def split_sheet_allocation(sheet_alloc) -> list | None:
     cut = min(cut, len(components) - 1)
 
     halves = []
+    half_components = (components[:cut], components[cut:])
+    half_refs = [
+        {str(getattr(comp, "source_ref", "")).strip() for comp in part if getattr(comp, "source_ref", "").strip()}
+        for part in half_components
+    ]
+    half_annotations: list[list[str]] = [[], []]
+    unscoped_annotations = []
+    for annotation in sheet_alloc.sheet_annotations:
+        matches = [
+            ref
+            for refs in half_refs
+            for ref in sorted(refs, key=lambda value: (-len(value), value))
+            if re.search(rf"(?<![A-Za-z0-9]){re.escape(ref)}(?![A-Za-z0-9])", annotation)
+        ]
+        if not matches:
+            unscoped_annotations.append(annotation)
+            continue
+        # A note naming references on both pages belongs with the first
+        # allocation containing a referenced component; retain it once.
+        first_ref = matches[0]
+        owner = next(index for index, refs in enumerate(half_refs) if first_ref in refs)
+        half_annotations[owner].append(annotation)
+
+    for annotation in unscoped_annotations:
+        # Keep global notes, but distribute them once and evenly rather than
+        # copying the full sheet-level list to both child pages.
+        owner = min(range(2), key=lambda index: len(half_annotations[index]))
+        half_annotations[owner].append(annotation)
+
     for suffix, part in (("1", components[:cut]), ("2", components[cut:])):
+        half_index = int(suffix) - 1
         # Sheet-level bypass/strap lists mirror the member components' own
         # support passives — recompute per half rather than duplicating.
         half_bypass = [cap for comp in part for cap in comp.bypass_caps]
@@ -2022,7 +2052,7 @@ def split_sheet_allocation(sheet_alloc) -> list | None:
                 components=part,
                 bypass_caps=half_bypass,
                 straps=half_straps,
-                sheet_annotations=list(sheet_alloc.sheet_annotations),
+                sheet_annotations=half_annotations[half_index],
                 lock_paper_size=False,
                 presentation_wiring_policy=sheet_alloc.presentation_wiring_policy,
                 explicit_group=sheet_alloc.explicit_group,

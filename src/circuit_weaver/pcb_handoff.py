@@ -41,7 +41,7 @@ from .manufacturing_readiness import (
 from .pcb_constraints import (
     ConstraintCompilation,
     PcbConstraintConflictError,
-    render_kicad_dru,
+    render_kicad_dru_report,
 )
 from .pcb_contracts import (
     AUTHORITATIVE_GENERATOR,
@@ -246,8 +246,10 @@ def _require_compiled_constraints(
 ) -> ConstraintCompilation:
     """Reject missing/invalid/conflicting constraints before physical rendering."""
 
+    unverified_requirements: tuple[dict[str, Any], ...] = ()
     if isinstance(compiled, ConstraintCompilation):
         constraints = compiled.require_ready()
+        unverified_requirements = compiled.unverified_requirements
     else:
         constraints = tuple(compiled)
     if not constraints:
@@ -262,7 +264,7 @@ def _require_compiled_constraints(
         raise PcbConstraintConflictError(
             f"PCB constraint conflicts must be resolved before mutation: {rendered}"
         )
-    return ConstraintCompilation(tuple(constraints))
+    return ConstraintCompilation(tuple(constraints), unverified_requirements=unverified_requirements)
 
 
 def _placement_tuple(raw: Any) -> tuple[float, float, float, str]:
@@ -631,7 +633,8 @@ def generate_authoritative_board(
         ")",
     ]
     board_text = "\n".join(board_parts)
-    rules_text = render_kicad_dru(compilation)
+    rules_render = render_kicad_dru_report(compilation)
+    rules_text = str(rules_render["text"])
     inspection = inspect_pcb_artifact(target, board_text)
     if inspection.kind is not PcbArtifactKind.AUTHORITATIVE:
         raise PcbHandoffError("authoritative board failed the frozen artifact contract")
@@ -699,6 +702,11 @@ def generate_authoritative_board(
         "fp_lib_snapshot_sha256": snapshot_hash,
         "identity_guard_ids": list(guard_ids),
         "board_constraint_ids": [item.id for item in constraints],
+        "board_constraint_rendering": {key: value for key, value in rules_render.items() if key != "text"},
+        "unverified_board_requirements": [
+            {**dict(item), "verification_status": "not_verified"}
+            for item in compilation.unverified_requirements
+        ],
         "components": component_rows,
         "copper_layers": copper_layers,
     }
@@ -722,6 +730,8 @@ def generate_authoritative_board(
                 evidence_ledger=ledger,
                 constraints=constraints,
                 approved_overrides=approved_drc_overrides,
+                **({"project_context": footprint_library._project_root}
+                   if getattr(footprint_library, "_project_root", None) is not None else {}),
             )
             if drc_result.status != "ok":
                 raise PcbDrcBlocked(f"authoritative DRC could not complete: {drc_result.failure_reason}")

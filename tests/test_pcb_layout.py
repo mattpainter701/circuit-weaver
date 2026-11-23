@@ -6,7 +6,12 @@ import pytest
 
 from circuit_weaver.drc_runner import DrcResult
 from circuit_weaver.kicad_bridge import run_kicad
-from circuit_weaver.pcb_layout import import_routing_session, place_pcb
+from circuit_weaver.pcb_layout import (
+    _native_place_timeout_seconds,
+    _place_pcb_once,
+    import_routing_session,
+    place_pcb,
+)
 from circuit_weaver.placement_optimizer import ComponentPlacement, _cost_connectivity
 
 
@@ -85,6 +90,59 @@ def test_worker_malformed_output_is_a_structured_error(tmp_path, monkeypatch, st
     board = tmp_path / "example.kicad_pcb"
     board.write_bytes(b"board")
     assert run_kicad("inspect", board=str(board))["status"] == "error"
+
+
+@pytest.mark.parametrize("count, expected", [(0, 120), (1, 122), (268, 656), (438, 996), (1000, 1200)])
+def test_native_place_timeout_scales_with_footprint_count(count, expected):
+    assert _native_place_timeout_seconds(count) == expected
+
+
+@pytest.mark.parametrize("count", [-1, True, 2.5, "3"])
+def test_native_place_timeout_rejects_invalid_footprint_count(count):
+    with pytest.raises(ValueError, match="non-negative integer"):
+        _native_place_timeout_seconds(count)
+
+
+def test_native_place_passes_scaled_timeout_to_worker(tmp_path, monkeypatch):
+    source, destination = tmp_path / "source.kicad_pcb", tmp_path / "out.kicad_pcb"
+    source.write_bytes(b"source")
+    footprints = [
+        {"ref": f"R{i}", "footprint": "Resistor_SMD:R_0603_1608Metric", "width": 2.0,
+         "height": 1.0, "courtyard_width": 2.0, "courtyard_height": 1.0,
+         "courtyard_center_x": 0.0, "courtyard_center_y": 0.0, "pads": [],
+         "layer": "front", "locked": False}
+        for i in range(1, 4)
+    ]
+    monkeypatch.setattr("circuit_weaver.pcb_layout.preflight_pcb", lambda *_: {"routable": True})
+    calls = []
+
+    def worker(operation, **kwargs):
+        calls.append((operation, kwargs.get("timeout")))
+        if operation == "inspect":
+            return {"status": "ok", "rectangular_outline": True, "track_count": 0, "zone_count": 0,
+                    "bounds": {"x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0},
+                    "footprints": footprints}
+        Path(kwargs["output"]).write_bytes(b"staged")
+        return {"status": "ok", "silkscreen": {"unresolved_count": 0, "remaining_conflict_count": 0}}
+
+    def optimizer(components, *, config, constraints):
+        return {"placements": {item.source_ref: {"x": 10.0 + index, "y": 10.0,
+                                                  "rotation": 0.0, "layer": "front"}
+                               for index, item in enumerate(components)},
+                "quality": {"review_required": False},
+                "board_width_mm": config.board_width_mm, "board_height_mm": config.board_height_mm}
+
+    monkeypatch.setattr("circuit_weaver.pcb_layout.run_kicad", worker)
+    monkeypatch.setattr("circuit_weaver.pcb_layout.optimize_placement", optimizer)
+    monkeypatch.setattr("circuit_weaver.pcb_layout.run_drc", lambda board, **_: DrcResult(
+        status="ok", board=str(board)))
+    monkeypatch.setattr("circuit_weaver.pcb_layout._publish", lambda staged, dest, *_: Path(staged).replace(dest))
+
+    result = _place_pcb_once(source, destination, tidy_references=True)
+
+    assert result["status"] == "ok"
+    assert calls == [("inspect", None), ("place", 126)]
+    assert destination.read_bytes() == b"staged"
 
 
 def test_native_worker_cannot_modify_original_project(tmp_path, monkeypatch):

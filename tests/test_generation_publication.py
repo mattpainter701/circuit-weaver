@@ -270,3 +270,41 @@ def test_transaction_preserves_relative_public_result_paths(
         Path("project") / "output" / "Transactional.kicad_sch"
     )
     assert all(not Path(path).is_absolute() for path in result["files"])
+
+
+def test_deep_output_keeps_native_staging_and_replacement_paths_below_max_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A final path that fits Windows must not fail from verbose internal names."""
+    filename = "UnseenScale_Multichannel_Analog_Setpoint_Card.kicad_pro"
+    # Reproduce the failing workflow's 235-character published project path.
+    padding = 235 - len(str(tmp_path / "generated" / filename)) - 1
+    assert padding > 0
+    parent = tmp_path / ("x" * padding)
+    output = parent / "generated"
+    observed: list[Path] = []
+
+    def generate(_spec: dict, *, output_dir: str | Path, **_kwargs) -> dict:
+        path = Path(output_dir) / filename
+        observed.append(path)
+        assert len(str(path)) < 260
+        path.write_text("native project", encoding="utf-8")
+        return {"output_dir": str(output_dir), "project": "Deep", "files": [str(path)]}
+
+    original_replace = dispatcher.os.replace
+
+    def replace(source, destination, *args, **kwargs):
+        for candidate in (Path(source), Path(destination)):
+            if candidate.name == filename:
+                observed.append(candidate)
+                assert len(str(candidate)) < 260
+        return original_replace(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(dispatcher, "_generate_artifacts_in_place", generate)
+    monkeypatch.setattr(dispatcher.os, "replace", replace)
+    # The second generation exercises backup and replacement of owned output.
+    for _ in range(2):
+        dispatcher.generate_artifacts({"project": "Deep", "blocks": []}, output_dir=output)
+    assert (output / filename).read_text(encoding="utf-8") == "native project"
+    assert any(path.parent.name.startswith(".cw-b-") for path in observed)
+    assert any(path.parent.name.startswith(".cw-s-") for path in observed)

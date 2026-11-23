@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,33 @@ def native_tools():
             pytest.fail(reason)
         pytest.skip(reason)
     return python, root
+
+
+@pytest.mark.skip_category("optional-tool")
+def test_generated_fanout_bend_keeps_both_signal_connections(tmp_path, native_tools):
+    from circuit_weaver.autoroute_recovery import _repair_generated_fanout_widths
+
+    python, library = native_tools
+    source, partial = tmp_path / "placed.kicad_pcb", tmp_path / "partial.kicad_pcb"
+    fixture = Path(__file__).parent / "fixtures" / "make_fanout_bend.py"
+    subprocess.run([python, str(fixture), str(library), str(source), str(partial)], check=True, timeout=60)
+    snapshots = {
+        path: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (source, source.with_suffix(".kicad_pro"))
+    }
+    candidate, result, evidence = _repair_generated_fanout_widths(
+        source, partial, work=tmp_path, python=python, deadline=time.monotonic() + 120,
+        source_snapshots=snapshots,
+    )
+    widened = json.loads(Path(evidence["after_width_drc"]).read_text())["raw_report"]
+    assert [row["type"] for row in widened["violations"]] == ["clearance", "clearance"]
+    assert widened["unconnected_items"] == []
+    assert evidence["bend_adjustment"]["status"] == "fresh_drc_verified"
+    assert evidence["bend_adjustment"]["report"]["adjusted_bend_count"] == 1
+    assert evidence["pruned_track_count"] == 0
+    assert result.diagnostics_complete and result.passed and not result.findings
+    assert result.board_sha256 == hashlib.sha256(candidate.read_bytes()).hexdigest()
+    assert all(hashlib.sha256(path.read_bytes()).hexdigest() == sha for path, sha in snapshots.items())
 
 
 def _cli(*args):
@@ -78,6 +106,13 @@ def test_real_placement_route_import_and_drc(tmp_path, native_tools, case):
     assert route["drc"]["board"] == str(routed.resolve())
     assert route["drc"]["board_sha256"] == hashlib.sha256(routed.read_bytes()).hexdigest()
     assert route["search"]["completed_attempts"] == 3
+    edge = route["router"]["native_edge_clearance"]
+    assert edge["value_iu"] == before["native_edge_clearance"]["value_iu"]
+    assert edge["source"] == "BOARD_DESIGN_SETTINGS.m_CopperEdgeClearance"
+    assert edge["transport"] == "--router.copper_to_edge_clearance_um"
+    if case == "rc":
+        assert before["native_edge_clearance"]["value_mm"] == 0.8
+        assert edge["argv"] == "--router.copper_to_edge_clearance_um=800"
     assert source.read_bytes() == original
     for suffix in (".kicad_pro", ".kicad_dru"):
         if suffix in settings_before:
@@ -137,6 +172,7 @@ runpy.run_path(fixture, run_name="__main__")
     assert {"board", "net_settings", "meta"}.issubset(project)
     assert project["board"]["design_settings"]["rules"]["min_track_width"] == 0.3
     assert project["board"]["design_settings"]["rules"]["min_clearance"] == 0.25
+    assert project["board"]["design_settings"]["rules"]["min_copper_edge_clearance"] == 0.8
     default_class = next(item for item in project["net_settings"]["classes"] if item["name"] == "Default")
     assert default_class["track_width"] == 0.35
     assert default_class["clearance"] == 0.25

@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from circuit_weaver.project_workflow import _ROUTE_NATIVE_POSTPROCESS_SECONDS
+
 ROOT = Path(__file__).resolve().parents[1]
 HARNESS_PATH = ROOT / "benchmarks" / "general_scale" / "run_general_scale.py"
 SPEC = importlib.util.spec_from_file_location("general_scale_harness", HARNESS_PATH)
@@ -24,6 +26,11 @@ CONNECTIVITY_SPEC = importlib.util.spec_from_file_location("general_scale_connec
 CONNECTIVITY = importlib.util.module_from_spec(CONNECTIVITY_SPEC)
 assert CONNECTIVITY_SPEC and CONNECTIVITY_SPEC.loader
 CONNECTIVITY_SPEC.loader.exec_module(CONNECTIVITY)
+WORKFLOW_PATH = ROOT / "scripts" / "validate_app_workflow.py"
+WORKFLOW_SPEC = importlib.util.spec_from_file_location("general_scale_workflow", WORKFLOW_PATH)
+WORKFLOW = importlib.util.module_from_spec(WORKFLOW_SPEC)
+assert WORKFLOW_SPEC and WORKFLOW_SPEC.loader
+WORKFLOW_SPEC.loader.exec_module(WORKFLOW)
 
 
 def _valid_evidence(tmp_path: Path, count: int = 100, *, spec_hash: str = "spec-hash",
@@ -90,6 +97,11 @@ def test_samples_suite_is_separate_and_keeps_esp32_drill_override_explicit():
     assert general["minimum_physical_parts"] >= 100
 
 
+def test_shared_route_postprocess_budget_matches_workflow_validator():
+    assert HARNESS.ROUTE_NATIVE_POSTPROCESS_SECONDS == WORKFLOW._ROUTE_NATIVE_POSTPROCESS_SECONDS
+    assert HARNESS.ROUTE_NATIVE_POSTPROCESS_SECONDS == _ROUTE_NATIVE_POSTPROCESS_SECONDS == 600
+
+
 def test_input_snapshot_preserves_fixture_and_hashes(tmp_path: Path):
     suite, cases = HARNESS._load_suite(HARNESS.DEFAULT_SUITE)
     original = cases[0]["_spec_path"]
@@ -101,7 +113,23 @@ def test_input_snapshot_preserves_fixture_and_hashes(tmp_path: Path):
     assert cases[0]["_source_spec_path"] == original
     assert snapshot["case_specs"][0]["sha256"] == original_hash
     assert Path(snapshot["suite_path"]).is_file()
+    contract_rows = [row for row in snapshot["case_specs"] if row.get("native_contracts_sha256")]
+    assert contract_rows
+    for row in contract_rows:
+        contract_path = Path(row["native_contracts_path"])
+        assert contract_path.is_file()
+        assert HARNESS.sha256(contract_path) == row["native_contracts_sha256"]
 
+
+
+def test_samples_without_contracts_do_not_gain_preflight_inputs(tmp_path: Path):
+    suite, cases = HARNESS._load_suite(HARNESS.SAMPLE_SUITE)
+    output = tmp_path / "samples"
+    output.mkdir()
+    snapshot = HARNESS._stage_inputs(HARNESS.SAMPLE_SUITE, suite, cases, output)
+    assert len(snapshot["case_specs"]) == 13
+    assert all("native_contracts_path" not in row for row in snapshot["case_specs"])
+    assert all("_contracts_path" not in case for case in cases)
 
 def test_runner_leaves_output_directory_creation_to_workflow_validator(tmp_path: Path, monkeypatch):
     suite, cases = HARNESS._load_suite(HARNESS.DEFAULT_SUITE)
@@ -111,20 +139,24 @@ def test_runner_leaves_output_directory_creation_to_workflow_validator(tmp_path:
     case = cases[0]
     args = argparse.Namespace(
         python=Path("python"), installed=False, expected_wheel=None,
-        iterations=10, attempts=1, route_timeout=10, timeout=300,
+        iterations=10, attempts=1, route_timeout=10, route_max_passes=20,
+        repair_open_connections=False, recovery_timeout=600, timeout=300,
         minimum_physical_parts=100,
     )
+
+    workflow_commands = []
 
     def fake_workflow(command, **kwargs):
         if "-c" in command:
             contracts = json.loads(Path(command[-1]).read_text(encoding="utf-8"))
+            channels = contracts.get("required_channels", [])
             footprints = {}
 
             def connect(ref, pad, net):
                 row = footprints.setdefault(ref, {"ref": ref, "pads": []})
                 row["pads"].append({"number": str(pad), "net": net})
 
-            for channel in contracts:
+            for channel in channels:
                 for ref_key, pad_key, net_key in (
                     ("frontend_ref", "frontend_p_pad", "sensor_p_net"),
                     ("frontend_ref", "frontend_n_pad", "sensor_n_net"),
@@ -144,11 +176,12 @@ def test_runner_leaves_output_directory_creation_to_workflow_validator(tmp_path:
                     connect(channel["post_stage_ref"], channel["post_stage_output_pad"],
                             channel["post_stage_output_net"])
             inventory = {"status": "ok", "footprints": list(footprints.values())}
-            proof = CONNECTIVITY.verify_native_connectivity(inventory, contracts)
+            proof = CONNECTIVITY.verify_native_connectivity(inventory, channels)
             return subprocess.CompletedProcess(
                 command, 0, json.dumps({"inventory": inventory, "connectivity": proof}), ""
             )
         assert "--width" not in command and "--height" not in command
+        workflow_commands.append(command)
         run_dir = Path(command[command.index("--output") + 1])
         assert not run_dir.exists()
         run_dir.mkdir(parents=True)
@@ -163,6 +196,90 @@ def test_runner_leaves_output_directory_creation_to_workflow_validator(tmp_path:
     assert (output / "runs" / case["id"] / "evidence.json").is_file()
     assert (output / "runs" / case["id"] / "native-pcb-inventory.json").is_file()
     assert (output / "logs" / f"{case['id']}.invocation.json").is_file()
+    workflow_command = workflow_commands[0]
+    assert "--native-contracts" in workflow_command
+    assert Path(workflow_command[workflow_command.index("--native-contracts") + 1]) == case["_contracts_path"].resolve()
+    assert workflow_command[workflow_command.index("--native-contracts-sha256") + 1] == case["_contracts_sha256"]
+    assert "--repair-open-connections" not in workflow_command
+    assert workflow_command[workflow_command.index("--route-max-passes") + 1] == "20"
+    invocation = json.loads((output / "logs" / f"{case['id']}.invocation.json").read_text(encoding="utf-8"))
+    assert invocation["routing_budget"] == {
+        "route_timeout_seconds": 10,
+        "route_attempts": 1,
+        "route_max_passes": 20,
+        "repair_open_connections": False,
+        "recovery_timeout_seconds": 600.0,
+        "active_recovery_timeout_seconds": 0,
+        "native_postprocess_budget_seconds": 600,
+        "minimum_route_parent_timeout_seconds": 610,
+        "route_command_timeout_seconds": 610,
+    }
+
+
+def test_run_case_forwards_opt_in_route_recipe_and_records_budget(tmp_path: Path, monkeypatch):
+    spec_path = tmp_path / "relay.yaml"
+    spec_path.write_text("name: relay\n", encoding="utf-8")
+    output = tmp_path / "run"
+    case = {
+        "id": "relay_probe", "family": "relay", "_spec_path": spec_path,
+        "_spec_sha256": HARNESS.sha256(spec_path), "_source_spec_path": spec_path,
+        "board_mm": [10, 10],
+    }
+    args = argparse.Namespace(
+        python=Path("python"), installed=False, expected_wheel=None,
+        iterations=1, attempts=1, route_timeout=1200, route_max_passes=8,
+        repair_open_connections=True, recovery_timeout=1200.0, timeout=7200,
+        minimum_physical_parts=1,
+    )
+    commands = []
+
+    def stop_after_invocation(command, **_kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 1, "", "intentional test stop")
+
+    monkeypatch.setattr(HARNESS.subprocess, "run", stop_after_invocation)
+    result = HARNESS._run_case(case, args, output)
+    invocation = json.loads((output / "logs" / "relay_probe.invocation.json").read_text(encoding="utf-8"))
+
+    assert result["status"] == "FAILED"
+    command = commands[0]
+    assert command[command.index("--route-timeout") + 1] == "1200"
+    assert command[command.index("--route-max-passes") + 1] == "8"
+    assert "--repair-open-connections" in command
+    assert command[command.index("--recovery-timeout") + 1] == "1200.0"
+    assert invocation["timeout_seconds"] == 7200
+    assert invocation["routing_budget"]["minimum_route_parent_timeout_seconds"] == 3000
+    assert invocation["routing_budget"]["route_command_timeout_seconds"] == 3000
+
+
+def test_opt_in_recovery_requires_outer_case_timeout_for_route_and_native_postprocess(tmp_path):
+    output = tmp_path / "too-short"
+    with pytest.raises(SystemExit) as error:
+        HARNESS.main([
+            "--suite", str(HARNESS.SAMPLE_SUITE), "--output", str(output),
+            "--timeout", "2999", "--route-timeout", "1200",
+            "--route-max-passes", "8", "--repair-open-connections",
+            "--recovery-timeout", "1200",
+        ])
+    assert error.value.code == 2
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(("option", "value"), [
+    ("--route-max-passes", "-1"),
+    ("--route-max-passes", "10000"),
+    ("--route-timeout", "0"),
+    ("--recovery-timeout", "nan"),
+    ("--recovery-timeout", "1800.1"),
+])
+def test_general_runner_rejects_invalid_route_recipe_before_output_creation(tmp_path, option, value):
+    output = tmp_path / "invalid-route-recipe"
+    with pytest.raises(SystemExit) as error:
+        HARNESS.main([
+            "--suite", str(HARNESS.SAMPLE_SUITE), "--output", str(output), option, value,
+        ])
+    assert error.value.code == 2
+    assert not output.exists()
 
 
 def test_run_case_preserves_venv_interpreter_and_its_site_packages(tmp_path: Path, monkeypatch):
@@ -276,6 +393,44 @@ def test_native_connectivity_probe_preserves_selected_executable(tmp_path: Path,
     assert commands[0][0] == str(executable.absolute())
 
 
+@pytest.mark.parametrize("signal_proof", [None, {"status": "failed", "verified_paths": 1},
+                                          {"status": "pass", "verified_paths": 0}])
+def test_native_signal_paths_require_complete_passing_proof(tmp_path: Path, monkeypatch, signal_proof):
+    board = tmp_path / "board.kicad_pcb"
+    board.write_bytes(b"native board")
+    output, logs = tmp_path / "run", tmp_path / "logs"
+    output.mkdir()
+    logs.mkdir()
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, json.dumps({
+            "inventory": {"status": "ok", "footprints": []}, "signal_connectivity": signal_proof,
+        }), "")
+
+    monkeypatch.setattr(HARNESS.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="signal path verification did not pass"):
+        HARNESS._inspect_and_verify_connectivity(
+            {"id": "signal_probe", "required_paths": [{"id": "controller_to_load"}]},
+            argparse.Namespace(python=Path("python"), installed=False, timeout=60), output, logs, board,
+        )
+
+
+@pytest.mark.parametrize("minimum", [155, True, "200"])
+def test_suite_rejects_case_floor_below_suite_or_malformed(tmp_path: Path, monkeypatch, minimum):
+    import yaml
+
+    monkeypatch.setattr(HARNESS, "REPO", tmp_path)
+    (tmp_path / "design.yaml").write_text("project: fixture\n", encoding="utf-8")
+    suite = {"schema_version": 1, "minimum_physical_parts": 156, "cases": [
+        {"id": f"case_{i}", "family": f"family_{i}", "spec": "design.yaml",
+         "minimum_physical_parts": minimum if i == 0 else 200} for i in range(3)
+    ]}
+    path = tmp_path / "suite.yaml"
+    path.write_text(yaml.safe_dump(suite), encoding="utf-8")
+    with pytest.raises(ValueError, match="minimum_physical_parts must be an integer of at least 156"):
+        HARNESS._load_suite(path)
+
+
 def test_main_aggregates_canonical_pass_with_verbose_workflow_status(tmp_path: Path, monkeypatch, capsys):
     suite_path = HARNESS.DEFAULT_SUITE
     case = {"id": "fixture", "family": "test"}
@@ -284,7 +439,7 @@ def test_main_aggregates_canonical_pass_with_verbose_workflow_status(tmp_path: P
         "benchmark_tree_sha256": "benchmark-hash", "package_tree_sha256": "package-hash",
     }
     monkeypatch.setattr(HARNESS, "source_state", lambda: dict(source))
-    monkeypatch.setattr(HARNESS, "_load_suite", lambda _path: ({"minimum_physical_parts": 1}, [case]))
+    monkeypatch.setattr(HARNESS, "_load_suite", lambda _path, **kwargs: ({"minimum_physical_parts": 1}, [case]))
     monkeypatch.setattr(HARNESS, "_stage_inputs", lambda *_args: {"suite_path": "staged-suite.yaml"})
     monkeypatch.setattr(HARNESS, "_source_probe", lambda *_args: {"package_source_sha256": "package-hash"})
     monkeypatch.setattr(HARNESS, "_run_case", lambda *_args: {

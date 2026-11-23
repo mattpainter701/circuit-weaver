@@ -16,8 +16,18 @@ from .component_db import ComponentDef, PinDef
 from .drc_runner import run_drc
 from .evidence import EvidenceLedger
 from .kicad_bridge import run_kicad
+from .kicad_project_context import inspect_project_footprint_context, stage_project_footprint_context
 from .pcb_handoff import _pcb_output_lock, _publish_staged_transaction
-from .placement_optimizer import PlacementConfig, _position_values, optimize_placement
+from .placement_optimizer import (
+    PlacementConfig,
+    _is_board_dimension_constraint,
+    _position_values,
+    optimize_placement,
+)
+
+_NATIVE_PLACE_BASE_TIMEOUT_SECONDS = 120
+_NATIVE_PLACE_SECONDS_PER_FOOTPRINT = 2
+_NATIVE_PLACE_MAX_TIMEOUT_SECONDS = 20 * 60
 
 
 def _rotated_offset(x: float, y: float, rotation: float) -> tuple[float, float]:
@@ -61,6 +71,31 @@ def _native_origin(placement: dict, offset: tuple[float, float], bounds: dict) -
     return x, y
 
 
+def _validate_design_outline_constraints(constraints: list[dict], bounds: dict) -> None:
+    """Check only placement-stage board-outline declarations against native bounds."""
+    board_targets = {"board", "board_outline", "pcb", "outline"}
+    for rule in constraints:
+        if not isinstance(rule, dict):
+            continue
+        if not _is_board_dimension_constraint(rule):
+            continue
+        target = str(rule.get("target") or rule.get("ref") or "").strip().lower()
+        nested = rule.get("board") if isinstance(rule.get("board"), dict) else {}
+        for axis in ("width", "height"):
+            value = rule.get(f"board_{axis}_mm")
+            if value is None:
+                value = nested.get(f"{axis}_mm")
+            if value is None and target in board_targets:
+                value = rule.get(f"{axis}_mm")
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or abs(float(value) - bounds[axis]) > 0.1
+            ):
+                raise ValueError("Design board dimensions do not match the native Edge.Cuts outline")
+
+
 def _design_intent(spec: dict[str, Any] | None, footprints: list[dict], bounds: dict) -> tuple[dict, list[dict]]:
     """Bind optional design intent to real board references, footprints and nets.
 
@@ -94,16 +129,7 @@ def _design_intent(spec: dict[str, Any] | None, footprints: list[dict], bounds: 
             if actual.get(str(pin)) != net:
                 raise ValueError(f"{item['ref']}.{pin}: design net does not match the native board")
     constraints = list(compiled.ir.pcb_constraints)
-    # A placement command may move parts, never resize an existing board.
-    for rule in constraints:
-        if str(rule.get("target", "")).lower() in {"board", "board_outline", "pcb", "outline"}:
-            for key, axis in (("width_mm", "width"), ("height_mm", "height")):
-                value = rule.get(key, rule.get(f"board_{key}"))
-                if value is not None and (
-                    isinstance(value, bool) or not isinstance(value, (int, float))
-                    or not math.isfinite(value) or abs(float(value) - bounds[axis]) > 0.1
-                ):
-                    raise ValueError("Design board dimensions do not match the native Edge.Cuts outline")
+    _validate_design_outline_constraints(constraints, bounds)
     return by_ref, constraints
 
 
@@ -140,8 +166,33 @@ def _hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _prepare_settings(source: Path, staged: Path) -> dict[Path, str | None]:
+def _require_modern_project_settings(source: Path) -> None:
+    """Reject mutating workflows that would silently ignore legacy KiCad rules."""
+    source = source.expanduser().resolve()
+    legacy_project = source.with_suffix(".pro")
+    modern_project = source.with_suffix(".kicad_pro")
+    if legacy_project.is_file() and not modern_project.is_file():
+        raise ValueError(
+            "Legacy KiCad project settings (.pro) are present without a modern .kicad_pro file; "
+            "convert the project rules in KiCad before routing or modifying this board"
+        )
+
+
+def _prepare_settings(source: Path, staged: Path, project_context: str | Path | None = None) -> dict[Path, str | None]:
+    _require_modern_project_settings(source)
     snapshots = {source: _hash(source)}
+    context_root = Path(project_context).resolve() if project_context is not None else source.resolve().parent
+    if context_root.is_file():
+        context_root = context_root.parent
+    context_inventory = inspect_project_footprint_context(context_root)
+    snapshots.update({Path(path): digest for path, digest in context_inventory.get("source_hashes", {}).items()})
+    snapshots.update({
+        Path(path): digest
+        for path, digest in context_inventory.get("library_manifest_sha256", {}).items()
+    })
+    for path in context_inventory.get("watch_paths", []):
+        snapshots.setdefault(Path(path), None)
+    stage_project_footprint_context(context_root, staged.parent)
     for suffix in (".kicad_pro", ".kicad_dru"):
         origin = source.with_suffix(suffix)
         if origin.is_file():
@@ -153,8 +204,13 @@ def _prepare_settings(source: Path, staged: Path) -> dict[Path, str | None]:
 
 
 def _check_snapshots(snapshots: dict[Path, str | None]) -> None:
+    from .kicad_project_context import footprint_library_tree_sha256
     for source, digest in snapshots.items():
-        if (_hash(source) if source.exists() else None) != digest:
+        if source.is_dir():
+            current = footprint_library_tree_sha256(source)
+        else:
+            current = _hash(source) if source.exists() else None
+        if current != digest:
             raise ValueError("Source board, session, or project settings changed during processing")
 
 
@@ -235,6 +291,27 @@ def _native_reference_gap_floor(footprints: list[dict[str, Any]]) -> float:
     return max(heights, default=0.1) + 0.4
 
 
+def _effective_min_component_gap(
+    design_spec: dict[str, Any] | None, reference_gap_floor: float,
+    feedback_min_component_gap_mm: float | None = None,
+) -> float:
+    """Return the maximum authored, native-label, and retry spacing floor."""
+    candidates = [_design_min_component_gap(design_spec), reference_gap_floor]
+    if feedback_min_component_gap_mm is not None:
+        candidates.append(feedback_min_component_gap_mm)
+    return max(candidates)
+
+
+def _native_place_timeout_seconds(footprint_count: int) -> int:
+    """Bound KiCad's native placement/silkscreen pass according to board size."""
+    if isinstance(footprint_count, bool) or not isinstance(footprint_count, int) or footprint_count < 0:
+        raise ValueError("footprint_count must be a non-negative integer")
+    return min(
+        _NATIVE_PLACE_MAX_TIMEOUT_SECONDS,
+        _NATIVE_PLACE_BASE_TIMEOUT_SECONDS + footprint_count * _NATIVE_PLACE_SECONDS_PER_FOOTPRINT,
+    )
+
+
 def _place_pcb_once(
     board_path: str | Path, output_path: str | Path, *, iterations: int = 5000, seed: int = 0,
     overwrite: bool = False, kicad_python_path: str | Path | None = None,
@@ -257,6 +334,7 @@ def _place_pcb_once(
             raise ValueError("Placement output must be a .kicad_pcb file")
         if source == destination:
             raise ValueError("Choose a separate output board to preserve the original PCB")
+        _require_modern_project_settings(source)
         if expected_snapshots is not None:
             _check_snapshots(expected_snapshots)
         preflight = preflight_pcb(source)
@@ -283,9 +361,19 @@ def _place_pcb_once(
         intent, constraints = _design_intent(design_spec, inspection["footprints"], bounds)
         authored_constraints = constraints
         constraints = _center_constraints(constraints, inspection["footprints"], bounds)
-        if feedback_min_component_gap_mm is not None:
+        authored_gap = _design_min_component_gap(design_spec)
+        fallback_gap = max(authored_gap, feedback_min_component_gap_mm or 0.0)
+        preferred_gap = authored_gap
+        if tidy_references:
+            preferred_gap = _effective_min_component_gap(
+                design_spec, reference_gap_floor, feedback_min_component_gap_mm)
+            constraints.append({"kind": "placement", "target": "board",
+                                "min_component_gap_mm": preferred_gap})
+        elif feedback_min_component_gap_mm is not None:
             constraints.append({"kind": "placement", "target": "board",
                                 "min_component_gap_mm": feedback_min_component_gap_mm})
+        effective_gap = preferred_gap if tidy_references else (
+            feedback_min_component_gap_mm if feedback_min_component_gap_mm is not None else authored_gap)
         components = []
         center_offsets = {}
         # Native iteration order may depend on regenerated KiCad UUIDs. A seed
@@ -306,6 +394,54 @@ def _place_pcb_once(
             component.placement_layer = item["layer"]
             component.placement_geometry_status = "board_geometry"
             component.placement_reference_size_mm = item.get("reference_size_mm")
+            component.placement_native_footprint_id = item.get("footprint_id")
+            component.placement_native_surface_copper_layer_id = item.get(
+                "native_surface_copper_layer_id"
+            )
+            component.placement_native_surface_copper_side = item.get(
+                "native_surface_copper_side"
+            )
+            component.placement_native_board_copper_layer_ids = item.get(
+                "native_board_copper_layer_ids"
+            )
+            component.placement_native_board_copper_layer_inventory_complete = item.get(
+                "native_board_copper_layer_inventory_complete"
+            )
+            component.placement_native_known_copper_layer_ids = item.get(
+                "native_known_copper_layer_ids"
+            )
+            component.placement_native_known_copper_layer_inventory_complete = item.get(
+                "native_known_copper_layer_inventory_complete"
+            )
+            component.placement_native_footprint_is_smd = item.get("native_footprint_is_smd")
+            component.placement_native_opposite_courtyard_known = item.get(
+                "native_opposite_courtyard_known"
+            )
+            component.placement_native_opposite_courtyard_present = item.get(
+                "native_opposite_courtyard_present"
+            )
+            inspected_pad_geometry = item.get("pad_geometry") or []
+            inspected_pads = item.get("pads") or []
+            # Retain each native pad's net even if one geometry accessor fails;
+            # the optimizer must count that endpoint as ambiguous, not omit it.
+            component.placement_native_pad_geometry = [
+                {**(inspected_pad_geometry[index] if index < len(inspected_pad_geometry) else {}),
+                 "number": pad.get("number", f"__missing_pad_{index}"),
+                 "net": pad.get("net", ""),
+                 "known_shape": bool(index < len(inspected_pad_geometry)
+                                      and inspected_pad_geometry[index].get("known_shape") is True),
+                 "surface_shape_known": bool(index < len(inspected_pad_geometry)
+                                              and inspected_pad_geometry[index].get("surface_shape_known") is True),
+                 "native_roundrect": bool(index < len(inspected_pad_geometry)
+                                           and inspected_pad_geometry[index].get("native_roundrect") is True)}
+                for index, pad in enumerate(inspected_pads)
+            ]
+            if len(inspected_pad_geometry) != len(inspected_pads):
+                component.placement_native_pad_geometry.append({
+                    "number": "__inventory_mismatch__", "net": "", "known_shape": False,
+                    "surface_shape_known": False, "native_roundrect": False,
+                })
+            component.placement_native_reference_locked = item.get("reference_locked")
             if design_component:
                 component.functional_section = design_component.functional_section
                 component.block_id = design_component.block_id
@@ -334,12 +470,37 @@ def _place_pcb_once(
                                     "x_mm": item["x"] + dx - bounds["x"],
                                     "y_mm": item["y"] + dy - bounds["y"],
                                     "rotation": item["rotation"], "layer": item["layer"]})
-        result = optimize_placement(
-            components, config=PlacementConfig(board_width_mm=bounds["width"], board_height_mm=bounds["height"],
-                                                iterations=iterations, seed=seed), constraints=constraints,
-        )
+        placement_config = PlacementConfig(board_width_mm=bounds["width"], board_height_mm=bounds["height"],
+                                           iterations=iterations, seed=seed)
+        gap_searches = []
+        result = optimize_placement(components, config=placement_config, constraints=constraints)
+        if tidy_references:
+            gap_searches.append({"min_component_gap_mm": effective_gap, "iterations": iterations, "seed": seed,
+                                 "review_required": bool(result.get("quality", {}).get("review_required")),
+                                 "reason": "native_reference_gap_preference"})
         if any(abs(result[f"board_{axis}_mm"] - bounds[axis]) > 0.1 for axis in ("width", "height")):
             raise ValueError("Design placement constraints cannot resize the native board outline")
+        if (tidy_references and result["quality"]["review_required"]
+                and preferred_gap > fallback_gap):
+            # The native-derived floor is a preferred seed constraint. If it
+            # makes optimizer geometry infeasible, retry once at the exact
+            # authored/feedback floor; every ordinary placement and native gate
+            # still has to pass before publication.
+            effective_gap = fallback_gap
+            constraints.append({"kind": "placement", "target": "board",
+                                "min_component_gap_mm": effective_gap})
+            fallback_result = optimize_placement(components, config=placement_config, constraints=constraints)
+            gap_searches.append({"min_component_gap_mm": effective_gap, "iterations": iterations, "seed": seed,
+                                 "review_required": bool(fallback_result.get("quality", {}).get("review_required")),
+                                 "reason": "native_floor_optimizer_review_required"})
+            result = fallback_result
+            if any(abs(result[f"board_{axis}_mm"] - bounds[axis]) > 0.1 for axis in ("width", "height")):
+                raise ValueError("Design placement constraints cannot resize the native board outline")
+        if tidy_references:
+            result["native_reference_gap_floor_mm"] = reference_gap_floor
+            result["preferred_min_component_gap_mm"] = preferred_gap
+            result["effective_min_component_gap_mm"] = effective_gap
+            result["gap_search_attempts"] = gap_searches
         if result["quality"]["review_required"]:
             return {"status": "error", "message": "No valid placement found within the board constraints",
                     "placement": result}
@@ -362,18 +523,20 @@ def _place_pcb_once(
             snapshots.update(original_snapshots)
             applied = run_kicad("place", board=str(source), output=str(staged), placements=placements,
                                 tidy_references=tidy_references,
-                                python_path=kicad_python_path)
+                                python_path=kicad_python_path,
+                                timeout=_native_place_timeout_seconds(len(placements)))
             if applied["status"] != "ok":
-                return applied
+                return {**applied, "placement": result} if tidy_references else applied
             if tidy_references:
                 result["silkscreen"] = applied.get("silkscreen", {})
             _restore_settings(source, staged, snapshots)
-            drc = run_drc(staged, evidence_ledger=EvidenceLedger())
+            drc = run_drc(staged, evidence_ledger=EvidenceLedger(), project_context=source.parent)
             # An unrouted board necessarily has unconnected pads. All other
             # DRC errors still prevent publication, including pad clearances.
             blockers = [f for f in drc.findings if f.severity == "blocker" and f.rule_id != "CW-DRC-002"]
             if drc.status != "ok" or blockers:
-                return {"status": "error", "message": "Placed board failed physical DRC", "drc": drc.to_dict()}
+                failure = {"status": "error", "message": "Placed board failed physical DRC", "drc": drc.to_dict()}
+                return {**failure, "placement": result} if tidy_references else failure
             _publish(staged, destination, snapshots, overwrite)
         return {"status": "ok", "output_path": str(destination), "output_kind": "placed_kicad_board",
                 "placement": result, "drc": {**drc.to_dict(), "board": str(destination)}, "fabrication_ready": False,
@@ -442,8 +605,14 @@ def place_pcb(
                 label_clear = (has_native_report and type(unresolved) is int and unresolved == 0
                                and type(remaining) is int and remaining == 0)
                 success = candidate.get("status") == "ok" and label_clear
+                placement = candidate.get("placement")
+                reported_gap = placement.get("effective_min_component_gap_mm") if isinstance(placement, dict) else None
+                applied_gap = (reported_gap if isinstance(reported_gap, (int, float))
+                               and not isinstance(reported_gap, bool) and math.isfinite(reported_gap)
+                               and reported_gap >= 0 else None)
                 attempts.append({"attempt": attempt_index, "seed": attempt_seed, "iterations": iterations,
-                                 "min_component_gap_mm": (feedback_gap if feedback_gap is not None else base_gap),
+                                 "min_component_gap_mm": (applied_gap if applied_gap is not None else
+                                                           feedback_gap if feedback_gap is not None else base_gap),
                                  "status": "accepted" if success else "rejected",
                                  "candidate_status": candidate.get("status", "error"),
                                  "unresolved_count": unresolved, "remaining_conflict_count": remaining})
@@ -464,14 +633,13 @@ def place_pcb(
                     if unresolved is None or remaining is None:
                         break
                     if not label_clear:
-                        current_gap = feedback_gap if feedback_gap is not None else base_gap
-                        placement = candidate.get("placement")
-                        raw_floor = (placement.get("native_reference_gap_floor_mm")
-                                     if isinstance(placement, dict) else None)
-                        reference_floor = (raw_floor if isinstance(raw_floor, (int, float))
-                                           and not isinstance(raw_floor, bool) and math.isfinite(raw_floor)
-                                           and raw_floor >= 0 else current_gap)
-                        feedback_gap = max(current_gap + 0.5, reference_floor)
+                        current_gap = (applied_gap if applied_gap is not None else
+                                       feedback_gap if feedback_gap is not None else base_gap)
+                        # The native estimate may already have proved infeasible
+                        # and fallen back to a smaller physical gap. Jumping to
+                        # that same estimate skips feasible intermediate spacing
+                        # and can terminate the retry before native label checks.
+                        feedback_gap = max(current_gap + 0.5, base_gap)
                     continue
                 _publish(candidate_path, destination, original_snapshots, overwrite)
                 candidate["output_path"] = str(destination)
@@ -502,14 +670,91 @@ def place_pcb(
         return {"status": "error", "message": str(exc)}
 
 
+def _thermal_only_violations(drc: Any, board: Path) -> list[dict[str, Any]] | None:
+    """Select only fresh, complete native thermal errors; never waive other faults."""
+    raw = getattr(drc, "raw_report", None)
+    if (getattr(drc, "status", None) != "ok" or not isinstance(raw, dict)
+            or getattr(drc, "board_sha256", None) != _hash(board)
+            or not isinstance(raw.get("unconnected_items"), list) or raw["unconnected_items"]
+            or not isinstance(raw.get("schematic_parity"), list) or raw["schematic_parity"]):
+        return None
+    violations = raw.get("violations")
+    if not isinstance(violations, list):
+        return None
+    thermal = []
+    for row in violations:
+        if not isinstance(row, dict):
+            return None
+        if row.get("type") == "lib_footprint_issues" and row.get("severity") == "warning":
+            continue
+        if row.get("type") != "starved_thermal" or row.get("severity") != "error":
+            return None
+        items = row.get("items")
+        if (not isinstance(items, list) or len(items) != 2
+                or any(not isinstance(item, dict) or not isinstance(item.get("uuid"), str)
+                       or not item["uuid"].strip() for item in items)):
+            return None
+        thermal.append(row)
+    blockers = [finding for finding in getattr(drc, "findings", []) if finding.severity == "blocker"]
+    if (not thermal or len(thermal) > 16 or len(blockers) != len(thermal)
+            or getattr(drc, "blocker_count", None) != len(thermal)
+            or any(finding.rule_id != "CW-DRC-787" for finding in blockers)):
+        return None
+    return thermal
+
+
+def _verified_plane_stitching(result: dict[str, Any]) -> bool:
+    report = result.get("plane_stitching")
+    fill = result.get("zone_refill")
+    flags = ("source_identity_preserved", "original_footprints_and_text_preserved",
+             "original_board_geometry_preserved", "existing_copper_preserved", "saved_added_vias_verified")
+    if (not isinstance(report, dict) or report.get("status") != "candidate_only_requires_full_drc"
+            or report.get("net") != "GND" or type(report.get("added_vias")) is not int
+            or not 0 < report["added_vias"] <= 16 or any(report.get(key) is not True for key in flags)
+            or not isinstance(fill, dict) or fill.get("status") != "verified"
+            or any(fill.get(key) is not True for key in (
+                "saved_fill_geometry_verified", "zone_definitions_preserved", "copper_stackup_preserved"))
+            or fill.get("unconnected_ground_pads") != []
+            or not isinstance(fill.get("unconnected_pads_by_net"), dict)
+            or fill["unconnected_pads_by_net"].get("GND") != []):
+        return False
+    rows, connections = fill.get("rows"), fill.get("connected_copper")
+    if (not isinstance(rows, list) or len(rows) < 2 or not isinstance(connections, list)
+            or len(connections) != len(rows)
+            or any(not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"]
+                   or row.get("net") != "GND" or type(row.get("island_count")) is not int
+                   or row["island_count"] != 0 or isinstance(row.get("area_mm2"), bool)
+                   or not isinstance(row.get("area_mm2"), (int, float))
+                   or not math.isfinite(row["area_mm2"]) or row["area_mm2"] <= 0 for row in rows)
+            or any(not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"]
+                   or type(row.get("connected_copper_count")) is not int
+                   or row["connected_copper_count"] < 1 for row in connections)):
+        return False
+    return (len({row["id"] for row in rows}) == len(rows)
+            and {row["id"] for row in rows} == {row.get("id") for row in connections})
+
+
+def _clean_plane_repair_drc(drc: Any) -> bool:
+    """A repair may retain library warnings but may not introduce a physical fault."""
+    raw = getattr(drc, "raw_report", None)
+    return (getattr(drc, "passed", False) is True and isinstance(raw, dict)
+            and raw.get("unconnected_items") == [] and raw.get("schematic_parity") == []
+            and isinstance(raw.get("violations"), list)
+            and all(isinstance(row, dict) and row.get("type") == "lib_footprint_issues"
+                    and row.get("severity") == "warning" for row in raw["violations"]))
+
+
 def import_routing_session(
     board_path: str | Path, session_path: str | Path, output_path: str | Path, *,
     overwrite: bool = False, kicad_python_path: str | Path | None = None,
     expected_hashes: dict[Path, str | None] | None = None,
+    repair_plane_thermals: bool = False,
 ) -> dict[str, Any]:
     """Import routes into a separate PCB and publish only after native KiCad DRC."""
     source, session, destination = Path(board_path).resolve(), Path(session_path).resolve(), Path(output_path).resolve()
     try:
+        if not isinstance(repair_plane_thermals, bool):
+            raise ValueError("repair_plane_thermals must be a boolean")
         if destination.suffix.lower() != ".kicad_pcb":
             raise ValueError("Routed board output must be a .kicad_pcb file")
         if source == destination:
@@ -528,14 +773,60 @@ def import_routing_session(
                                  python_path=kicad_python_path)
             if imported["status"] != "ok":
                 return imported
+            zone_refill = imported.get("zone_refill")
+            if imported.get("zone_count", 0) and (
+                not isinstance(zone_refill, dict) or zone_refill.get("status") != "verified"
+                or zone_refill.get("saved_fill_geometry_verified") is not True
+            ):
+                return {"status": "error", "message": "Imported routing lacks verified fresh zone fills"}
             _restore_settings(source, staged, snapshots)
-            drc = run_drc(staged, evidence_ledger=EvidenceLedger())
+            drc = run_drc(staged, evidence_ledger=EvidenceLedger(), project_context=source.parent)
+            stitching = {"status": "not_needed", "used": False} if repair_plane_thermals else None
+            if repair_plane_thermals and not drc.passed:
+                violations = _thermal_only_violations(drc, staged)
+                _check_snapshots(snapshots)
+                if violations is not None:
+                    repaired = Path(folder) / "plane-thermal-repaired.kicad_pcb"
+                    changed = run_kicad(
+                        "repair_plane_thermals", board=str(staged), output=str(repaired),
+                        violations=violations, expected_board_sha256=drc.board_sha256,
+                        python_path=kicad_python_path,
+                    )
+                    _check_snapshots(snapshots)
+                    if (changed.get("status") != "ok" or not repaired.is_file()
+                            or not _verified_plane_stitching(changed)):
+                        return {"status": "error", "message": "Ground-plane thermal repair was not verified; "
+                                "board was not published", "drc": drc.to_dict(), "plane_stitching": changed}
+                    _restore_settings(source, repaired, snapshots)
+                    final_drc = run_drc(repaired, evidence_ledger=EvidenceLedger(), project_context=source.parent)
+                    _check_snapshots(snapshots)
+                    if final_drc.board_sha256 != _hash(repaired):
+                        raise ValueError("Thermal repair DRC does not match the saved candidate bytes")
+                    accepted = _clean_plane_repair_drc(final_drc)
+                    stitching = {"status": "verified" if accepted else "rejected", "used": True,
+                                 "before_drc": drc.to_dict(), "native": changed["plane_stitching"]}
+                    if not accepted:
+                        return {"status": "error", "message": "Ground-plane thermal repair did not produce a "
+                                "clean native DRC report; board was not published", "drc": final_drc.to_dict(),
+                                "plane_stitching": stitching}
+                    drc = final_drc
+                    if drc.passed:
+                        staged = repaired
+                        zone_refill = changed["zone_refill"]
             if not drc.passed:
                 return {"status": "error", "message": "Imported routing failed KiCad DRC; board was not published",
-                        "drc": drc.to_dict()}
+                        "drc": drc.to_dict(), **({"plane_stitching": stitching} if stitching is not None else {})}
+            if drc.board_sha256 != _hash(staged):
+                raise ValueError("Final import DRC does not match the saved board bytes")
             _publish(staged, destination, snapshots, overwrite)
         return {"status": "ok", "output_path": str(destination), "output_kind": "routed_kicad_board",
                 "drc": {**drc.to_dict(), "board": str(destination)},
+                **({"zone_refill": zone_refill} if zone_refill is not None else {}),
+                **({"plane_stitching": stitching} if stitching is not None else {}),
+                **({"session_scope": "input_routing_session_before_native_plane_stitching",
+                    "session_includes_plane_stitching": False} if stitching and stitching.get("used") else {}),
+                **({"session_scope": "input_routing_session_before_native_import_and_fill"}
+                   if stitching and not stitching.get("used") else {}),
                 "routing_complete": True, "fabrication_ready": False}
     except (OSError, ValueError) as exc:
         return {"status": "error", "message": str(exc)}

@@ -1,0 +1,66 @@
+schema_version: 1
+description: Diverse connected-system stress cases; measured counts and native results are pending.
+minimum_physical_parts: 100
+cases:
+- id: relay_768
+  spec: cases/relay_768.yaml
+  architecture: architecture/relay_768.json
+  contract: contracts/relay_768.json
+  family: 768-channel serialized relay output card
+  minimum_physical_parts: 1000
+  board_mm:
+  - 520
+  - 420
+  required_path_count: 768
+  required_channel_count: 0
+  comparison_fixture_reuse: false
+- id: ble_sensor_8
+  spec: cases/ble_sensor_8.yaml
+  architecture: architecture/ble_sensor_8.json
+  contract: contracts/ble_sensor_8.json
+  family: nRF52840 BLE sensor node with connected multichannel acquisition
+  minimum_physical_parts: 140
+  board_mm:
+  - 180
+  - 135
+  required_path_count: 8
+  required_channel_count: 8
+  comparison_fixture_reuse: false
+- id: sdr_clock_carrier
+  spec: cases/sdr_clock_carrier.yaml
+  architecture: architecture/sdr_clock_carrier.json
+  contract: contracts/sdr_clock_carrier.json
+  family: AD9528 external SDR clock/control carrier
+  minimum_physical_parts: 180
+  board_mm:
+  - 260
+  - 190
+  required_path_count: 74
+  required_channel_count: 8
+  comparison_fixture_reuse: false
+- id: ot_mixed_io_comparison
+  spec: cases/ot_mixed_io_comparison.yaml
+  architecture: architecture/ot_mixed_io_comparison.json
+  contract: contracts/ot_mixed_io_comparison.json
+  family: 'Comparison fixture reuse: existing connected field gateway with analog inputs, RS-485, and
+    CAN'
+  minimum_physical_parts: 100
+  board_mm:
+  - 160
+  - 120
+  required_path_count: 0
+  required_channel_count: 8
+  comparison_fixture_reuse: true
+- id: dual_dac_72_comparison
+  spec: cases/dual_dac_72_comparison.yaml
+  architecture: architecture/dual_dac_72_comparison.json
+  contract: contracts/dual_dac_72_comparison.json
+  family: 'Comparison fixture reuse: existing 72-channel dual-DAC card with SPI selection and per-output
+    filters'
+  minimum_physical_parts: 350
+  board_mm:
+  - 300
+  - 220
+  required_path_count: 110
+  required_channel_count: 0
+  comparison_fixture_reuse: true

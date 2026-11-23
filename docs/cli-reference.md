@@ -7,6 +7,7 @@ projects and choose new/open in an interactive terminal. For automation:
 
 ```bash
 circuit-weaver runtime-info --json
+circuit-weaver library-access ADF4351 --project-root ./rf-project --json
 circuit-weaver start ./sensor --spec ./sensor.yaml --json
 circuit-weaver open ./sensor --json
 circuit-weaver workflow run ./sensor --stages validate generate --json
@@ -27,7 +28,7 @@ Inspect installed and project-local KiCad symbols, footprints, and 3D models. Pa
 circuit-weaver library-access LM358 --project-root ./amplifier --json
 ```
 
-The report identifies the source of each match. Project table entries take precedence, followed by explicitly configured library roots, user-global table entries, and the installed library directories. The report lists curated component support and SPICE model bindings separately. A verified subcircuit name and pin count establish a structural match. Electrical qualification requires additional evidence.
+The report identifies the source of each match, flags conflicting library nicknames, and follows an exact symbol to its footprint and 3D models. Project table entries take precedence, followed by explicitly configured library roots, user-global table entries, and the installed library directories. The report lists curated component support and SPICE model bindings separately. A verified subcircuit name and pin count establish a structural match. Electrical qualification requires additional evidence.
 
 Python callers can use `circuit_weaver.library_access.audit_library_access`. The MCP tool `library_access` accepts an optional query and an absolute project root. The audit reads local files without installing or modifying libraries.
 
@@ -435,9 +436,17 @@ local library footprints, exact symbol pin/pad numbering, and native KiCad.
 
 ```bash
 circuit-weaver build-pcb <root.kicad_sch> --output <prototype.kicad_pcb> \
-  [--width 80] [--height 60] [--clearance 0.127] [--minimum-drill 0.2] \
+  [--width 80] [--height 60] [--copper-layers 2|4] \
+  [--clearance 0.127] [--minimum-drill 0.2] \
   [--overwrite] [--kicad-python-path <python>]
 ```
+
+`--copper-layers` defaults to 2. Use `4` for an ordered copper layer set of
+`F.Cu`, `In1.Cu`, `In2.Cu`, `B.Cu`; `2` uses `F.Cu` and `B.Cu`. The report
+records the native copper count and layer order only. It does not specify
+dielectric materials or thicknesses, or qualify impedance.
+The Python entry point accepts the same option as
+`schematic_to_pcb(..., copper_layers=4)`.
 
 Dimensions and optional default clearance are in millimeters. Explicit clearance
 is allowed only for a new prototype project without existing board rules or
@@ -549,10 +558,13 @@ pairs. Protected pairs may belong to another net, such as a digital supply:
 {"net":"GND","layers":["F.Cu","B.Cu"],"edge_clearance_mm":0.5,"clearance_mm":0.25,"min_thickness_mm":0.2,"thermal_gap_mm":0.25,"thermal_spoke_width_mm":0.3,"protected_connections":[{"from_ref":"C1","from_pad":"1","to_ref":"U1","to_pad":"1"}]}
 ```
 
-The current operation supports two-layer boards with one closed, axis-aligned
-rectangular Edge.Cuts outline and no existing zones. It creates one zone on each
-outer copper layer, uses thermal pad connections, removes unconnected islands,
-and fills with KiCad's native zone filler. Unsupported geometry is rejected.
+The current operation supports 2- and 4-copper-layer boards with one closed,
+axis-aligned rectangular Edge.Cuts outline and no existing zones. It creates a
+zone on each layer named in the plan, which must be enabled copper on the board;
+for example, a four-layer plan can target `In1.Cu` and `In2.Cu`. It uses thermal
+pad connections, removes unconnected islands, and fills with KiCad's native
+zone filler. Unsupported geometry is rejected. This does not define dielectric
+materials or thicknesses, or qualify impedance.
 The report measures actual filled polygons after save/reload and retains
 trace-only path lengths independently of the added plane. These path measurements
 exclude via barrels and do not estimate impedance or inductance.
@@ -894,10 +906,12 @@ circuit-weaver simulate <spec.yaml> [-o <output_dir>] [--type <scope>] [--model-
 | `--model-dir` | Directory with SPICE models (default: auto-detect `spice_models/`) |
 | `--json` | Output results as JSON |
 
-**Exit codes:** 0 = success
+**Exit codes:** 0 = verified (fresh parsed evidence and explicit supported targets passed), 1 = failed, 2 = unverified (for example, no explicit target or missing simulation evidence). Inspect the JSON `status`, `coverage`, `target_checks`, and recommendations; a completed ngspice run alone does not establish design acceptance.
 
-Requires ngspice to be installed. If ngspice is not available, simulations are
-reported as "skipped" with a recommendation to install it.
+SPICE subcircuits require a readable model file and explicit `subckt` and
+`pin_order` metadata matching the component's connected pin numbers. A model
+file's presence alone is not electrical validation. Missing `ngspice` or
+models remain skipped/unverified and cannot be reported as verified.
 
 ## confidence
 
