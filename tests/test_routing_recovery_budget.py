@@ -71,9 +71,12 @@ def _standard_report():
     }
 
 
-def _bidirectional_report(phase, grid_step_mm=0.5):
+def _bidirectional_report(phase, grid_step_mm=0.5, pair_index=0):
+    from_uuid, to_uuid = f"pad-{pair_index}-a", f"pad-{pair_index}-b"
     return {
         **_standard_report(),
+        "from_uuid": from_uuid,
+        "to_uuid": to_uuid,
         "search_mode": "bidirectional",
         "search_direction": "bidirectional",
         "requested_grid_step_mm": grid_step_mm,
@@ -82,6 +85,23 @@ def _bidirectional_report(phase, grid_step_mm=0.5):
         "requested_grid_phase": list(phase),
         "search_grid_phase": list(phase),
         "search_grid_origin_mm": [10.0, 20.0],
+        "connected_endpoint_anchors": {
+            "verified": True,
+            "from_uuid": from_uuid,
+            "to_uuid": to_uuid,
+            "from_cluster_item_count": 1,
+            "to_cluster_item_count": 1,
+            "anchor_vertex_limit_per_cluster": 32,
+            "search_strategy": "single_shared_bidirectional_multiroot",
+            "from_anchor_uuid": "anchor-a",
+            "to_anchor_uuid": "anchor-b",
+            "from_anchor_point_mm": [10.0, 20.0],
+            "to_anchor_point_mm": [11.0, 20.0],
+            "from_anchor_layer": 0,
+            "to_anchor_layer": 0,
+            "search_grid_origin_mm": [10.0, 20.0],
+            "search_state_budget": 150000,
+        },
     }
 
 
@@ -132,7 +152,9 @@ def test_progress_in_standard_keeps_standard_active_then_carries_unused_time(tmp
             return {"status": "error", "message": "no standard route"}
         clock.advance(5.0 if mode == "standard" else 1.0)
         Path(kwargs["output"]).write_bytes(Path(kwargs["board"]).read_bytes() + b" route")
-        report = _standard_report() if mode == "standard" else _bidirectional_report(kwargs["grid_phase"])
+        report = _standard_report() if mode == "standard" else _bidirectional_report(
+            kwargs["grid_phase"], pair_index=kwargs["pair_index"]
+        )
         return {"status": "ok", "route_repair": report}
 
     def drc_clock():
@@ -176,7 +198,9 @@ def test_preparation_expiry_is_not_an_attempt_and_next_family_uses_unique_prep_i
     def worker(_operation, **kwargs):
         calls.append((kwargs.get("search_mode", "standard"), kwargs.get("grid_phase"), kwargs["output"]))
         Path(kwargs["output"]).write_bytes(Path(kwargs["board"]).read_bytes() + b" route")
-        return {"status": "ok", "route_repair": _bidirectional_report(kwargs["grid_phase"])}
+        return {"status": "ok", "route_repair": _bidirectional_report(
+            kwargs["grid_phase"], pair_index=kwargs["pair_index"]
+        )}
 
     source, output = _setup(tmp_path, monkeypatch, clock, drc_counts=counts, worker=worker, prep=Prep())
     result = recovery.recover_routing(source, output, timeout_seconds=100, max_links=2, max_pair_attempts=3)
@@ -241,7 +265,9 @@ def test_expired_resolution_family_skips_unstarted_phases_and_keeps_later_reserv
         Path(kwargs["output"]).write_bytes(Path(kwargs["board"]).read_bytes() + b" route")
         return {
             "status": "ok",
-            "route_repair": _bidirectional_report(kwargs["grid_phase"], step),
+            "route_repair": _bidirectional_report(
+                kwargs["grid_phase"], step, pair_index=kwargs["pair_index"]
+            ),
         }
 
     source, output = _setup(tmp_path, monkeypatch, clock, drc_counts=counts, worker=worker, prep=Prep())
@@ -294,3 +320,54 @@ def test_total_attempt_cap_is_still_max_links_times_pair_attempts(tmp_path, monk
     assert result["status"] == "partial"
     assert result["attempts"] == 4
     assert len(calls) == 4
+
+
+def test_absolute_deadline_is_shared_across_native_profiles_and_initial_drc(tmp_path, monkeypatch):
+    clock = FakeClock()
+    counts = iter((1,))
+    drc_calls = []
+    worker_calls = []
+
+    def run_drc(path, **kwargs):
+        drc_calls.append({"timeout": kwargs["timeout"], "deadline": kwargs["deadline"]})
+        return _drc(Path(path), next(counts))
+
+    def worker(_operation, **kwargs):
+        worker_calls.append({
+            "mode": kwargs.get("search_mode", "standard"),
+            "phase": kwargs.get("grid_phase"),
+            "connected_endpoints": kwargs.get("connected_endpoints"),
+            "timeout": kwargs["timeout"],
+            "deadline": kwargs["deadline"],
+        })
+        if len(worker_calls) == 1:
+            clock.advance(4.0)
+        return {"status": "error", "message": "no route"}
+
+    source, output = _setup(tmp_path, monkeypatch, clock, drc_counts=counts, worker=worker)
+    monkeypatch.setattr(recovery, "run_drc", run_drc)
+    monkeypatch.setattr(recovery, "run_kicad", worker)
+
+    result = recovery.recover_routing(
+        source,
+        output,
+        timeout_seconds=10.0,
+        max_links=1,
+        max_pair_attempts=2,
+    )
+
+    assert result["status"] == "partial"
+    assert result["attempts"] == 2
+    assert drc_calls == [{"timeout": 10.0, "deadline": 10.0}]
+    assert worker_calls[0] == {
+        "mode": "standard",
+        "phase": None,
+        "connected_endpoints": None,
+        "timeout": 5.0,
+        "deadline": 5.0,
+    }
+    assert worker_calls[1]["mode"] == "bidirectional"
+    assert worker_calls[1]["phase"] == [0.5, 0.5]
+    assert worker_calls[1]["connected_endpoints"] is True
+    assert worker_calls[1]["timeout"] == 3.0
+    assert worker_calls[1]["deadline"] == 7.0

@@ -87,7 +87,8 @@ def test_standard_recovery_uses_deadline_but_does_not_request_connected_endpoint
     assert result["status"] == "ok", result
     assert len(requests) == 1
     assert "connected_endpoints" not in requests[0]
-    assert all(call["deadline"] == requests[0]["deadline"] for call in drc_calls)
+    assert drc_calls[0]["deadline"] > requests[0]["deadline"]
+    assert drc_calls[1]["deadline"] == requests[0]["deadline"]
     assert requests[0]["timeout"] > 0
     assert requests[0]["timeout"] <= 20
     assert result["search_modes_tried"] == ["standard"]

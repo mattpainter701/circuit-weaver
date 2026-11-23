@@ -443,11 +443,12 @@ rules in KiCad before placement, routing, or copper edits. These operations
 require a sibling `.kicad_pro` when `.pro` exists; upgrading the PCB format alone
 does not migrate those rules. Read-only inspection and previews remain available.
 
-Router stdout and stderr are retained under `.circuit-weaver-router-logs` beside
-the requested session output, with per-attempt hashes and byte counts in the
-result. Returned diagnostics and statistics parsing use bounded windows; missing
-final statistics remain unverified. Full log files can grow for the duration of
-a run and should be included when diagnosing a timeout.
+Each Freerouting attempt saves stdout, stderr, the actual input board design
+(DSN), and an `attempt.json` manifest under `.circuit-weaver-router-logs` beside
+the requested session. The manifest records the command and the input SHA-256.
+Full logs stay on disk. Returned diagnostics use bounded windows and missing
+final statistics remain unverified. The DSN contains the board geometry and
+netlist. Keep this directory local when sharing a project.
 
 PCB handoff manifests distinguish requested constraints from emitted KiCad rules.
 DDR interfaces retain explicit unverified requirements for device timing,

@@ -16,6 +16,7 @@
 
 ### Routing and workflow changes
 
+- Native recovery can escape a crowded pad through a verified via and join connected copper on another layer. Each search uses the original board rules, a shared state limit, and a fresh native DRC before accepting a change.
 - Preserve each Freerouting attempt's input, command and logs. Session validation uses the captured input and rejects changes before publication.
 - Resume completed native routing from the board selected by its saved plan,
   including projects whose original PCB has a custom filename. Recognize

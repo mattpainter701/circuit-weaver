@@ -71,14 +71,34 @@ def _worker_report():
     }
 
 
-def _bidirectional_worker_report(grid_step_mm=0.5, grid_phase=None):
+def _bidirectional_worker_report(grid_step_mm=0.5, grid_phase=None, pair_index=0):
+    from_uuid, to_uuid = f"pad-{pair_index}-a", f"pad-{pair_index}-b"
     report = {
         **_worker_report(),
+        "from_uuid": from_uuid,
+        "to_uuid": to_uuid,
         "search_mode": "bidirectional",
         "search_direction": "bidirectional",
         "requested_grid_step_mm": grid_step_mm,
         "search_grid_step_mm": grid_step_mm,
         "search_state_budget": 150000,
+        "connected_endpoint_anchors": {
+            "verified": True,
+            "from_uuid": from_uuid,
+            "to_uuid": to_uuid,
+            "from_cluster_item_count": 1,
+            "to_cluster_item_count": 1,
+            "anchor_vertex_limit_per_cluster": 32,
+            "search_strategy": "single_shared_bidirectional_multiroot",
+            "from_anchor_uuid": "anchor-a",
+            "to_anchor_uuid": "anchor-b",
+            "from_anchor_point_mm": [12.0, 34.0],
+            "to_anchor_point_mm": [13.0, 34.0],
+            "from_anchor_layer": 0,
+            "to_anchor_layer": 0,
+            "search_grid_origin_mm": [12.5, 34.25],
+            "search_state_budget": 150000,
+        },
     }
     if grid_phase is not None:
         report.update(
@@ -430,7 +450,7 @@ def test_stalled_standard_sweep_switches_once_and_stays_bidirectional_after_prog
             return {"status": "error", "message": "default profile found no path"}
         Path(kwargs["output"]).write_bytes(Path(kwargs["board"]).read_bytes() + b" routed")
         return {"status": "ok", "route_repair": _bidirectional_worker_report(
-            grid_phase=kwargs.get("grid_phase")
+            grid_phase=kwargs.get("grid_phase"), pair_index=kwargs["pair_index"]
         )}
 
     monkeypatch.setattr("circuit_weaver.routing_recovery.run_drc", drc)
@@ -454,6 +474,47 @@ def test_stalled_standard_sweep_switches_once_and_stays_bidirectional_after_prog
     assert [row["search_profile_grid_phase"] for row in result["history"][2:]] == [
         [0.5, 0.5], [0.5, 0.5]
     ]
+
+
+@pytest.mark.parametrize("ack_mutation", ["missing", "wrong_endpoint", "unverified", "bad_anchor"])
+def test_public_recovery_fails_closed_on_connected_endpoint_ack(
+    tmp_path, monkeypatch, ack_mutation,
+):
+    source, destination = _wire_files(tmp_path, monkeypatch)
+    calls = []
+    monkeypatch.setattr(
+        "circuit_weaver.routing_recovery.run_drc",
+        lambda path, **_: _drc(Path(path), 1),
+    )
+
+    def worker(_operation, **kwargs):
+        mode = kwargs.get("search_mode", "standard")
+        calls.append((mode, kwargs.get("connected_endpoints"), kwargs["pair_index"]))
+        if mode == "standard":
+            return {"status": "error", "message": "standard search found no route"}
+        assert kwargs["connected_endpoints"] is True
+        Path(kwargs["output"]).write_bytes(Path(kwargs["board"]).read_bytes() + b" candidate")
+        report = _bidirectional_worker_report(grid_phase=kwargs.get("grid_phase"))
+        ack = report["connected_endpoint_anchors"]
+        if ack_mutation == "missing":
+            report.pop("connected_endpoint_anchors")
+        elif ack_mutation == "wrong_endpoint":
+            ack["to_uuid"] = "not-the-drc-endpoint"
+        elif ack_mutation == "unverified":
+            ack["verified"] = False
+        else:
+            ack["from_anchor_point_mm"] = [float("nan"), 0.0]
+        return {"status": "ok", "route_repair": report}
+
+    monkeypatch.setattr("circuit_weaver.routing_recovery.run_kicad", worker)
+    result = recover_routing(source, destination, max_links=1, max_pair_attempts=2)
+
+    assert result["status"] == "partial"
+    assert result["attempts"] == 2
+    assert calls == [("standard", None, 0), ("bidirectional", True, 0)]
+    assert result["history"][-1]["accepted"] is False
+    assert "after_open_count" not in result["history"][-1]
+    assert not destination.exists()
 
 
 def test_no_progress_in_fallback_stops_without_oscillation(tmp_path, monkeypatch):
@@ -607,7 +668,9 @@ def test_fine_bidirectional_profile_starts_only_after_coarse_full_sweep(tmp_path
         if mode == "standard" or grid == 0.5:
             return {"status": "error", "message": "profile did not find a route"}
         Path(kwargs["output"]).write_bytes(Path(kwargs["board"]).read_bytes() + b" fine routed")
-        return {"status": "ok", "route_repair": _bidirectional_worker_report(0.25, phase)}
+        return {"status": "ok", "route_repair": _bidirectional_worker_report(
+            0.25, phase, pair_index=kwargs["pair_index"]
+        )}
 
     monkeypatch.setattr("circuit_weaver.routing_recovery.run_drc", drc)
     monkeypatch.setattr("circuit_weaver.routing_recovery.run_kicad", worker)
@@ -653,7 +716,9 @@ def test_finest_bidirectional_profile_starts_after_coarse_and_fine_sweeps_stall(
         if mode == "standard" or grid in {0.5, 0.25}:
             return {"status": "error", "message": "profile did not find a route"}
         Path(kwargs["output"]).write_bytes(Path(kwargs["board"]).read_bytes() + b" finest routed")
-        return {"status": "ok", "route_repair": _bidirectional_worker_report(0.125, phase)}
+        return {"status": "ok", "route_repair": _bidirectional_worker_report(
+            0.125, phase, pair_index=kwargs["pair_index"]
+        )}
 
     monkeypatch.setattr("circuit_weaver.routing_recovery.run_drc", drc)
     monkeypatch.setattr("circuit_weaver.routing_recovery.run_kicad", worker)

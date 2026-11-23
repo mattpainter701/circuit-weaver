@@ -76,6 +76,56 @@ def _phase_metadata_matches(report: Any, expected_phase: tuple[float, float]) ->
     )
 
 
+def _connected_endpoint_ack_matches(report: Any, pair: dict[str, Any]) -> bool:
+    """Bind a connected-anchor success report to the selected fresh-DRC pair."""
+    if not isinstance(report, dict):
+        return False
+    items = pair.get("items")
+    if not isinstance(items, list) or len(items) != 2 or any(not isinstance(item, dict) for item in items):
+        return False
+    expected_from, expected_to = (str(item.get("uuid", "")) for item in items)
+    expected_net = str(pair.get("net", items[0].get("net", "")))
+    if (
+        not expected_from or not expected_to or not expected_net
+        or report.get("from_uuid") != expected_from
+        or report.get("to_uuid") != expected_to
+        or report.get("net") != expected_net
+    ):
+        return False
+    ack = report.get("connected_endpoint_anchors")
+    if not isinstance(ack, dict):
+        return False
+    def positive_int(value: Any) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+    def finite_point(value: Any) -> bool:
+        return (
+            isinstance(value, list) and len(value) == 2
+            and all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in value)
+        )
+
+    def layer(value: Any) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+    return (
+        ack.get("verified") is True
+        and ack.get("from_uuid") == expected_from
+        and ack.get("to_uuid") == expected_to
+        and positive_int(ack.get("from_cluster_item_count"))
+        and positive_int(ack.get("to_cluster_item_count"))
+        and ack.get("anchor_vertex_limit_per_cluster") == 32
+        and ack.get("search_strategy") == "single_shared_bidirectional_multiroot"
+        and isinstance(ack.get("from_anchor_uuid"), str) and bool(ack["from_anchor_uuid"])
+        and isinstance(ack.get("to_anchor_uuid"), str) and bool(ack["to_anchor_uuid"])
+        and finite_point(ack.get("from_anchor_point_mm"))
+        and finite_point(ack.get("to_anchor_point_mm"))
+        and layer(ack.get("from_anchor_layer"))
+        and layer(ack.get("to_anchor_layer"))
+        and finite_point(ack.get("search_grid_origin_mm"))
+        and ack.get("search_state_budget") == report.get("search_state_budget") == 150000
+    )
+
+
 _PROFILE_FAMILY_NAMES = ("standard", "bidirectional_0_5mm", "bidirectional_0_25mm", "bidirectional_0_125mm")
 _PROFILE_FAMILY_SHARES = (0.50, 0.20, 0.15, 0.15)
 
@@ -95,6 +145,7 @@ class _ProfileFamilyBudget:
         self.family_index = 0
         self.last_sync = now
         self.family_remaining = remaining_seconds * _PROFILE_FAMILY_SHARES[0]
+        self.family_deadline = min(global_deadline, now + self.family_remaining)
 
     def _sync(self, now: float) -> None:
         if now < self.last_sync:
@@ -111,10 +162,17 @@ class _ProfileFamilyBudget:
         bounded = min(global_remaining, family_remaining)
         return bounded if bounded > 0 else None
 
+    def worker_deadline(self) -> float:
+        """Absolute cap passed through native discovery, staging, and launch."""
+        return min(self.global_deadline, self.family_deadline)
+
     def verification_timeout(self, now: float) -> float | None:
         self._sync(now)
-        global_remaining = max(0.0, self.global_deadline - now)
-        return global_remaining if global_remaining > 0 else None
+        remaining = min(self.global_deadline - now, self.family_deadline - now)
+        return remaining if remaining > 0 else None
+
+    def verification_deadline(self) -> float:
+        return self.worker_deadline()
 
     def advance(self, now: float, reason: str) -> dict[str, Any] | None:
         self._sync(now)
@@ -127,6 +185,7 @@ class _ProfileFamilyBudget:
         next_name = _PROFILE_FAMILY_NAMES[self.family_index]
         quota = self.initial_seconds * _PROFILE_FAMILY_SHARES[self.family_index]
         self.family_remaining = carry + quota
+        self.family_deadline = min(self.global_deadline, now + self.family_remaining)
         return {
             "from_family": previous_name,
             "to_family": next_name,
@@ -422,7 +481,7 @@ def recover_routing(
                         profile_budget.initial_seconds * _PROFILE_FAMILY_SHARES[family_index]
                     )
                     record["family_budget_remaining_seconds"] = family_remaining
-                    record["family_deadline_monotonic"] = now + family_remaining
+                    record["family_deadline_monotonic"] = profile_budget.worker_deadline()
                     record["global_budget_remaining_seconds"] = global_remaining
                 return record
 
@@ -593,6 +652,7 @@ def recover_routing(
                                 "search_mode": "bidirectional",
                                 "grid_step_mm": search_profiles[search_profile_index][1],
                                 "max_expanded_states": 150000,
+                                "connected_endpoints": True,
                             }
                         )
                         if grid_phase is not None:
@@ -640,7 +700,7 @@ def recover_routing(
                             search_modes_tried.append(search_mode)
                         search_profiles_tried.append(profile_record(search_profile_index))
                     attempts += 1
-                    response = run_kicad("repair_open", deadline=deadline, **request)
+                    response = run_kicad("repair_open", deadline=profile_budget.worker_deadline(), **request)
                     if candidate.is_file():
                         _restore_settings(current, candidate, step_snapshots)
                     else:
@@ -662,7 +722,7 @@ def recover_routing(
                             profile_budget.initial_seconds
                             * _PROFILE_FAMILY_SHARES[profile_budget.family_index]
                         ),
-                        "family_deadline_monotonic": launch_time + launch_family_remaining,
+                        "family_deadline_monotonic": profile_budget.worker_deadline(),
                         "family_budget_at_launch_seconds": launch_family_remaining,
                         "global_budget_at_launch_seconds": launch_global_remaining,
                         "worker_timeout_seconds": launch_timeout,
@@ -739,6 +799,8 @@ def recover_routing(
                             and not isinstance(expanded_states, bool)
                             and 0 < expanded_states <= 150000
                         )
+                        if report_ok:
+                            report_ok = _connected_endpoint_ack_matches(report, ordered_pairs[pair_index])
                     if report_ok:
                         verification_timeout = profile_budget.verification_timeout(time.monotonic())
                         if verification_timeout is None:
@@ -749,7 +811,7 @@ def recover_routing(
                                 candidate,
                                 evidence_ledger=EvidenceLedger(),
                                 timeout=verification_timeout,
-                                deadline=deadline,
+                                deadline=profile_budget.verification_deadline(),
                                 project_context=source.parent,
                             )
                             _check_snapshots(snapshots)
