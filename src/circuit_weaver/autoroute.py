@@ -2451,6 +2451,11 @@ def _route_candidates(
                 "net_count": len(canonicalization["semantic"]["net_membership"]),
                 "bounded_fanout_input_eligible": fanout_input_eligible,
             }
+        # In the three-profile native search the first two attempts run the
+        # same router settings with different placement ordering. Preserve a
+        # third of the budget for fanout, but give the primary ordering time
+        # to finish additional passes on large boards before restarting.
+        weights = (3, 1, 2) if use_fanout_profile and attempts == 3 else (1,) * attempts
         # Same filesystem as the destination allows atomic final publication.
         # The context also cleans up losing sessions and interrupted attempts.
         with tempfile.TemporaryDirectory(prefix=".cw-routing-", dir=ses_path.parent) as temporary:
@@ -2513,7 +2518,7 @@ def _route_candidates(
                 remaining = deadline - time.perf_counter()
                 if remaining <= 0:
                     break
-                allowance = remaining / (attempts - index)
+                allowance = remaining * weights[index] / sum(weights[index:])
                 log.info(
                     "Freerouting portfolio candidate %d/%d started "
                     "(placement order=%s, optimizer=%s, timeout allowance=%.1fs)",

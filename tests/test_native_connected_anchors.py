@@ -216,6 +216,100 @@ def test_pair_choice_is_stable_and_prefers_same_layer_for_equal_distance():
     assert chosen[0]["layer"] == chosen[1]["layer"]
 
 
+def test_local_fine_escape_finds_checked_coarse_roots_when_nearest_connectors_are_blocked():
+    anchor = {"uuid": "pad", "point": (0.12, 0.12), "layer": 0}
+    lattice_origin = (0.0, 0.0)
+    coarse_vertices = {(0.0, 0.0), (0.0, 1.0), (1.0, 0.0), (1.0, 1.0)}
+
+    def clear(a, b, layer):
+        assert layer == 0
+        return not (a == anchor["point"] and b in coarse_vertices)
+
+    roots, expanded = kernel._connected_anchor_lattice_roots(
+        anchor, lattice_origin, 1.0, [0], (-4.0, -4.0, 4.0, 4.0),
+        clear, lambda _point: False, 250,
+    )
+
+    assert 0 < expanded <= 250
+    assert roots
+    for node, connector in roots.items():
+        path = connector["connector_path"]
+        assert path[0] == (anchor["point"], 0)
+        assert path[-1] == ((node[0] * 1.0, node[1] * 1.0), 0)
+        assert len(path) > 2
+        assert all(clear(a[0], b[0], a[1]) for a, b in zip(path, path[1:]))
+
+
+def test_isolated_pad_expands_beyond_exact_coarse_root_to_find_local_escape():
+    anchor = {"uuid": "pad", "point": (0.0, 0.0), "layer": 0, "item_class": "PAD"}
+    blocked_direct = {(0.0, 1.0), (1.0, 0.0), (1.0, 1.0)}
+
+    def clear(a, b, layer):
+        assert layer == 0
+        return not (a == anchor["point"] and b in blocked_direct)
+
+    roots, expanded = kernel._connected_anchor_lattice_roots(
+        anchor, (0.0, 0.0), 1.0, [0], (-2.0, -2.0, 3.0, 3.0),
+        clear, lambda _point: False, 300,
+    )
+
+    assert 0 < expanded <= 300
+    assert (0, 0, 0) in roots  # Retain the exact endpoint as a valid root.
+    assert any(node != (0, 0, 0) and len(row["connector_path"]) > 2 for node, row in roots.items())
+
+
+def test_local_fine_escape_can_change_to_another_copper_layer_before_coarse_root():
+    anchor = {"uuid": "pad", "point": (0.12, 0.12), "layer": 0}
+    coarse_vertices = {(0.0, 0.0), (0.0, 1.0), (1.0, 0.0), (1.0, 1.0)}
+
+    def clear(a, b, layer):
+        if a == anchor["point"] and b in coarse_vertices:
+            return False
+        if layer == 0:
+            return max(a[0], b[0]) <= 0.51 and abs(a[1] - 0.12) < 1e-9 and abs(b[1] - 0.12) < 1e-9
+        return layer == 2
+
+    def via_allowed(point):
+        return abs(point[0] - 0.495) < 1e-9 and abs(point[1] - 0.12) < 1e-9
+
+    roots, expanded = kernel._connected_anchor_lattice_roots(
+        anchor, (0.0, 0.0), 1.0, [0, 2], (-2.0, -2.0, 3.0, 3.0),
+        clear, via_allowed, 2_000,
+    )
+
+    assert 0 < expanded <= 2_000
+    back_root = next(
+        row for node, row in roots.items()
+        if node[2] == 1 and any(layer == 2 for _point, layer in row["connector_path"])
+    )
+    path = back_root["connector_path"]
+    transitions = [(a, b) for a, b in zip(path, path[1:]) if a[1] != b[1]]
+    assert len(transitions) == 1
+    assert transitions[0][0][0] == transitions[0][1][0]
+    assert via_allowed(transitions[0][0][0])
+
+
+def test_connected_physical_reconstruction_retains_local_start_and_goal_escape_paths():
+    start = {
+        "uuid": "start", "point": (0.12, 0.12), "layer": 0,
+        "connector_path": [((0.12, 0.12), 0), ((0.2, 0.2), 0), ((1.0, 0.0), 0)],
+    }
+    goal = {
+        "uuid": "goal", "point": (4.12, 0.12), "layer": 0,
+        "connector_path": [((4.12, 0.12), 0), ((4.2, 0.2), 0), ((4.0, 0.0), 0)],
+    }
+
+    physical = kernel._physical_connected_search_points(
+        [(1, 0, 0), (2, 0, 0), (3, 0, 0)], 1.0, (0.0, 0.0), start, goal, [0],
+    )
+
+    assert physical == [
+        ((0.12, 0.12), 0), ((0.2, 0.2), 0), ((1.0, 0.0), 0),
+        ((2.0, 0.0), 0), ((3.0, 0.0), 0), ((4.0, 0.0), 0),
+        ((4.2, 0.2), 0), ((4.12, 0.12), 0),
+    ]
+
+
 def test_multiroot_search_escapes_blocked_nearest_anchor_and_returns_used_anchors():
     starts = [
         {"uuid": "a-nearest-trapped", "point": (0.0, 0.0), "layer": 0},

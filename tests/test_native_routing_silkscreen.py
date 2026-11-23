@@ -12,6 +12,8 @@ class _FakePcbnew:
     B_SilkS = 32
     F_Cu = 0
     B_Cu = 1
+    F_Mask = 40
+    B_Mask = 41
 
     @staticmethod
     def FromMM(value):
@@ -37,9 +39,10 @@ class _FakeSilkShape:
 
 
 class _ViaQuery:
-    def __init__(self):
+    def __init__(self, tented_layers=()):
         self.position = None
         self.layer_calls = []
+        self.tented_layers = set(tented_layers)
 
     def SetPosition(self, point):
         self.position = point
@@ -48,6 +51,9 @@ class _ViaQuery:
         shape = SimpleNamespace(layer=copper_layer)
         self.layer_calls.append(shape)
         return shape
+
+    def IsTented(self, mask_layer):
+        return mask_layer in self.tented_layers
 
 
 def test_native_silkscreen_obstacles_keep_exact_shape_and_layer_mapping():
@@ -116,6 +122,43 @@ def test_silkscreen_exact_collision_blocks_candidate_via():
     )
     assert silk.calls[0][1] == 150_000
     assert via.layer_calls[0].layer == _FakePcbnew.B_Cu
+
+
+def test_tented_via_side_does_not_false_block_on_silkscreen():
+    silk = _FakeSilkShape(True)
+    via = _ViaQuery(tented_layers={_FakePcbnew.F_Mask})
+    obstacles = [(_FakePcbnew.F_Cu, (0.0, 0.0, 2.0, 2.0), silk)]
+
+    assert not repair._collides_with_silkscreen(
+        (1.0, 1.0), via, obstacles, 0.6, 150_000, _FakePcbnew
+    )
+    assert silk.calls == []
+    assert via.layer_calls == []
+
+
+def test_exposed_via_side_still_checks_silkscreen_when_opposite_side_is_tented():
+    silk = _FakeSilkShape(True)
+    via = _ViaQuery(tented_layers={_FakePcbnew.F_Mask})
+    obstacles = [(_FakePcbnew.B_Cu, (0.0, 0.0, 2.0, 2.0), silk)]
+
+    assert repair._collides_with_silkscreen(
+        (1.0, 1.0), via, obstacles, 0.6, 150_000, _FakePcbnew
+    )
+    assert silk.calls[0][1] == 150_000
+    assert via.layer_calls[0].layer == _FakePcbnew.B_Cu
+
+
+def test_silkscreen_collision_fails_closed_when_via_tenting_is_unavailable():
+    class _NoTentingQuery:
+        def SetPosition(self, _point):
+            pass
+
+    with pytest.raises(ValueError, match="via tenting intent is unavailable"):
+        repair._collides_with_silkscreen(
+            (1.0, 1.0), _NoTentingQuery(),
+            [(_FakePcbnew.F_Cu, (0.0, 0.0, 2.0, 2.0), _FakeSilkShape(True))],
+            0.6, 150_000, _FakePcbnew,
+        )
 
 
 def test_silkscreen_broad_phase_skips_distant_shapes():

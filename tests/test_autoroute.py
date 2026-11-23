@@ -1870,6 +1870,29 @@ class TestFreerouting25CompatibilityProposal:
         ]
         assert result["search"]["native_dsn_canonicalization"]["bounded_fanout_input_eligible"] is True
 
+    @pytest.mark.parametrize("first_used, expected", [(900, [900, 300, 600]), (450, [900, 450, 900])])
+    def test_native_three_profile_time_limits_share_one_deadline(self, tmp_path, monkeypatch, first_used, expected):
+        dsn = _write_dsn(tmp_path)
+        clock = [0.0]
+        allowances = []
+
+        def route(_dsn, _ses, _command, *, timeout_seconds, **_options):
+            allowances.append(timeout_seconds)
+            clock[0] += first_used if len(allowances) == 1 else timeout_seconds
+            return {"status": "error", "message": "controlled incomplete attempt"}
+
+        monkeypatch.setattr(autoroute_module.time, "perf_counter", lambda: clock[0])
+        monkeypatch.setattr(autoroute_module, "_route_specctra", route)
+        autoroute_module._route_candidates(
+            dsn, tmp_path / "output.ses", ["freerouting"], attempts=3, timeout_seconds=1800, overwrite=False,
+            seed=None, passes=20, headless=True, optimization_threads=0, optimizer_strategy=None,
+            optimizer_hybrid_ratio=None, optimizer_item_selection=None, optimizer_improvement_threshold=None,
+            capability_probe={"version": "2.5.0"}, allow_partial_nets=True, cooperative_partial_timeout=True,
+            native_placement_portfolio=True, native_fanout_profile=True,
+        )
+        assert allowances == expected
+        assert clock[0] == 1800
+
     def test_failed_portfolio_attempts_keep_exact_private_dsn_and_effective_argv(
         self, tmp_path, monkeypatch
     ):

@@ -177,16 +177,33 @@ def _native_silkscreen_obstacles(board, pcbnew, bbox):
 
 
 def _collides_with_silkscreen(point_mm, via_query, obstacles, diameter_mm, clearance_iu, pcbnew):
-    """Use boxes as broad phase, then effective native shape collision."""
+    """Check silk only on exposed via sides, using exact native shapes."""
     radius = diameter_mm / 2
     clearance_mm = pcbnew.ToMM(clearance_iu)
     x, y = point_mm
     via_query.SetPosition(_native_point_vector(pcbnew, point_mm))
     for copper_layer, box, silk_shape in obstacles:
+        if copper_layer == int(pcbnew.F_Cu):
+            mask_layer = int(pcbnew.F_Mask)
+        elif copper_layer == int(pcbnew.B_Cu):
+            mask_layer = int(pcbnew.B_Mask)
+        else:
+            raise ValueError("native silkscreen obstacle has an unsupported copper layer")
         if not (
             box[0] - radius - clearance_mm <= x <= box[2] + radius + clearance_mm
             and box[1] - radius - clearance_mm <= y <= box[3] + radius + clearance_mm
         ):
+            continue
+        try:
+            is_tented = via_query.IsTented(mask_layer)
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+            raise ValueError("native via tenting intent is unavailable") from exc
+        if not isinstance(is_tented, bool):
+            raise ValueError("native via tenting intent is invalid")
+        # KiCad's silk-to-mask clearance applies where a via exposes copper.
+        # Board-default or explicit tenting removes that mask opening; retain
+        # the source board's intent rather than rejecting a safe tented via.
+        if is_tented:
             continue
         try:
             candidate = via_query.GetEffectiveShape(copper_layer)
@@ -635,6 +652,134 @@ def _choose_connected_anchor_pair(first_anchors, last_anchors):
     return selected[-2], selected[-1]
 
 
+def _connected_anchor_lattice_roots(anchor, lattice_origin, step, stack, bounds,
+                                    clear_segment, can_change_layer, state_budget, *, escape_radius=3.0):
+    """Connect one verified copper anchor to nearby coarse roots.
+
+    First try the four nearest coarse lattice vertices. If all are blocked,
+    search a bounded fine lattice locally, preserving every checked segment so
+    endpoint escape does not depend on one lucky coarse-grid phase.
+    """
+    point = anchor["point"]
+    stack_index = {layer: index for index, layer in enumerate(stack)}
+    start_layer = stack_index[anchor["layer"]]
+
+    def coarse_candidates(xy, layer):
+        rx = (xy[0] - lattice_origin[0]) / step
+        ry = (xy[1] - lattice_origin[1]) / step
+        for ix in sorted({math.floor(rx), math.ceil(rx)}):
+            for iy in sorted({math.floor(ry), math.ceil(ry)}):
+                target = (lattice_origin[0] + ix * step, lattice_origin[1] + iy * step)
+                node = (ix, iy, layer)
+                if (bounds[0] <= target[0] <= bounds[2] and bounds[1] <= target[1] <= bounds[3]
+                        and math.dist(point, target) <= escape_radius + 1e-9):
+                    yield node, target
+
+    def direct_roots():
+        roots = {}
+        for node, target in coarse_candidates(point, start_layer):
+            length = math.dist(point, target)
+            if length <= 1e-9 or clear_segment(point, target, stack[start_layer]):
+                roots[node] = {
+                    "anchor": anchor,
+                    "cost": length,
+                    "connector_path": [(point, stack[start_layer])]
+                    if length <= 1e-9 else [(point, stack[start_layer]), (target, stack[start_layer])],
+                }
+        return roots
+
+    roots = direct_roots()
+    if (roots and anchor.get("item_class") != "PAD") or state_budget <= 0:
+        return roots, 0
+
+    # Align the local lattice to the native anchor, while allowing its exit
+    # vertices to connect to the global lattice through checked native copper.
+    fine_step = min(step / 4.0, 0.0625)
+    fine_step = max(fine_step, 0.025)
+    radius = float(escape_radius)
+    if not math.isfinite(radius) or radius <= 0:
+        return {}, 0
+
+    def coordinate(node):
+        return point[0] + node[0] * fine_step, point[1] + node[1] * fine_step
+
+    start_node = (0, 0, start_layer)
+    queue = [(0.0, 0, start_node)]
+    distance = {start_node: 0.0}
+    previous = {}
+    sequence = 1
+    # Keep a deterministic, spatially spread set of exits. This prevents the
+    # local search from flooding the global search with nearly duplicate roots.
+    selected = {}
+    directions = [(x, y) for x in (-1, 0, 1) for y in (-1, 0, 1) if x or y]
+    expanded = 0
+    while queue and expanded < state_budget:
+        cost, _, node = heapq.heappop(queue)
+        if cost > distance.get(node, float("inf")) + 1e-9:
+            continue
+        xy = coordinate(node)
+        expanded += 1
+        if math.dist(point, xy) <= radius + 1e-9:
+            for root, target in coarse_candidates(xy, node[2]):
+                if root in roots:
+                    continue
+                final_length = math.dist(xy, target)
+                if final_length > 1e-9 and not clear_segment(xy, target, stack[node[2]]):
+                    continue
+                cursor, local_path = node, []
+                while cursor != start_node:
+                    local_path.append((coordinate(cursor), stack[cursor[2]]))
+                    cursor = previous[cursor]
+                local_path.reverse()
+                connector_path = [(point, stack[start_layer]), *local_path]
+                final_point = (target, stack[node[2]])
+                if connector_path[-1] != final_point:
+                    connector_path.append(final_point)
+                root_distance = math.dist(point, target)
+                angle = math.atan2(target[1] - point[1], target[0] - point[0])
+                sector = int(((angle + math.pi) / (2 * math.pi)) * 8) % 8
+                ring = min(3, int(root_distance / radius * 4))
+                bucket = (sector, ring, node[2])
+                candidate = {
+                    "anchor": anchor,
+                    "cost": cost + final_length,
+                    "connector_path": connector_path,
+                }
+                current = selected.get(bucket)
+                if current is None or (candidate["cost"], root) < (current[0], current[1]):
+                    selected[bucket] = (candidate["cost"], root, candidate)
+        for dx, dy in directions:
+            neighbor = (node[0] + dx, node[1] + dy, node[2])
+            target = coordinate(neighbor)
+            length = math.hypot(dx, dy) * fine_step
+            next_cost = cost + length
+            if (math.dist(point, target) > radius + 1e-9
+                    or not (bounds[0] <= target[0] <= bounds[2]
+                            and bounds[1] <= target[1] <= bounds[3])
+                    or next_cost + 1e-9 >= distance.get(neighbor, float("inf"))
+                    or not clear_segment(xy, target, stack[node[2]])):
+                continue
+            distance[neighbor] = next_cost
+            previous[neighbor] = node
+            heapq.heappush(queue, (next_cost, sequence, neighbor))
+            sequence += 1
+        if can_change_layer(xy):
+            for layer in range(len(stack)):
+                if layer == node[2]:
+                    continue
+                neighbor = (node[0], node[1], layer)
+                next_cost = cost + 4.0
+                if next_cost + 1e-9 >= distance.get(neighbor, float("inf")):
+                    continue
+                distance[neighbor] = next_cost
+                previous[neighbor] = node
+                heapq.heappush(queue, (next_cost, sequence, neighbor))
+                sequence += 1
+    for _cost, node, candidate in sorted(selected.values(), key=lambda row: (row[0], row[1])):
+        roots[node] = candidate
+    return roots, expanded
+
+
 def _bidirectional_connected_anchor_search(start_anchors, goal_anchors, stack, bounds, step,
                                            max_expanded_states, clear_segment, can_change_layer,
                                            grid_phase=None):
@@ -661,14 +806,18 @@ def _bidirectional_connected_anchor_search(start_anchors, goal_anchors, stack, b
             if not isinstance(row, dict):
                 raise ValueError("connected-anchor search received an invalid anchor")
             uid, layer, point = row.get("uuid"), row.get("layer"), row.get("point")
+            item_class = row.get("item_class")
             if (not isinstance(uid, str) or not uid or isinstance(layer, bool)
                     or not isinstance(layer, int) or layer not in stack_index):
                 raise ValueError("connected-anchor search anchor identity/layer is invalid")
+            if item_class is not None and item_class not in {"PAD", "PCB_TRACK", "PCB_ARC", "PCB_VIA"}:
+                raise ValueError("connected-anchor search anchor class is invalid")
             if (not isinstance(point, (tuple, list)) or len(point) != 2
                     or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
                            for v in point)):
                 raise ValueError("connected-anchor search anchor point is invalid")
-            result.append({"uuid": uid, "layer": layer, "point": (float(point[0]), float(point[1]))})
+            result.append({"uuid": uid, "layer": layer, "point": (float(point[0]), float(point[1])),
+                           "item_class": item_class})
         return sorted(result, key=lambda row: (row["point"], row["layer"], row["uuid"]))
 
     starts = normalize(start_anchors)
@@ -680,46 +829,45 @@ def _bidirectional_connected_anchor_search(start_anchors, goal_anchors, stack, b
     def coordinate(node):
         return lattice_origin[0] + node[0] * step, lattice_origin[1] + node[1] * step
 
+    connector_budget = min(8_000, max_expanded_states // 4)
+    connector_states = 0
+
     def seed_roots(anchors):
+        nonlocal connector_states
         roots, distances, anchor_by_root, queue = set(), {}, {}, []
         sequence = 0
         for anchor in anchors:
-            point, layer_id = anchor["point"], anchor["layer"]
-            ratio_x = (point[0] - lattice_origin[0]) / step
-            ratio_y = (point[1] - lattice_origin[1]) / step
-            x_indices = sorted({math.floor(ratio_x), math.ceil(ratio_x)})
-            y_indices = sorted({math.floor(ratio_y), math.ceil(ratio_y)})
-            layer = stack_index[layer_id]
-            for ix in x_indices:
-                for iy in y_indices:
-                    node = (ix, iy, layer)
-                    grid_point = coordinate(node)
-                    if not (bounds[0] <= grid_point[0] <= bounds[2]
-                            and bounds[1] <= grid_point[1] <= bounds[3]):
-                        continue
-                    connector_cost = math.dist(point, grid_point)
-                    if connector_cost > 1e-9 and not clear_segment(point, grid_point, layer_id):
-                        continue
-                    previous = distances.get(node)
-                    candidate_key = (connector_cost, anchor["point"], anchor["layer"], anchor["uuid"])
-                    current_anchor = anchor_by_root.get(node)
-                    current_key = ((previous, current_anchor["point"], current_anchor["layer"],
-                                    current_anchor["uuid"]) if current_anchor is not None else None)
-                    if previous is not None and (connector_cost > previous + 1e-9
-                                                  or (abs(connector_cost - previous) <= 1e-9
-                                                      and candidate_key >= current_key)):
-                        continue
-                    roots.add(node)
-                    distances[node] = connector_cost
-                    anchor_by_root[node] = anchor
-                    heapq.heappush(queue, (connector_cost, sequence, node))
-                    sequence += 1
+            local_budget = min(4_000, max(0, connector_budget - connector_states))
+            candidates, used = _connected_anchor_lattice_roots(
+                anchor, lattice_origin, step, stack, bounds, clear_segment, can_change_layer, local_budget,
+            )
+            connector_states += used
+            for node, connector in candidates.items():
+                connector_cost = connector["cost"]
+                candidate_anchor = {
+                    **anchor,
+                    "connector_path": connector["connector_path"],
+                }
+                previous_cost = distances.get(node)
+                candidate_key = (connector_cost, anchor["point"], anchor["layer"], anchor["uuid"])
+                current_anchor = anchor_by_root.get(node)
+                current_key = ((previous_cost, current_anchor["point"], current_anchor["layer"],
+                                current_anchor["uuid"]) if current_anchor is not None else None)
+                if (previous_cost is not None and (connector_cost > previous_cost + 1e-9
+                                                   or (abs(connector_cost - previous_cost) <= 1e-9
+                                                       and candidate_key >= current_key))):
+                    continue
+                roots.add(node)
+                distances[node] = connector_cost
+                anchor_by_root[node] = candidate_anchor
+                heapq.heappush(queue, (connector_cost, sequence, node))
+                sequence += 1
         return roots, distances, anchor_by_root, queue
 
     forward_roots, forward_distance, forward_anchor, forward_queue = seed_roots(starts)
     reverse_roots, reverse_distance, reverse_anchor, reverse_queue = seed_roots(goals)
     if not forward_queue or not reverse_queue:
-        return None, 0, None, None, lattice_origin
+        return None, connector_states, None, None, lattice_origin
     forward_previous, reverse_next = {}, {}
     sequence = 0
     forward_goal_points = [coordinate(node) for node in reverse_roots]
@@ -751,7 +899,7 @@ def _bidirectional_connected_anchor_search(start_anchors, goal_anchors, stack, b
         return None
 
     directions = [(x, y) for x in (-1, 0, 1) for y in (-1, 0, 1) if x or y]
-    expanded, meeting = 0, None
+    expanded, meeting = connector_states, None
     while forward_queue and reverse_queue and expanded < max_expanded_states:
         forward_turn = forward_queue[0][0] <= reverse_queue[0][0]
         queue = forward_queue if forward_turn else reverse_queue
@@ -805,15 +953,28 @@ def _physical_connected_search_points(path, step, lattice_origin, start_anchor, 
     """Restore exact native anchor endpoints around one shared lattice path."""
     if not path or not isinstance(start_anchor, dict) or not isinstance(goal_anchor, dict):
         raise ValueError("connected-anchor search result is incomplete")
-    points = [(start_anchor["point"], start_anchor["layer"])]
+
+    def append_unique(points, candidate):
+        if not points or points[-1] != candidate:
+            points.append(candidate)
+
+    points = []
+    start_connector = start_anchor.get(
+        "connector_path", [(start_anchor["point"], start_anchor["layer"])],
+    )
+    for candidate in start_connector:
+        append_unique(points, candidate)
     for node in path:
         candidate = ((lattice_origin[0] + node[0] * step,
                       lattice_origin[1] + node[1] * step), stack[node[2]])
-        if points[-1] != candidate:
-            points.append(candidate)
-    final_anchor = (goal_anchor["point"], goal_anchor["layer"])
-    if points[-1] != final_anchor:
-        points.append(final_anchor)
+        append_unique(points, candidate)
+    goal_connector = goal_anchor.get(
+        "connector_path", [(goal_anchor["point"], goal_anchor["layer"])],
+    )
+    for candidate in reversed(goal_connector):
+        append_unique(points, candidate)
+    if not points:
+        raise ValueError("connected-anchor path has no physical points")
     return points
 
 
