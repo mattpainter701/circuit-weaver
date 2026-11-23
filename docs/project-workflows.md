@@ -212,10 +212,11 @@ server, then configure the MCP client separately:
 ```
 
 The MCP server exposes `runtime_info`, the read-only `library_access` audit,
-`start_project`, `open_project`, `adopt_project`,
-`plan_workflow`, `run_workflow`, `workflow_status`, `resume_workflow`, and
-`cancel_workflow`, in addition to the original validation, generation,
-discovery, research, and manufacturing-readiness tools. `resume_workflow`
+`review_board`, `start_project`, `open_project`, `adopt_project`,
+`plan_library_bundle`, `apply_library_bundle`, `plan_workflow`,
+`run_workflow`, `workflow_status`, `resume_workflow`, and `cancel_workflow`,
+in addition to the original validation, generation, discovery, research, and
+manufacturing-readiness tools. `resume_workflow`
 executes the saved verified plan; use `plan_workflow` to save a plan without
 execution. Each run/resume request returns after the selected stages finish,
 fail, or observe cancellation. The server runs those operations off its event

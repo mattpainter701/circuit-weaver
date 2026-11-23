@@ -372,7 +372,7 @@ def run_design_simulations(
     if model_dir:
         manifest_path = Path(model_dir) / "manifest.json"
         if manifest_path.exists():
-            model_manifest = resolve_spice_models(manifest_path)
+            model_manifest = resolve_spice_models(manifest_path, include_contracts=True)
 
     results: list[SimulationResult] = []
     recommendations: list[str] = []

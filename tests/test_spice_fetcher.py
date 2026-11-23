@@ -26,8 +26,12 @@ def test_resolves_explicit_subcircuit_contract(tmp_path):
     )
 
     result = resolve_spice_models(manifest)
+    contracts = resolve_spice_models(manifest, include_contracts=True)
 
-    assert result == {"MODEL-1": {"path": str(model_file.resolve()), "subckt": "regulator", "pin_order": ["1", "2"]}}
+    assert result == {"MODEL-1": str(model_file.resolve())}
+    assert contracts == {
+        "MODEL-1": {"path": str(model_file.resolve()), "subckt": "regulator", "pin_order": ["1", "2"]}
+    }
 
 
 def test_legacy_path_only_download_remains_path_only(tmp_path):
@@ -71,6 +75,8 @@ def test_contract_with_wrong_subcircuit_pin_count_stays_unsupported(tmp_path):
     )
 
     assert resolve_spice_models(manifest) == {"MODEL-1": str(model_file.resolve())}
+    resolved = resolve_spice_models(manifest, include_contracts=True)
+    assert resolved["MODEL-1"]["contract_error"] == "subcircuit pin count mismatch"
 
 
 def test_high_level_simulation_passes_resolved_contract_to_exporter(tmp_path, monkeypatch):

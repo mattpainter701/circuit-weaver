@@ -137,6 +137,79 @@ def _ic_to_spice_subckt(comp: ComponentDef, model: str | dict[str, Any]) -> list
     ]
 
 
+def _legacy_ic_to_spice_subckt(comp: ComponentDef, model_path: str) -> tuple[list[str] | None, str | None]:
+    """Use a path-only legacy model only when its interface maps by net name.
+
+    Older manifests do not declare the subcircuit or component pin order. They
+    are usable only when the normalized MPN uniquely names one declaration and
+    every formal port exactly matches one connected net name, case-insensitively.
+    This does not infer the package pin order from declaration position.
+    """
+    ref = comp.source_ref or ""
+    pin_nets = comp.pin_nets or {}
+    if not model_path or any(char in model_path for char in "\r\n\"'"):
+        return None, "model path is not safe for a SPICE include"
+    try:
+        text = Path(model_path).read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError):
+        return None, "legacy model file is unreadable"
+
+    logical_lines: list[str] = []
+    for physical in text.splitlines():
+        line = physical.strip()
+        if not line or line.startswith(("*", "$", ";")):
+            continue
+        if line.startswith("+"):
+            if not logical_lines:
+                return None, "legacy model has an orphan continuation line"
+            logical_lines[-1] = f"{logical_lines[-1]} {line[1:].strip()}".rstrip()
+        else:
+            logical_lines.append(line)
+
+    declarations: list[tuple[str, list[str]]] = []
+    for line in logical_lines:
+        if not re.match(r"(?i)^\.subckt(?:\s|$)", line):
+            continue
+        fields = line.split()
+        if len(fields) < 2 or not re.fullmatch(r"[A-Za-z0-9_.$-]+", fields[1]):
+            continue
+        ports = fields[2:]
+        markers = [index for index, token in enumerate(ports) if token.casefold() == "params:"]
+        if markers:
+            ports = ports[: markers[0]]
+        if not ports or any(not re.fullmatch(r"[A-Za-z0-9_.$-]+", port) for port in ports):
+            continue
+        declarations.append((fields[1], ports))
+
+    mpn = str(comp.mpn or "")
+    expected_subckt = re.sub(r"[^A-Za-z0-9_.$]", "_", mpn)
+    matches = [item for item in declarations if item[0].casefold() == expected_subckt.casefold()]
+    if len(matches) != 1:
+        return None, "legacy model subcircuit name is missing or ambiguous"
+    subckt_name, ports = matches[0]
+    if len({port.casefold() for port in ports}) != len(ports):
+        return None, "legacy model has duplicate subcircuit ports"
+    if len(pin_nets) != len(ports) or not pin_nets:
+        return None, "legacy model port count does not match connected pins"
+
+    pins_by_net: dict[str, list[str]] = {}
+    for pin, net in pin_nets.items():
+        if not str(net).strip():
+            return None, "legacy model has an unconnected component pin"
+        pins_by_net.setdefault(str(net).casefold(), []).append(str(pin))
+    pin_order: list[str] = []
+    for port in ports:
+        candidates = pins_by_net.get(port.casefold(), [])
+        if len(candidates) != 1:
+            return None, "legacy model ports do not map uniquely to connected net names"
+        pin_order.append(candidates[0])
+    if len(set(pin_order)) != len(pin_nets):
+        return None, "legacy model ports do not uniquely cover connected pins"
+
+    nodes = " ".join(_normalize_node(str(pin_nets[pin])) for pin in pin_order)
+    return [f'.include "{model_path}"', f"X{ref} {nodes} {subckt_name}"], None
+
+
 def _generate_analysis_cards(
     analysis_type: str,
     params: dict[str, Any] | None = None,
@@ -365,33 +438,28 @@ def export_spice_netlist(
         mpn = comp.mpn or ""
         if mpn and mpn in model_manifest:
             model = model_manifest[mpn]
-            if (
-                not isinstance(model, dict)
-                or not model.get("path")
-                or not model.get("subckt")
-                or not model.get("pin_order")
-            ):
-                skipped.append(f"* Skipped {ref} ({mpn}) - model lacks explicit subckt/pin_order contract")
-                continue
-            model_path = model.get("path", "") if isinstance(model, dict) else model
-            if model_path not in included_models:
-                ic_lines = _ic_to_spice_subckt(comp, model)
-                subckt_lines.extend(ic_lines)
-                included_models.add(model_path)
+            if isinstance(model, str):
+                ic_lines, reason = _legacy_ic_to_spice_subckt(comp, model)
+                if ic_lines is None:
+                    skipped.append(f"* Skipped {ref} ({mpn}) - {reason or 'legacy model is unsupported'}")
+                    continue
             else:
-                # Reuse only an explicit model contract; never guess pin order or subcircuit name.
-                if not isinstance(model, dict) or not model.get("subckt") or not model.get("pin_order"):
-                    raise ValueError(f"{ref} model needs explicit path, subckt, and pin_order metadata")
-                pin_order = list(map(str, model["pin_order"]))
-                if len(set(pin_order)) != len(pin_order) or set(pin_order) != set(
-                    map(str, (comp.pin_nets or {}).keys())
-                ):
-                    raise ValueError(f"{ref} model pin_order does not match connected pins")
-                if not re.fullmatch(r"[A-Za-z0-9_.$-]+", str(model["subckt"])):
-                    raise ValueError(f"{ref} has unsafe SPICE subcircuit metadata")
-                nodes = " ".join(_normalize_node((comp.pin_nets or {})[p]) for p in pin_order)
-                subckt_name = str(model["subckt"])
-                subckt_lines.append(f"X{ref} {nodes} {subckt_name}")
+                if not isinstance(model, dict):
+                    skipped.append(f"* Skipped {ref} ({mpn}) - model metadata is invalid")
+                    continue
+                if model.get("contract_error"):
+                    skipped.append(f"* Skipped {ref} ({mpn}) - {model['contract_error']}")
+                    continue
+                if not model.get("path") or not model.get("subckt") or not model.get("pin_order"):
+                    skipped.append(f"* Skipped {ref} ({mpn}) - model lacks explicit subckt/pin_order contract")
+                    continue
+                ic_lines = _ic_to_spice_subckt(comp, model)
+
+            model_path = str(model.get("path")) if isinstance(model, dict) else model
+            if model_path not in included_models:
+                subckt_lines.append(ic_lines[0])
+                included_models.add(model_path)
+            subckt_lines.append(ic_lines[1])
         else:
             skipped.append(f"* Skipped {ref} ({mpn or 'no MPN'}) - no SPICE model")
 

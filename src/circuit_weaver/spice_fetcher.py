@@ -220,18 +220,22 @@ def fetch_spice_models(
     }
 
 
-def resolve_spice_models(manifest_path: Path) -> dict[str, str | dict[str, object]]:
-    """Read the model manifest without promoting path-only entries to models.
+def resolve_spice_models(
+    manifest_path: Path, *, include_contracts: bool = False
+) -> dict[str, str | dict[str, object]]:
+    """Read contained model paths and optionally validate explicit contracts.
 
     Args:
         manifest_path: Path to spice_models/manifest.json
 
     Returns:
-        MPNs with an existing contained file map to an absolute path when the
-        manifest is legacy/path-only. Explicit contracts map to
-        ``{path, subckt, pin_order}`` only when the declared subcircuit and pin
-        count match the model file. The netlist exporter deliberately treats
-        legacy path-only entries as unsupported.
+        The default public shape remains ``{MPN: absolute_path}`` for every
+        contained successful model, including manifests that also carry
+        contract metadata. Callers that need to export an authored explicit
+        contract pass ``include_contracts=True``; valid contracts then map to
+        ``{path, subckt, pin_order}``. An explicitly present but invalid or
+        incomplete contract maps to ``{path, contract_error}`` so simulation
+        cannot mistake it for a legacy path-only entry.
     """
     manifest_path = Path(manifest_path)
     if not manifest_path.exists():
@@ -264,10 +268,11 @@ def resolve_spice_models(manifest_path: Path) -> dict[str, str | dict[str, objec
 
         subckt = entry.get("subckt")
         pin_order = entry.get("pin_order")
-        if subckt is None or pin_order is None:
-            # Preserve the old path-only shape so consumers can explain that
-            # the download exists but lacks an authored electrical contract.
+        if not include_contracts or (subckt is None and pin_order is None):
             result[str(mpn)] = str(model_file)
+            continue
+        if subckt is None or pin_order is None:
+            result[str(mpn)] = {"path": str(model_file), "contract_error": "incomplete explicit pin contract"}
             continue
         if (
             not isinstance(subckt, str)
@@ -279,14 +284,14 @@ def resolve_spice_models(manifest_path: Path) -> dict[str, str | dict[str, objec
             )
             or len(set(map(str, pin_order))) != len(pin_order)
         ):
-            result[str(mpn)] = str(model_file)
+            result[str(mpn)] = {"path": str(model_file), "contract_error": "invalid explicit pin contract"}
             continue
         try:
             model_text = model_file.read_text(encoding="utf-8-sig")
         except (OSError, UnicodeError):
-            result[str(mpn)] = str(model_file)
+            result[str(mpn)] = {"path": str(model_file), "contract_error": "model file is unreadable"}
             continue
-        declarations: dict[str, int] = {}
+        declarations: dict[str, list[int]] = {}
         for line in model_text.splitlines():
             declaration = re.match(r"^\s*\.subckt\s+(\S+)(?:\s+(.*?))?\s*$", line, re.I)
             if declaration:
@@ -294,9 +299,16 @@ def resolve_spice_models(manifest_path: Path) -> dict[str, str | dict[str, objec
                 lower_pins = [pin.lower() for pin in pins]
                 if "params:" in lower_pins:
                     pins = pins[: lower_pins.index("params:")]
-                declarations[declaration.group(1).lower()] = len(pins)
-        if declarations.get(subckt.lower()) != len(pin_order):
-            result[str(mpn)] = str(model_file)
+                declarations.setdefault(declaration.group(1).lower(), []).append(len(pins))
+        matches = declarations.get(subckt.lower(), [])
+        if len(matches) != 1:
+            result[str(mpn)] = {
+                "path": str(model_file),
+                "contract_error": "subcircuit declaration is missing or ambiguous",
+            }
+            continue
+        if matches[0] != len(pin_order):
+            result[str(mpn)] = {"path": str(model_file), "contract_error": "subcircuit pin count mismatch"}
             continue
         result[str(mpn)] = {"path": str(model_file), "subckt": subckt, "pin_order": list(map(str, pin_order))}
 
