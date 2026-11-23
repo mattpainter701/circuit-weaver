@@ -249,8 +249,12 @@ use a bounded fanout profile in the last existing portfolio attempt when
 Freerouting 2.5+ is available and at least three attempts were requested.
 Four-layer boards, source wiring and ambiguous exports disable this profile.
 With three eligible attempts, the first ordinary placement order gets 40% of
-the shared time budget. The second gets one third of the remaining time, or
-one eighth if the first returned a timed-out session with open connections.
+the shared time budget. If it times out after closing at least three quarters
+of its initial connections, the second attempt can continue from the verified
+session. Only the first attempt's generated tracks and vias are movable. The
+original placement, pin assignments, board rules and source files stay fixed.
+The second attempt gets one third of the remaining time. If a timed-out
+partial cannot be continued, the descending placement order gets one eighth.
 Fanout gets the rest. It tries one pass of 1–3 mm pad escapes, allowing up to
 1.5 seconds per pin within its overall deadline. Each attempt records its
 actual input and time allowance.

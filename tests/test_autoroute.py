@@ -189,6 +189,15 @@ def _write_dsn(tmp_path: Path, name: str = "sensor-board.dsn", text: str = VALID
     return path
 
 
+def _write_native_continuation_dsn(tmp_path: Path) -> Path:
+    text = VALID_DSN.replace(
+        '(layer "B.Cu" (type signal))',
+        '(layer "B.Cu" (type signal))\n    (via "Via[0-1]_600:300_um")',
+        1,
+    ).replace("  (network\n", "  (wiring)\n  (network\n", 1)
+    return _write_dsn(tmp_path, text=text)
+
+
 def test_router_only_clearance_margin_updates_general_rules_and_preserves_typed_exceptions(tmp_path):
     dsn = _write_dsn(tmp_path)
 
@@ -1778,6 +1787,8 @@ def test_stat_parser_understands_current_freerouting_cli_summary():
 
 def test_cooperative_timeout_reports_the_saved_partial_score():
     output = (
+        "Fanout stage completed with timeout: started with 999 unrouted nets, "
+        "completed in 2.0 seconds, final score: 80 (20 unrouted and 0 violations).\n"
         "Auto-routing pass #7 completed with score 990.04 (6 unrouted and 0 violations)\n"
         "Auto-routing stage completed with timeout: started with 803 unrouted nets, "
         "completed in 635.72 seconds, final score: 993.36 (4 unrouted and 0 violations).\n"
@@ -1786,6 +1797,7 @@ def test_cooperative_timeout_reports_the_saved_partial_score():
     assert stats["stage_timed_out"] is True
     assert stats["statistics_source"] == "final_stage_summary"
     assert stats["incomplete"] == 4
+    assert stats["initial_incomplete"] == 803
     assert stats["clearance_violations"] == 0
 
 
@@ -2020,6 +2032,301 @@ class TestFreerouting25CompatibilityProposal:
         )
         assert allowances == expected
         assert clock[0] == 1800
+
+    def test_native_timed_out_session_continues_before_final_fanout(self, tmp_path, monkeypatch):
+        dsn = _write_native_continuation_dsn(tmp_path)
+        source_hash = hashlib.sha256(dsn.read_bytes()).hexdigest()
+        seed_session = VALID_SES.replace(
+            "(placement)",
+            '(placement (resolution mil 1000) '
+            '(component "Resistor_SMD:R_0402_1005Metric" '
+            "(place R1 10000000 10000000 front 0)))",
+            1,
+        ).replace(
+            '(base_design "sensor-board.dsn")',
+            '(base_design "sensor-board.dsn")\n  (was_is)',
+            1,
+        ).replace(
+            "(library_out)", '(library_out (padstack "Via[0-1]_600:300_um"))', 1,
+        ).replace(
+            "(net GND (wire", '(net GND (via "Via[0-1]_600:300_um" 15000 12000) (wire', 1,
+        )
+        clock = [0.0]
+        calls = []
+
+        def route(route_dsn, output, _command, *, timeout_seconds, attempt_context, **options):
+            route_dsn = Path(route_dsn)
+            output = Path(output)
+            index = len(calls)
+            calls.append({
+                "dsn": route_dsn,
+                "bytes": route_dsn.read_bytes(),
+                "context": attempt_context,
+                "timeout": timeout_seconds,
+                "options": options,
+                "output": output,
+            })
+            output.write_text(seed_session if index == 0 else VALID_SES, encoding="utf-8")
+            artifact = _validate_specctra_artifact(
+                output, "ses", source_dsn=route_dsn, allow_partial_nets=True,
+            )
+            assert artifact["valid"] is True
+            calls[-1]["artifact"] = artifact
+            stats = [
+                {"incomplete": 3, "initial_incomplete": 12, "stage_timed_out": True},
+                {"incomplete": 1, "initial_incomplete": 12, "stage_timed_out": False},
+                {"incomplete": 0, "initial_incomplete": 12, "stage_timed_out": False},
+            ][index]
+            stats.update({"clearance_violations": 0, "trace_length_mm": 30.0, "traces": 2, "vias": 0})
+            clock[0] += timeout_seconds
+            return {"status": "ok", "artifact": artifact, "stats": stats}
+
+        monkeypatch.setattr(autoroute_module.time, "perf_counter", lambda: clock[0])
+        monkeypatch.setattr(autoroute_module, "_route_specctra", route)
+        result = autoroute_module._route_candidates(
+            dsn, tmp_path / "continued.ses", ["freerouting"], attempts=3,
+            timeout_seconds=1800, overwrite=False, seed=None, passes=20, headless=True,
+            optimization_threads=0, optimizer_strategy=None, optimizer_hybrid_ratio=None,
+            optimizer_item_selection=None, optimizer_improvement_threshold=None,
+            capability_probe={"version": "2.5.0", "probe_ok": True, "seed": False},
+            clearance_baseline=None, allow_partial_nets=True, cooperative_partial_timeout=True,
+            native_placement_portfolio=True, native_fanout_profile=True,
+        )
+
+        assert result["status"] == "ok"
+        assert len(calls) == 3
+        first, continuation, fanout = calls
+        rows = result["search"]["attempts"]
+        assert [row["routing_profile"] for row in rows] == [
+            "standard", "standard_continuation", "bounded_fanout",
+        ]
+        assert [row["placement_order_strategy"] for row in rows] == ["ascending", "ascending", "ascending"]
+        assert [call["dsn"].name for call in calls] == [dsn.name] * 3
+        assert continuation["options"].get("native_fanout_profile") is None
+        assert fanout["options"]["native_fanout_profile"] is True
+        assert [call["timeout"] for call in calls] == [720, 360, 720]
+        assert b'(wire (path F.Cu 0.25 10 10 20 12.54) (net GND) (type normal))' in continuation["bytes"]
+        assert b'(via Via[0-1]_600:300_um 15 12 (net GND) (type normal))' in continuation["bytes"]
+
+        metadata = continuation["context"]["native_session_continuation"]
+        assert metadata["status"] == "prepared"
+        assert metadata["seed_attempt"] == 1
+        assert metadata["seed_session_sha256"] == first["artifact"]["sha256"]
+        assert metadata["seed_dsn_sha256"] == hashlib.sha256(first["bytes"]).hexdigest()
+        assert metadata["variant_dsn_sha256"] == hashlib.sha256(continuation["bytes"]).hexdigest()
+        assert continuation["context"]["source_dsn_sha256"] == source_hash
+        assert continuation["context"]["variant_dsn_sha256"] == hashlib.sha256(continuation["bytes"]).hexdigest()
+        assert rows[1]["native_session_continuation"] == metadata
+        assert result["search"]["selected_attempt"] == 3
+
+    def test_untranslatable_valid_seed_uses_short_descending_standard_fallback(self, tmp_path, monkeypatch):
+        dsn = _write_native_continuation_dsn(tmp_path)
+        qarc_session = VALID_SES.replace(
+            "(placement)",
+            '(placement (resolution mil 1000) '
+            '(component "Resistor_SMD:R_0402_1005Metric" '
+            "(place R1 10000000 10000000 front 0)))",
+            1,
+        ).replace(
+            '(base_design "sensor-board.dsn")',
+            '(base_design "sensor-board.dsn")\n  (was_is)',
+            1,
+        ).replace(
+            "(wire (path F.Cu 250 10000 10000 20000 12540))",
+            "(wire (qarc F.Cu 250 10000 10000 20000 12540))",
+        )
+        clock = [0.0]
+        calls = []
+
+        def route(route_dsn, output, _command, *, timeout_seconds, attempt_context, **_options):
+            route_dsn, output = Path(route_dsn), Path(output)
+            index = len(calls)
+            calls.append({
+                "dsn": route_dsn,
+                "bytes": route_dsn.read_bytes(),
+                "context": attempt_context,
+                "timeout": timeout_seconds,
+            })
+            output.write_text(qarc_session if index == 0 else VALID_SES, encoding="utf-8")
+            artifact = _validate_specctra_artifact(
+                output, "ses", source_dsn=route_dsn, allow_partial_nets=True,
+            )
+            assert artifact["valid"] is True
+            stats = {"incomplete": 3 if index == 0 else 0, "initial_incomplete": 12,
+                     "stage_timed_out": index == 0, "clearance_violations": 0,
+                     "trace_length_mm": 30.0, "traces": 2, "vias": 0}
+            clock[0] += timeout_seconds
+            return {"status": "ok", "artifact": artifact, "stats": stats}
+
+        monkeypatch.setattr(autoroute_module.time, "perf_counter", lambda: clock[0])
+        monkeypatch.setattr(autoroute_module, "_route_specctra", route)
+        result = autoroute_module._route_candidates(
+            dsn, tmp_path / "fallback.ses", ["freerouting"], attempts=3,
+            timeout_seconds=1800, overwrite=False, seed=None, passes=20, headless=True,
+            optimization_threads=0, optimizer_strategy=None, optimizer_hybrid_ratio=None,
+            optimizer_item_selection=None, optimizer_improvement_threshold=None,
+            capability_probe={"version": "2.5.0", "probe_ok": True, "seed": False},
+            clearance_baseline=None, allow_partial_nets=True, cooperative_partial_timeout=True,
+            native_placement_portfolio=True, native_fanout_profile=True,
+        )
+
+        assert result["status"] == "ok"
+        assert [row["routing_profile"] for row in result["search"]["attempts"]] == [
+            "standard", "standard", "bounded_fanout",
+        ]
+        assert [row["placement_order_strategy"] for row in result["search"]["attempts"]] == [
+            "ascending", "descending", "ascending",
+        ]
+        assert [call["timeout"] for call in calls] == [720, 135, 945]
+        metadata = result["search"]["attempts"][1]["native_session_continuation"]
+        assert metadata["status"] == "unsupported"
+        assert metadata["seed_attempt"] == 1
+        assert "supported path" in metadata["reason"].lower()
+        assert b"20000 12540" not in calls[1]["bytes"]
+
+    def test_mismatched_valid_seed_hash_fails_closed_before_continuation(self, tmp_path, monkeypatch):
+        dsn = _write_native_continuation_dsn(tmp_path)
+        destination = tmp_path / "reviewed.ses"
+        destination.write_bytes(b"previous reviewed session")
+        clock = [0.0]
+        calls = []
+
+        def route(route_dsn, output, _command, *, timeout_seconds, **_options):
+            route_dsn, output = Path(route_dsn), Path(output)
+            calls.append(route_dsn)
+            output.write_text(VALID_SES, encoding="utf-8")
+            artifact = _validate_specctra_artifact(
+                output, "ses", source_dsn=route_dsn, allow_partial_nets=True,
+            )
+            artifact["sha256"] = "0" * 64
+            clock[0] += timeout_seconds
+            return {
+                "status": "ok", "artifact": artifact,
+                "stats": {"incomplete": 3, "initial_incomplete": 12, "stage_timed_out": True,
+                          "clearance_violations": 0, "trace_length_mm": 30.0, "traces": 2, "vias": 0},
+            }
+
+        monkeypatch.setattr(autoroute_module.time, "perf_counter", lambda: clock[0])
+        monkeypatch.setattr(autoroute_module, "_route_specctra", route)
+        result = autoroute_module._route_candidates(
+            dsn, destination, ["freerouting"], attempts=3,
+            timeout_seconds=1800, overwrite=True, seed=None, passes=20, headless=True,
+            optimization_threads=0, optimizer_strategy=None, optimizer_hybrid_ratio=None,
+            optimizer_item_selection=None, optimizer_improvement_threshold=None,
+            capability_probe={"version": "2.5.0", "probe_ok": True, "seed": False},
+            clearance_baseline=None, allow_partial_nets=True, cooperative_partial_timeout=True,
+            native_placement_portfolio=True, native_fanout_profile=True,
+        )
+
+        assert result["status"] == "error"
+        assert "changed" in result["message"].lower()
+        assert len(calls) == 1
+        assert destination.read_bytes() == b"previous reviewed session"
+
+    def test_selected_session_hash_drift_during_next_attempt_fails_closed(self, tmp_path, monkeypatch):
+        dsn = _write_dsn(tmp_path)
+        destination = tmp_path / "reviewed.ses"
+        destination.write_bytes(b"previous reviewed session")
+        calls = []
+
+        def route(route_dsn, output, _command, *, attempt_context, **_options):
+            route_dsn, output = Path(route_dsn), Path(output)
+            index = len(calls)
+            calls.append({"dsn": route_dsn, "output": output, "context": attempt_context})
+            if index:
+                if index == 1:
+                    calls[0]["output"].write_bytes(b"tampered after initial validation")
+                return {"status": "error", "message": "controlled later-attempt failure"}
+
+            output.write_text(VALID_SES, encoding="utf-8")
+            artifact = _validate_specctra_artifact(
+                output, "ses", source_dsn=route_dsn, allow_partial_nets=True,
+            )
+            assert artifact["valid"] is True
+            return {
+                "status": "ok",
+                "artifact": artifact,
+                "stats": {
+                    "incomplete": 4,
+                    "initial_incomplete": 15,
+                    "stage_timed_out": False,
+                    "clearance_violations": 0,
+                    "trace_length_mm": 30.0,
+                    "traces": 2,
+                    "vias": 0,
+                },
+            }
+
+        monkeypatch.setattr(autoroute_module, "_route_specctra", route)
+        result = autoroute_module._route_candidates(
+            dsn, destination, ["freerouting"], attempts=3,
+            timeout_seconds=60, overwrite=True, seed=None, passes=20, headless=True,
+            optimization_threads=0, optimizer_strategy=None, optimizer_hybrid_ratio=None,
+            optimizer_item_selection=None, optimizer_improvement_threshold=None,
+            capability_probe={"version": "2.5.0", "probe_ok": True, "seed": False},
+            clearance_baseline=None, allow_partial_nets=True, cooperative_partial_timeout=True,
+            native_placement_portfolio=True, native_fanout_profile=True,
+        )
+
+        assert result["status"] == "error"
+        assert "session" in result["message"].lower()
+        assert len(calls) == 3
+        assert destination.read_bytes() == b"previous reviewed session"
+
+    @pytest.mark.parametrize(
+        ("initial_incomplete", "incomplete", "stage_timed_out", "expected_allowances"),
+        [
+            (15, 4, True, [720, 135, 945]),  # four-fold progress threshold is not met
+            (12, 0, False, [720, 360, 720]),  # a complete ordinary attempt never seeds continuation
+        ],
+    )
+    def test_native_continuation_requires_timeout_and_fourfold_progress(
+        self, tmp_path, monkeypatch, initial_incomplete, incomplete, stage_timed_out, expected_allowances,
+    ):
+        dsn = _write_native_continuation_dsn(tmp_path)
+        clock = [0.0]
+        calls = []
+
+        def route(route_dsn, output, _command, *, timeout_seconds, attempt_context, **_options):
+            route_dsn, output = Path(route_dsn), Path(output)
+            index = len(calls)
+            calls.append({"timeout": timeout_seconds, "context": attempt_context})
+            output.write_text(VALID_SES, encoding="utf-8")
+            artifact = _validate_specctra_artifact(
+                output, "ses", source_dsn=route_dsn, allow_partial_nets=True,
+            )
+            assert artifact["valid"] is True
+            stats = {
+                "incomplete": incomplete if index == 0 else 0,
+                "initial_incomplete": initial_incomplete,
+                "stage_timed_out": stage_timed_out if index == 0 else False,
+                "clearance_violations": 0,
+                "trace_length_mm": 30.0,
+                "traces": 2,
+                "vias": 0,
+            }
+            clock[0] += timeout_seconds
+            return {"status": "ok", "artifact": artifact, "stats": stats}
+
+        monkeypatch.setattr(autoroute_module.time, "perf_counter", lambda: clock[0])
+        monkeypatch.setattr(autoroute_module, "_route_specctra", route)
+        result = autoroute_module._route_candidates(
+            dsn, tmp_path / "unqualified.ses", ["freerouting"], attempts=3,
+            timeout_seconds=1800, overwrite=False, seed=None, passes=20, headless=True,
+            optimization_threads=0, optimizer_strategy=None, optimizer_hybrid_ratio=None,
+            optimizer_item_selection=None, optimizer_improvement_threshold=None,
+            capability_probe={"version": "2.5.0", "probe_ok": True, "seed": False},
+            clearance_baseline=None, allow_partial_nets=True, cooperative_partial_timeout=True,
+            native_placement_portfolio=True, native_fanout_profile=True,
+        )
+
+        assert result["status"] == "ok"
+        assert [row["routing_profile"] for row in result["search"]["attempts"]] == [
+            "standard", "standard", "bounded_fanout",
+        ]
+        assert "native_session_continuation" not in result["search"]["attempts"][1]
+        assert calls[1]["context"]["routing_profile"] == "standard"
+        assert [call["timeout"] for call in calls] == expected_allowances
 
     def test_failed_portfolio_attempts_keep_exact_private_dsn_and_effective_argv(
         self, tmp_path, monkeypatch

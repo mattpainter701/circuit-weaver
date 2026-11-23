@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from ._specctra_canonical import canonicalize_native_dsn
+from ._specctra_continuation import continuation_dsn
 from .project_state import file_sha256
 
 log = logging.getLogger(__name__)
@@ -516,7 +517,8 @@ def _validate_specctra_artifact(
         }
 
     try:
-        text = artifact.read_text(encoding="utf-8", errors="strict")
+        contents = artifact.read_bytes()
+        text = contents.decode("utf-8", errors="strict")
     except (OSError, UnicodeError) as exc:
         return {"valid": False, "reason": f"Could not read {kind.upper()} artifact: {exc}", "size_bytes": size}
 
@@ -611,6 +613,7 @@ def _validate_specctra_artifact(
         result["routable_net_count"] = len(details["routable_nets"])
     if kind == "ses":
         result["base_design"] = details["base_design"]
+        result["sha256"] = hashlib.sha256(contents).hexdigest()
     return result
 
 
@@ -1177,7 +1180,8 @@ def _parse_routing_stats(output_text: str) -> dict[str, Any]:
     # establish completion and violations for publication.
     final_scores = list(
         re.finditer(
-            r"stage completed(?P<timeout> with timeout)?:[^\r\n]*final score:[^\r\n]*?"
+            r"(?:(?<![\w-])(?P<routing>Auto-routing)\s+)?stage completed(?P<timeout> with timeout)?:[ \t]*"
+            r"(?:started with (?P<initial>\d+) unrouted (?:nets|items)\b)?[^\r\n]*final score:[^\r\n]*?"
             r"\((?P<opens>\d+) unrouted and (?P<violations>\d+) violations\)",
             output_text,
             re.IGNORECASE,
@@ -1190,6 +1194,8 @@ def _parse_routing_stats(output_text: str) -> dict[str, Any]:
         stats["statistics_source"] = "final_stage_summary"
         if terminal["timeout"]:
             stats["stage_timed_out"] = True
+            if terminal["routing"] and terminal["initial"] is not None:
+                stats["initial_incomplete"] = int(terminal["initial"])
     return stats
 
 
@@ -2400,6 +2406,46 @@ def _routing_rank(stats: dict[str, Any]) -> tuple[float, ...]:
     )
 
 
+def _native_continuation_candidate(
+    primary: dict[str, Any], seed: Path, source_dsn: Path,
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Reuse the first private session if its timed-out search closed at least three quarters of the opens."""
+    stats = primary.get("stats", {})
+    artifact = primary.get("artifact", {})
+    opens = stats.get("incomplete")
+    starting = stats.get("initial_incomplete")
+    if (
+        primary["status"] != "ok"
+        or stats.get("stage_timed_out") is not True
+        or type(opens) is not int or type(starting) is not int
+        or not 0 < 4 * opens <= starting
+        or stats.get("clearance_violations") != 0
+        or artifact.get("valid") is not True
+        or artifact.get("kind") != "ses"
+        or not artifact.get("sha256")
+    ):
+        return None, None
+    source_bytes, session_bytes = source_dsn.read_bytes(), seed.read_bytes()
+    source_sha = hashlib.sha256(source_bytes).hexdigest()
+    seed_sha = hashlib.sha256(session_bytes).hexdigest()
+    if (
+        primary.get("variant_sha256") != source_sha or artifact["sha256"] != seed_sha
+        or not isinstance(artifact.get("path"), str) or Path(artifact["path"]) != seed
+    ):
+        raise ValueError("Native continuation input changed after its first routing attempt")
+    provenance = {
+        "seed_attempt": primary["attempt"], "seed_session_sha256": seed_sha, "seed_dsn_sha256": source_sha,
+    }
+    try:
+        text, report = continuation_dsn(source_bytes.decode("utf-8"), session_bytes.decode("utf-8"))
+    except ValueError as exc:
+        return None, {**provenance, "status": "unsupported", "reason": str(exc)}
+    return text, {
+        **report, **provenance, "status": "prepared",
+        "variant_dsn_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+    }
+
+
 def _route_candidates(
     dsn_path: Path,
     ses_path: Path,
@@ -2487,10 +2533,17 @@ def _route_candidates(
                 candidate_hash = None
                 placement_order_kind = None
                 fanout_clearance_guardband = None
+                continuation_text = None
+                continuation = None
+                if three_native_profiles and index == 1 and options.get("cooperative_partial_timeout"):
+                    continuation_text, continuation = _native_continuation_candidate(
+                        attempt_rows[0], Path(temporary) / "candidate-1.ses",
+                        Path(temporary) / "input-1" / dsn_path.name,
+                    )
+                    if continuation_text is not None:
+                        attempt_profile = "standard_continuation"
                 if native_placement_portfolio:
-                    if attempt_profile == "bounded_fanout":
-                        # The bounded profile is calibrated against the ascending
-                        # placement variant, so rerun that exact ordering.
+                    if attempt_profile in {"bounded_fanout", "standard_continuation"}:
                         placement_order_kind = "ascending"
                     elif index == 0:
                         placement_order_kind = "ascending"
@@ -2500,11 +2553,13 @@ def _route_candidates(
                         placement_order_kind = "original"
                     else:
                         placement_order_kind = "rotated"
-                    variant_text, placement_order = _native_placement_variant(
-                        native_dsn_text,
-                        placement_order_kind,
-                        rotation=index - 2,
-                    )
+                    if continuation_text is not None:
+                        variant_text = continuation_text
+                        placement_order = attempt_rows[0]["placement_order"]
+                    else:
+                        variant_text, placement_order = _native_placement_variant(
+                            native_dsn_text, placement_order_kind, rotation=index - 2,
+                        )
                     variant_dir = Path(temporary) / f"input-{index + 1}"
                     variant_dir.mkdir()
                     # Keep the exact input basename/design identity for SES
@@ -2516,6 +2571,8 @@ def _route_candidates(
                         variant_text = variant_text.replace("\r\n", "\n").replace("\r", "\n")
                     route_dsn.write_bytes(variant_text.encode("utf-8"))
                     candidate_hash = file_sha256(route_dsn)
+                    if continuation_text is not None and candidate_hash != continuation["variant_dsn_sha256"]:
+                        raise ValueError("Prepared native continuation DSN changed before routing")
                     if attempt_profile == "bounded_fanout":
                         pre_guardband_hash = candidate_hash
                         try:
@@ -2568,7 +2625,7 @@ def _route_candidates(
                 if remaining <= 0:
                     break
                 remaining_weights = weights[index:]
-                if three_native_profiles and index == 1:
+                if three_native_profiles and index == 1 and continuation_text is None:
                     primary = attempt_rows[0]
                     stats = primary.get("stats", {})
                     if primary["status"] == "ok" and stats.get("stage_timed_out") and stats["incomplete"] > 0:
@@ -2603,6 +2660,7 @@ def _route_candidates(
                         "source_dsn_sha256": input_hash,
                         "variant_dsn_sha256": candidate_hash or input_hash,
                         "native_dsn_canonicalization": native_dsn_canonicalization,
+                        **({"native_session_continuation": continuation} if continuation is not None else {}),
                         **({"native_fanout_clearance_guardband": fanout_clearance_guardband}
                            if fanout_clearance_guardband is not None else {}),
                     },
@@ -2628,6 +2686,8 @@ def _route_candidates(
                     row["variant_sha256"] = candidate_hash
                 if fanout_clearance_guardband is not None:
                     row["native_fanout_clearance_guardband"] = fanout_clearance_guardband
+                if continuation is not None:
+                    row["native_session_continuation"] = continuation
                 if "stats" in result:
                     row["stats"] = result["stats"]
                 if "router_logs" in result:
@@ -2699,6 +2759,9 @@ def _route_candidates(
                 return _result_error("No routing attempt produced a verified usable session", search=search)
             if file_sha256(dsn_path) != input_hash:
                 return _result_error("Routing input changed before session publication", search=search)
+            winner_sha = winner["artifact"].get("sha256")
+            if winner_sha and file_sha256(winner_path) != winner_sha:
+                return _result_error("Selected routing session changed before publication", search=search)
             error = _publish_staged_file(winner_path, ses_path, overwrite=overwrite)
             if error:
                 return _result_error(error, search=search)

@@ -291,6 +291,7 @@ jobs:
           set -euo pipefail
           curl --fail --location --retry 3 https://github.com/freerouting/freerouting/releases/download/v2.5.0/freerouting-2.5.0.jar -o /tmp/freerouting-2.5.0.jar
           echo 'f6f51bb02245e8e717f9359bd260cc9c5c0b1bc0acc8b7cb2cd5b8ffeb5de3c7  /tmp/freerouting-2.5.0.jar' | sha256sum --check
+          CW_REQUIRE_NATIVE_PCB_TESTS=1 python -m pytest tests/test_native_session_continuation.py -q
           wheel=$(find dist -maxdepth 1 -name 'circuit_weaver-*.whl' -print -quit)
           test -n "$wheel"
           python benchmarks/general_scale/run_general_scale.py --suite samples \
