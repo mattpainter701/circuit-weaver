@@ -429,3 +429,63 @@ def test_multiroot_search_rejects_invalid_anchor_identity_geometry_or_layer(bad_
             [0], (-1.0, -1.0, 3.0, 1.0), 1.0, 10,
             lambda _a, _b, _layer: True, lambda _point: False,
         )
+
+
+def test_multiroot_connector_budget_reserves_escape_for_goal_after_two_start_anchors(monkeypatch):
+    requests = []
+    lattice_origin = (0.25, 0.0)
+    node_by_uuid = {"start-a": (0, 0, 0), "start-b": (0, 1, 0), "goal": (4, 0, 0)}
+
+    def fake_roots(anchor, origin, step, stack, bounds, clear_segment, can_change_layer,
+                   state_budget, **_kwargs):
+        requests.append((anchor["uuid"], state_budget))
+        if state_budget <= 0:
+            return {}, 0
+        node = node_by_uuid[anchor["uuid"]]
+        target = (origin[0] + node[0] * step, origin[1] + node[1] * step)
+        return {
+            node: {
+                "anchor": anchor,
+                "cost": 0.0,
+                "connector_path": [(anchor["point"], stack[0]), (target, stack[0])],
+            },
+        }, min(4_000, state_budget)
+
+    monkeypatch.setattr(kernel, "_connected_anchor_lattice_roots", fake_roots)
+    path, expanded, start_anchor, goal_anchor, _origin = kernel._bidirectional_connected_anchor_search(
+        [
+            {"uuid": "start-a", "point": lattice_origin, "layer": 0},
+            {"uuid": "start-b", "point": (0.25, 1.0), "layer": 0},
+        ],
+        [{"uuid": "goal", "point": (4.25, 0.0), "layer": 0}],
+        [0], (-2.0, -2.0, 8.0, 8.0), 1.0, 32_000,
+        lambda *_args: True, lambda _point: False,
+    )
+
+    assert path
+    assert start_anchor["uuid"] == "start-a"
+    assert goal_anchor["uuid"] == "goal"
+    assert requests[:3] == [("start-a", 4_000), ("start-b", 0), ("goal", 4_000)]
+    assert expanded <= 32_000
+
+
+def test_multiroot_connector_order_prefers_distinct_xy_before_duplicate_layer(monkeypatch):
+    calls = []
+
+    def fake_roots(anchor, *_args, **_kwargs):
+        calls.append(anchor["uuid"])
+        return {}, 0
+
+    monkeypatch.setattr(kernel, "_connected_anchor_lattice_roots", fake_roots)
+    kernel._bidirectional_connected_anchor_search(
+        [
+            {"uuid": "pad-front", "point": (0.25, 0.0), "layer": 0},
+            {"uuid": "pad-back", "point": (0.25, 0.0), "layer": 1},
+            {"uuid": "track-end", "point": (0.25, 1.0), "layer": 0},
+        ],
+        [{"uuid": "goal", "point": (4.25, 0.0), "layer": 0}],
+        [0, 1], (-2.0, -2.0, 8.0, 8.0), 1.0, 32_000,
+        lambda *_args: True, lambda _point: False,
+    )
+
+    assert calls[:3] == ["pad-front", "track-end", "pad-back"]

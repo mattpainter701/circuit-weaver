@@ -831,16 +831,31 @@ def _bidirectional_connected_anchor_search(start_anchors, goal_anchors, stack, b
 
     connector_budget = min(8_000, max_expanded_states // 4)
     connector_states = 0
+    forward_connector_budget = connector_budget // 2
+    reverse_connector_budget = connector_budget - forward_connector_budget
 
-    def seed_roots(anchors):
+    def seed_roots(anchors, side_budget):
         nonlocal connector_states
         roots, distances, anchor_by_root, queue = set(), {}, {}, []
         sequence = 0
+        # Try one copper location before spending states on another layer at
+        # the same through-pad/via coordinate. The local escape search can
+        # change layers itself, so duplicate physical points are secondary.
+        ordered, deferred, seen_points = [], [], set()
         for anchor in anchors:
-            local_budget = min(4_000, max(0, connector_budget - connector_states))
+            if anchor["point"] in seen_points:
+                deferred.append(anchor)
+            else:
+                ordered.append(anchor)
+                seen_points.add(anchor["point"])
+        ordered.extend(deferred)
+        side_states = 0
+        for anchor in ordered:
+            local_budget = min(4_000, max(0, side_budget - side_states))
             candidates, used = _connected_anchor_lattice_roots(
                 anchor, lattice_origin, step, stack, bounds, clear_segment, can_change_layer, local_budget,
             )
+            side_states += used
             connector_states += used
             for node, connector in candidates.items():
                 connector_cost = connector["cost"]
@@ -864,8 +879,12 @@ def _bidirectional_connected_anchor_search(start_anchors, goal_anchors, stack, b
                 sequence += 1
         return roots, distances, anchor_by_root, queue
 
-    forward_roots, forward_distance, forward_anchor, forward_queue = seed_roots(starts)
-    reverse_roots, reverse_distance, reverse_anchor, reverse_queue = seed_roots(goals)
+    forward_roots, forward_distance, forward_anchor, forward_queue = seed_roots(
+        starts, forward_connector_budget,
+    )
+    reverse_roots, reverse_distance, reverse_anchor, reverse_queue = seed_roots(
+        goals, reverse_connector_budget,
+    )
     if not forward_queue or not reverse_queue:
         return None, connector_states, None, None, lattice_origin
     forward_previous, reverse_next = {}, {}
