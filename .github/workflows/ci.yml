@@ -13,6 +13,17 @@ permissions:
   contents: read
 
 jobs:
+  slot16:
+    name: Slot16 RTL and generic synthesis
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install RTL tools
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends iverilog yosys
+      - name: Exercise architecture and synthesize the core
+        run: sh asic/slot16/check.sh
+
   test:
     name: Python ${{ matrix.python-version }} / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
