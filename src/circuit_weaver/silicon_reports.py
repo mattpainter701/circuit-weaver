@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -11,6 +12,16 @@ from pathlib import Path
 def inspect_silicon_report(check: str, path: Path, declared_top: str) -> str:
     """Reject failed native checks; identify other report formats as attestations."""
     suffix = path.suffix.lower()
+    if check == "lvs" and path.name.lower().endswith(".netgen.rpt"):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        summaries = [line.strip() for line in lines if line.startswith("Final result:")]
+        if summaries != ["Final result: Circuits match uniquely."]:
+            raise ValueError("Netgen did not report a unique final match")
+        matches = [line for line in lines if line.startswith("Device classes ")]
+        expected = f"Device classes {declared_top} and {declared_top} are equivalent."
+        if not matches or matches[-1].strip() != expected:
+            raise ValueError("Netgen final compared cells must match the declared top")
+        return "netgen_lvs"
     if check == "provider_precheck" and suffix == ".xml":
         try:
             root = ET.parse(path).getroot()
@@ -36,6 +47,22 @@ def inspect_silicon_report(check: str, path: Path, declared_top: str) -> str:
         stats = json.loads(path.read_text(encoding="utf-8-sig"))
         if not isinstance(stats, dict):
             raise ValueError("timing metrics must be a JSON object")
+        if any(key.startswith("timing__") for key in stats):
+            # LibreLane records the worst slack across corners and per-corner results.
+            corners = {""}
+            for key in stats:
+                match = re.fullmatch(r"timing__(?:hold|setup)__ws(__corner:.+)", key)
+                if match:
+                    corners.add(match.group(1))
+            for corner in sorted(corners):
+                for kind in ("setup", "hold"):
+                    slack = stats.get(f"timing__{kind}__ws{corner}")
+                    violations = stats.get(f"timing__{kind}_vio__count{corner}")
+                    if type(slack) not in (int, float) or not math.isfinite(slack) or slack < 0:
+                        raise ValueError(f"invalid or negative LibreLane {kind} slack{corner}")
+                    if type(violations) is not int or violations != 0:
+                        raise ValueError(f"LibreLane {kind} violation count must be zero{corner}")
+            return "librelane_timing"
         if not any(key.startswith("finish__") for key in stats):
             return "attested"
         for kind in ("setup", "hold"):

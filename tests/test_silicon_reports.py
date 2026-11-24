@@ -70,3 +70,29 @@ def test_openroad_timing_requires_both_finite_nonnegative_slacks(tmp_path):
         path.write_text(json.dumps(stats))
         with pytest.raises(ValueError, match="hold slack"):
             inspect_silicon_report("timing", path, "chip")
+
+
+def test_librelane_timing_checks_each_reported_corner(tmp_path):
+    path = tmp_path / "metrics.json"
+    stats = {}
+    for corner in ("", "__corner:slow"):
+        for kind in ("setup", "hold"):
+            stats[f"timing__{kind}__ws{corner}"] = 1.0
+            stats[f"timing__{kind}_vio__count{corner}"] = 0
+    path.write_text(json.dumps(stats))
+    assert inspect_silicon_report("timing", path, "chip") == "librelane_timing"
+    stats["timing__hold__ws__corner:slow"] = -0.01
+    path.write_text(json.dumps(stats))
+    with pytest.raises(ValueError, match="negative LibreLane hold"):
+        inspect_silicon_report("timing", path, "chip")
+
+
+def test_netgen_requires_the_matching_top_and_final_result(tmp_path):
+    report = tmp_path / "lvs.netgen.rpt"
+    report.write_text("Device classes chip and chip are equivalent.\nFinal result: Circuits match uniquely.\n")
+    assert inspect_silicon_report("lvs", report, "chip") == "netgen_lvs"
+    with pytest.raises(ValueError, match="declared top"):
+        inspect_silicon_report("lvs", report, "wrapper")
+    report.write_text("Device classes chip and chip are equivalent.\nFinal result: Netlists do not match.\n")
+    with pytest.raises(ValueError, match="unique final match"):
+        inspect_silicon_report("lvs", report, "chip")
