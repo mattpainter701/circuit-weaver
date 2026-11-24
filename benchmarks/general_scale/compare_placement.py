@@ -42,14 +42,46 @@ def inventory(board_path):
         label = fp.Reference()
         p = label.GetPosition()
         labels[ref] = [p.x, p.y, label.GetTextAngle().AsDegrees(), int(label.GetLayer()), label.IsVisible()]
-    vias, lengths = 0, []
+
+    def point(p):
+        return (p.x, p.y)
+
+    vias, lengths, geometry = 0, [], []
+    layers = list(board.GetEnabledLayers().CuStack())
     for item in board.GetTracks():
+        net = item.GetNetname()
         if isinstance(item, pcbnew.PCB_VIA):
             vias += 1
+            try:
+                diameters = [(layer, item.GetWidth(layer)) for layer in layers if item.IsOnLayer(layer)]
+            except TypeError:  # KiCad versions with one via diameter for all layers.
+                diameters = [(layer, item.GetWidth()) for layer in layers if item.IsOnLayer(layer)]
+            geometry.append(
+                (
+                    "via",
+                    net,
+                    point(item.GetPosition()),
+                    int(item.GetViaType()),
+                    item.GetDrillValue(),
+                    item.TopLayer(),
+                    item.BottomLayer(),
+                    diameters,
+                )
+            )
         else:
             lengths.append(item.GetLength())
+            endpoints = sorted([point(item.GetStart()), point(item.GetEnd())])
+            mid = point(item.GetMid()) if isinstance(item, pcbnew.PCB_ARC) else ()
+            geometry.append(("arc" if mid else "segment", net, int(item.GetLayer()), item.GetWidth(), endpoints, mid))
+    # Stable across save order, track direction and generated KiCad UUIDs.
+    encoded = json.dumps(sorted(geometry), separators=(",", ":")).encode("utf-8")
     return dict(
-        poses=poses, labels=labels, vias=vias, tracks=len(lengths), copper_mm=round(pcbnew.ToMM(math.fsum(lengths)), 4)
+        poses=poses,
+        labels=labels,
+        vias=vias,
+        tracks=len(lengths),
+        copper_mm=round(pcbnew.ToMM(math.fsum(lengths)), 4),
+        track_via_sha256=hashlib.sha256(encoded).hexdigest(),
     )
 
 
@@ -94,6 +126,7 @@ def measure(arm, interpreter):
         drc_complete=drc["diagnostics_complete"],
         vias=routed["vias"],
         copper_mm=routed["copper_mm"],
+        track_via_sha256=routed["track_via_sha256"],
         tracks=routed["tracks"],
     )
     from connectivity import verify_native_connectivity

@@ -414,10 +414,10 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: placement-wheel-ubuntu-latest
-          path: placement-wheel
+          path: dist/placement-wheel
 
       - name: Enable Rust placement scoring
-        run: python -m pip install --no-index --find-links placement-wheel circuit-weaver-placement
+        run: python -m pip install --no-index --find-links dist/placement-wheel circuit-weaver-placement
 
       - name: Set up routing runtime
         uses: actions/setup-java@v5
