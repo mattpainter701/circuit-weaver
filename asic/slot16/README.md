@@ -1,4 +1,10 @@
-# Slot16 embedded control processor
+# Weftline 16 embedded control processor
+
+![Concept rendering of the Weftline 16 processor package](weftline-16-concept.png)
+
+Weftline 16 is the product name for the Slot16 processor. The two threads in the emblem represent its alternating execution slots. The image shows a proposed package appearance. Physical packaging and pin assignment are open design decisions.
+
+Run `python asic/slot16/weftline.py` from the repository root to boot the quadrature encoder and diagnostic firmware on the [virtual board](virtual-board.md).
 
 Slot16 runs a control loop and a service task on one 16-bit integer datapath. Each task owns every second clock edge, a private data bank and one input/output stream. The core suits small, fixed firmware images such as a sampled-data controller that forwards selected readings to telemetry. An integrator supplies the program ROM, stream buffers and peripherals.
 

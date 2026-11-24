@@ -1,0 +1,8 @@
+# Mailbox receives 0 for ordinary samples or 1 for an invalid transition.
+# Emit the cumulative error count modulo 65536, including the first sample.
+LDI r7, 1
+next:
+RECV r0
+ADD r1, r0
+OUT r1
+BNZ r7, next

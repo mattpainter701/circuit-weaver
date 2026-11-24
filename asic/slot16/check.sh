@@ -6,6 +6,7 @@ trap 'rm -f "$simulation"' EXIT
 iverilog -g2012 -Wall -s test_slot16 -o "$simulation" slot16.sv test_slot16.sv
 vvp "$simulation"
 python3 verify_isa.py
+python3 test_weftline.py
 # Newer frontends emit $check cells, which the SAT backend consumes after
 # chformal -lower. Older frontends emit $assert directly.
 lower_checks=''
