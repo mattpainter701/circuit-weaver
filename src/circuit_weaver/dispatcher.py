@@ -4652,7 +4652,8 @@ def main() -> None:
     verify_p.add_argument("--output", "-o", help="Write the verification result JSON")
     args = parser.parse_args()
     if args.command in {
-        "start", "open", "adopt", "workflow", "runtime-info", "library-access", "library-bundle", "review-pcb"
+        "start", "open", "adopt", "workflow", "runtime-info",
+        "library-access", "library-bundle", "review-pcb", "silicon",
     } or (
             args.command == "resume" and args.execute):
         from .workflow_cli import dispatch as dispatch_workflow
@@ -4665,6 +4666,8 @@ def main() -> None:
         except (OSError, ValueError) as exc:
             result = {"ok": False, "status": "error", "error": {"code": "invalid_request", "message": str(exc)}}
         _print_json(result)
+        if args.command == "silicon" and result.get("status") == "incomplete":
+            raise SystemExit(3)
         if args.command == "review-pcb":
             raise SystemExit({"verified": 0, "review_required": 3, "unverified": 2}.get(result.get("status"), 1))
         raise SystemExit(0 if result.get("ok", result.get("status") != "error") else 1)

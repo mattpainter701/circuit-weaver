@@ -35,7 +35,9 @@ mcp = ["mcp>=1.26,<2"]
 yaml = ["PyYAML>=6.0,<7"]
 lookup = ["requests>=2.31,<3"]
 pdf = ["pypdf>=5,<7"]
+silicon = ["klayout>=0.30,<0.31"]
 test = [
+  "klayout>=0.30,<0.31",
   "fastapi>=0.111,<1",
   "uvicorn>=0.29,<1",
   "python-multipart>=0.0.7,<1",
@@ -49,6 +51,7 @@ test = [
   "twine>=5,<7",
 ]
 dev = [
+  "klayout>=0.30,<0.31",
   "fastapi>=0.111,<1",
   "uvicorn>=0.29,<1",
   "python-multipart>=0.0.7,<1",
@@ -63,6 +66,7 @@ dev = [
   "pre-commit>=3.7,<5",
 ]
 all = [
+  "klayout>=0.30,<0.31",
   "fastapi>=0.111,<1",
   "uvicorn>=0.29,<1",
   "python-multipart>=0.0.7,<1",

@@ -27,9 +27,10 @@ def test_distribution_exposes_supported_extras_and_commands() -> None:
     extras = set(package_metadata.get_all("Provides-Extra") or [])
     commands = {entry_point.name for entry_point in entry_points(group="console_scripts")}
 
-    assert {"api", "mcp", "yaml", "lookup", "pdf", "test", "dev", "all"} <= extras
+    assert {"api", "mcp", "yaml", "lookup", "pdf", "silicon", "test", "dev", "all"} <= extras
     assert any(requirement.startswith("mcp") and 'extra == "mcp"' in requirement for requirement in requirements)
     assert any(requirement.startswith("fastapi") and 'extra == "api"' in requirement for requirement in requirements)
+    assert any(req.startswith("klayout") and 'extra == "silicon"' in req for req in requirements)
     assert {"circuit-weaver", "circuit-weaver-mcp"} <= commands
 
 

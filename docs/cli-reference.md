@@ -20,6 +20,22 @@ hashes. The existing `resume <project> --json` only prints a continuation plan;
 add `--execute` to run it. See [Project lifecycle workflows](project-workflows.md)
 for native-stage options, cancellation and the shared Python/MCP interfaces.
 
+## Silicon layout and fabrication review
+
+Install the `silicon` extra to use KLayout's native geometry engine. Both commands print JSON.
+
+```sh
+python -m pip install '.[silicon]'
+circuit-weaver silicon preview carrier.gds --top chip_top --layers process.lyp -o carrier.png
+circuit-weaver silicon handoff handoff.json
+circuit-weaver silicon handoff handoff.json --bundle provider-review.zip
+```
+
+The preview draws the selected cell and its hierarchy. Use the provider's layer-properties file for process-specific
+colors and visibility. The handoff checks the submitted files and the evidence bound to them. An incomplete review
+returns exit code 3 and lists the missing items. A complete manifest can produce a local ZIP for provider review.
+The operator separately submits a revision and records its acceptance. [Manifest and integration guide](silicon-handoff.md)
+
 ## library-access
 
 Inspect installed and project-local KiCad symbols, footprints, and 3D models. Pass a part number or library name to search, or omit the query for an inventory of available libraries.
