@@ -21,6 +21,17 @@ def json_options(value: str) -> dict:
 
 
 def add_parsers(subparsers) -> None:
+    silicon = subparsers.add_parser("silicon", help="Render chip layouts and review fabrication evidence")
+    silicon_actions = silicon.add_subparsers(dest="silicon_action", required=True)
+    preview = silicon_actions.add_parser("preview", help="Render actual layout geometry to PNG")
+    preview.add_argument("layout")
+    preview.add_argument("--output", "-o", required=True, help="Destination PNG")
+    preview.add_argument("--top", help="Cell name, required for layouts with multiple roots")
+    preview.add_argument("--layers", help="KLayout layer-properties file (.lyp)")
+    preview.add_argument("--size", type=int, default=1000, help="Preview size in pixels")
+    handoff = silicon_actions.add_parser("handoff", help="Review a silicon evidence manifest and optionally package it")
+    handoff.add_argument("manifest", help="Path to the JSON manifest")
+    handoff.add_argument("--bundle", help="Destination review ZIP for a complete manifest")
     start = subparsers.add_parser("start", help="Create a draft project without replacing existing files")
     start.add_argument("project", nargs="?", default=".")
     start.add_argument("--spec", help="Existing YAML/JSON design to copy into the new project")
@@ -70,6 +81,15 @@ def add_parsers(subparsers) -> None:
 
 def dispatch(args) -> dict[str, Any] | None:
     from . import project_workflow as workflow
+
+    if args.command == "silicon":
+        if args.silicon_action == "preview":
+            from .silicon_preview import render_silicon_preview
+
+            return render_silicon_preview(args.layout, args.output, top=args.top, layers=args.layers, size=args.size)
+        from .silicon_handoff import review_silicon_handoff
+
+        return review_silicon_handoff(args.manifest, bundle=args.bundle)
 
     if args.command == "review-pcb":
         from .board_review import parse_review_plan, review_pcb

@@ -130,6 +130,9 @@ Verification is conservative: a capability only claims the evidence level its pu
 | `workflow resume` | beta | CLI: `workflow resume`; Python: `circuit_weaver.project_workflow:resume_workflow`; MCP: `resume_workflow`; Skill: `circuit-weaver` | not applicable (operational) | `command-contract` | unreleased |
 | `workflow cancel` | beta | CLI: `workflow cancel`; Python: `circuit_weaver.project_workflow:cancel_workflow`; MCP: `cancel_workflow`; Skill: `circuit-weaver` | not applicable (operational) | `command-contract` | unreleased |
 | `library-access` | beta | CLI: `library-access`; Python: `circuit_weaver.library_access:audit_library_access`; MCP: `library_access`; Skill: `circuit-weaver` | not applicable (operational) | `command-contract` | unreleased |
+| `silicon` | review_only | CLI: `silicon` | not applicable (operational) | `command-contract` | unreleased |
+| `silicon preview` | review_only | CLI: `silicon preview`; Python: `circuit_weaver.silicon_preview:render_silicon_preview`; MCP: `silicon_preview` | `static-parse` → `static-parse` | `command-contract`, `external-tool`, `user-supplied` | unreleased |
+| `silicon handoff` | review_only | CLI: `silicon handoff`; Python: `circuit_weaver.silicon_handoff:review_silicon_handoff`; MCP: `silicon_handoff` | `static-parse` → `static-parse` | `command-contract`, `external-tool`, `user-supplied` | unreleased |
 | `save-research` | experimental | CLI: `save-research`; Skill: `circuit-weaver` | `static-parse` → `static-parse` | `command-contract`, `static-parse` | 0.32.1 |
 | `log-event` | beta | CLI: `log-event` | not applicable (operational) | `command-contract` | 0.32.1 |
 <!-- capability-registry:end -->

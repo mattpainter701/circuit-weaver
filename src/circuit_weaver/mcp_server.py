@@ -493,6 +493,35 @@ def _create_app() -> Any:
         """Report the installed runtime, skill installation state, and MCP launch details."""
         return _as_mcp_tool_result(_workflow_tool("runtime_info"))
 
+    @mcp.tool(annotations=ToolAnnotations(openWorldHint=False))
+    async def silicon_preview(layout: str, output: str, top: str = "", layers: str = "", size: int = 1000) -> Any:
+        """Render a local silicon layout to a PNG. Supply absolute paths for the input, output and optional .lyp."""
+        from .silicon_preview import render_silicon_preview
+
+        try:
+            result = await asyncio.to_thread(
+                _call_without_stdout, render_silicon_preview,
+                _absolute_workflow_path(layout, "layout"), _absolute_workflow_path(output, "output"),
+                top=top or None, layers=_absolute_workflow_path(layers, "layers") if layers else None, size=size,
+            )
+            return _as_mcp_tool_result(json.dumps(result, default=str))
+        except (OSError, ValueError) as exc:
+            return _as_mcp_tool_result(_error_json("silicon_preview_failed", str(exc)))
+
+    @mcp.tool(annotations=ToolAnnotations(openWorldHint=False))
+    async def silicon_handoff(manifest: str, bundle: str = "") -> Any:
+        """Review local fabrication evidence. Supply an absolute ZIP path to package a complete review."""
+        from .silicon_handoff import review_silicon_handoff
+
+        try:
+            result = await asyncio.to_thread(
+                _call_without_stdout, review_silicon_handoff, _absolute_workflow_path(manifest, "manifest"),
+                bundle=_absolute_workflow_path(bundle, "bundle") if bundle else None,
+            )
+            return _as_mcp_tool_result(json.dumps(result, default=str))
+        except (OSError, ValueError) as exc:
+            return _as_mcp_tool_result(_error_json("silicon_handoff_failed", str(exc)))
+
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
     async def library_access(query: str = "", project_root: str = "") -> Any:
         """Inspect local CAD assets, curated component support and SPICE model bindings."""

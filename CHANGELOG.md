@@ -12,6 +12,7 @@
 
 - Inspect local KiCad symbols, footprints, 3D models, and SPICE model bindings with the read-only library audit in the CLI, Python, and MCP.
 - Start, open, plan, run, and resume a project through the CLI, Python, or MCP. Saved checkpoints verify inputs and outputs before resuming work.
+- Render core, shuttle-wrapper and full-die layouts with KLayout. Review a shuttle's layout and verification reports together and package a complete review set through the CLI, Python or MCP. [Silicon review guide](docs/silicon-handoff.md)
 
 ### Fixed
 
