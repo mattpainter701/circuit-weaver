@@ -98,6 +98,17 @@ def test_native_silkscreen_obstacles_keep_exact_shape_and_layer_mapping():
     ]
 
 
+def test_via_obstacle_index_keeps_boundary_and_large_envelopes():
+    nearby = repair._via_obstacle_lookup([
+        ((-2.1, -0.1, 0, 2), "crosses zero"),
+        ((4, 0, 4.5, 1), "separate"),
+        ((-200, -200, 200, 200), "large silk"),
+    ], 2)
+    for point in [(-2.1, -0.1), (0, 2)]:
+        assert set(nearby(point)) == {"crosses zero", "large silk"}
+    assert set(nearby((4, 0))) == {"separate", "large silk"}
+
+
 def test_silkscreen_bbox_is_only_broad_phase_and_exact_shape_decides():
     silk = _FakeSilkShape(False)
     via = _ViaQuery()
