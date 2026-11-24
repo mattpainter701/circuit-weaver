@@ -23,6 +23,7 @@ def test_backend_selection(monkeypatch):
         select_scorer("unknown")
 
 
+@pytest.mark.skip_category("optional-tool")
 @pytest.mark.parametrize("strategy", ["balanced", "cost", "si", "thermal"])
 @pytest.mark.parametrize("pad_mode", [True, False])
 def test_stateful_native_objective_tracks_arbitrary_candidates(strategy, pad_mode):
@@ -91,6 +92,7 @@ def test_stateful_native_objective_tracks_arbitrary_candidates(strategy, pad_mod
     assert score.snapshots == 2
 
 
+@pytest.mark.skip_category("optional-tool")
 def test_native_optimizer_preserves_selected_layout():
     pytest.importorskip("circuit_weaver_placement")
     parts = [

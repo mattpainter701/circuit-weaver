@@ -492,8 +492,8 @@ layouts, 119 with positive overlap. Over that batch the Python overlap scorer
 took 3.67 ms, the upstream Rust scorer including array preparation took
 2.47 ms, and the same Rust call with prepacked arrays took 0.21 ms. The largest
 absolute score difference was below 0.00000000001. Those are median timings for
-one scoring term on 10–30-part boards. Prototype a persistent Rust placement
-state with batched moves, then compare complete placement time, constraint
-violations and downstream routing on larger boards. The
+one scoring term on 10–30-part boards. The companion described above now scores
+the full objective with a persistent board model. The paired larger-board
+benchmark measures saved placement and routed copper. The
 [upstream placement kernels](https://github.com/drandyhaas/KiCadRoutingTools/blob/v0.24.2/rust_router/src/placement_kernels.rs)
-provide a reference for that experiment.
+informed the original overlap experiment.
