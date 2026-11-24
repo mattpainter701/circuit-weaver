@@ -74,6 +74,23 @@ The benchmark drives a single input word at each of six consecutive arrival edge
 
 The zero peer-dependent variation comes from slot ownership in both programs. The additional response improvement comes from the instruction used to wait. The comparison measures this firmware and interface at RTL. Real interrupt latency, physical clock speed, power and performance against commercial cores remain unmeasured.
 
+### Existing-core comparison
+
+A second bench runs the same echo on the upstream PicoRV32 RTL in its default configuration. Its two-instruction body uses a blocking memory-mapped load followed by a store. This gives the baseline a zero-wait instruction ROM, an always-ready output, no competing task and no polling penalty. In all six arrival phases the processor was already waiting for input. It delivered the word **5 clocks** after arrival, compared with **2–3 clocks** for Slot16. PicoRV32 had zero phase-dependent jitter in this test. Slot16 spent fewer clocks on the transfer and reserved the alternate edges for its peer. The two cores have different datapaths, buses and ISAs. Elapsed nanoseconds require timing closure for both designs. [PicoRV32 source revision](https://github.com/YosysHQ/picorv32/tree/ef203c2b0a3fb793280f5114941416c425c5b461)
+
+To repeat the optional baseline on a machine with Git and Icarus Verilog, run these commands from the repository root. They place the upstream source and simulation binary in a temporary directory.
+
+```sh
+benchdir=$(mktemp -d)
+git clone -q https://github.com/YosysHQ/picorv32.git "$benchdir/picorv32"
+git -C "$benchdir/picorv32" checkout -q ef203c2b0a3fb793280f5114941416c425c5b461
+iverilog -g2012 -s bench_picorv32 -o "$benchdir/echo" \
+    "$benchdir/picorv32/picorv32.v" asic/slot16/bench_picorv32.sv
+vvp "$benchdir/echo"
+```
+
+### Synthesis result
+
 The same command runs generic synthesis and `check -assert`. With Yosys 0.23 and its default ABC mapping, the core produced 8,081 generic cells, including scratchpad storage implemented in flip-flops. Instruction ROM and stream adapters are external to this count. Cell counts depend on tools and mapping. This result establishes logic synthesizability. A standard-cell area or frequency estimate requires a technology library and timing constraints.
 
 ## Implementation plan and decision gates
