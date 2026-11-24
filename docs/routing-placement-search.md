@@ -402,3 +402,66 @@ distance. Custom `.kicad_dru` `edge_clearance` constraints currently block
 automatic routing because a single board-wide setting cannot represent their
 conditional rules. Read-only inspection remains available. Standalone DSN
 inputs have no native project context from which to recover a missing rule.
+
+## Comparing placement and routing on the same net
+
+**Unreleased, November 2026.** Connected-copper repair now accounts for diagonal
+travel and layer changes when searching for a connection. Via checks look up nearby
+silkscreen and drill obstacles before applying the native clearance tests. Straight
+grid runs produce one track per run. The source checkout includes a net comparison
+view for reviewing placement and routing together.
+
+Run the comparison with KiCad's bundled Python. Both snapshots share board
+coordinates and a common scale. The SVG shows selected-net pad positions, motion
+of uniquely identified pads, trace centerlines by layer and via locations.
+The lengths sum the native tracks and arcs on that net. Pours are outside the
+view. Use the native DRC report to check connectivity.
+
+```sh
+python benchmarks/compare_net_layouts.py placed.kicad_pcb routed.kicad_pcb \
+    --net SPI_CLK --labels "Placed" "Routed" -o spi-clock.svg
+```
+
+On a retained 438-footprint Setpoint board, native recovery closed the final
+`DAC_SYNC_14` connection in 57,561 expanded states, down from 65,184. The new
+route used 14 vias and 93.91 mm of trace. The previous route used 14 vias and
+93.41 mm. A Relay supply repair used more states (11,622 versus 8,548).
+Both revised boards passed KiCad 10.0.4 DRC with zero opens and zero violations.
+
+The [KiCadRoutingTools v0.24.2 search](https://github.com/drandyhaas/KiCadRoutingTools/blob/v0.24.2/rust_router/src/router.rs)
+informed the octile-distance and target-bounds approach. Its standalone router
+also closed Setpoint with 14 vias and 102.53 mm of trace when run on the isolated
+board with the project's widths, drill and clearance, `--keep-input-copper`,
+`--escalation off` and `--strict-sizes`. Its default escalation used one
+undersized via on the same net. All comparisons used the original project rules
+for final DRC. On the five small placement fixtures both routers passed DRC.
+On the SOIC fanout fixture the upstream router used 129.79 mm of trace and four
+vias. Circuit Weaver used 141.43 mm and two vias.
+
+**Rust performance work.** Profiling the Setpoint repair found that testing
+possible vias repeatedly scanned the same silk and drills. Indexing those
+envelopes cut that cost while retaining exact native shape checks. Three
+alternating unprofiled replays on the same host had median repair times of
+20.30 seconds on the previous implementation and 3.63 seconds on the revision.
+After indexing,
+the segment-clearance path accounted for 5.4 of 9.6 profiled seconds across
+about 210,000 calls. A Rust prototype should take a snapshot of layer obstacles
+once per search and handle neighbor generation, spatial queries and frontier
+updates together. Crossing the Python boundary once per edge would retain much of
+the measured overhead. Compare the prototype against the Python reference on
+Setpoint, Relay and the small boards, measuring full repair time, opens, DRC,
+length, vias and retained source copper. Keep KiCad responsible for reading
+project rules, verifying geometry and validating the saved result.
+
+Placement has a similar boundary. The three designs in
+`benchmarks/placement_search.py` spent 5.3 profiled seconds in 10,674 candidate
+cost evaluations. Sampling every fiftieth overlap calculation gave 213 actual
+layouts, 119 with positive overlap. Over that batch the Python overlap scorer
+took 3.67 ms, the upstream Rust scorer including array preparation took
+2.47 ms, and the same Rust call with prepacked arrays took 0.21 ms. The largest
+absolute score difference was below 0.00000000001. Those are median timings for
+one scoring term on 10–30-part boards. Prototype a persistent Rust placement
+state with batched moves, then compare complete placement time, constraint
+violations and downstream routing on larger boards. The
+[upstream placement kernels](https://github.com/drandyhaas/KiCadRoutingTools/blob/v0.24.2/rust_router/src/placement_kernels.rs)
+provide a reference for that experiment.

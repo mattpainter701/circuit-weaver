@@ -7,9 +7,62 @@ accepted until the caller runs a fresh full native DRC.
 from __future__ import annotations
 
 import heapq
+import itertools
 import json
 import math
 from pathlib import Path
+
+_VIA_COST = 4.0
+_DIAGONAL_EXTRA = math.sqrt(2) - 1
+
+
+def _grid_target_estimate(roots, step):
+    """Lower bound to a legal opposite-front root on the eight-way lattice."""
+    # Bounding each layer separately keeps via costs meaningful on mixed-layer
+    # targets. The box can include empty space, which only lowers the estimate.
+    by_layer = {}
+    for x, y, layer in roots:
+        by_layer.setdefault(layer, []).append((x, y))
+    boxes = []
+    for layer, points in by_layer.items():
+        if len(points) <= 16:
+            boxes.extend((x, x, y, y, layer) for x, y in points)
+        else:
+            xs, ys = zip(*points)
+            boxes.append((min(xs), max(xs), min(ys), max(ys), layer))
+
+    def estimate(node):
+        x, y, layer = node
+        best = math.inf
+        for left, right, bottom, top, target_layer in boxes:
+            dx = max(left - x, x - right, 0)
+            dy = max(bottom - y, y - top, 0)
+            planar = step * (max(dx, dy) + _DIAGONAL_EXTRA * min(dx, dy))
+            best = min(best, planar + (0.0 if layer == target_layer else _VIA_COST))
+        return best
+
+    return estimate
+
+
+def _via_obstacle_lookup(boxed_items, cell_size):
+    """Index static clearance envelopes for point queries during one repair."""
+    buckets = {}
+    large = []
+    for box, item in boxed_items:
+        x0, y0, x1, y1 = (math.floor(v / cell_size) for v in box)
+        if (x1 - x0 + 1) * (y1 - y0 + 1) > 64:
+            # Index long silk graphics once; the exact predicate still filters them.
+            large.append(item)
+            continue
+        for x in range(x0, x1 + 1):
+            for y in range(y0, y1 + 1):
+                buckets.setdefault((x, y), []).append(item)
+
+    def nearby(point):
+        key = (math.floor(point[0] / cell_size), math.floor(point[1] / cell_size))
+        return itertools.chain(buckets.get(key, ()), large)
+
+    return nearby
 
 
 def _via_width_on_layer(via, layer_id):
@@ -889,12 +942,11 @@ def _bidirectional_connected_anchor_search(start_anchors, goal_anchors, stack, b
         return None, connector_states, None, None, lattice_origin
     forward_previous, reverse_next = {}, {}
     sequence = 0
-    forward_goal_points = [coordinate(node) for node in reverse_roots]
-    reverse_start_points = [coordinate(node) for node in forward_roots]
-    forward_queue = [(cost + min(math.dist(coordinate(node), p) for p in forward_goal_points),
-                      cost, seq, node) for cost, seq, node in forward_queue]
-    reverse_queue = [(cost + min(math.dist(coordinate(node), p) for p in reverse_start_points),
-                      cost, seq, node) for cost, seq, node in reverse_queue]
+    to_goal = _grid_target_estimate(reverse_roots, step)
+    to_start = _grid_target_estimate(forward_roots, step)
+    # On equal estimated totals, advance the longer prefix of a feasible path.
+    forward_queue = [(cost + to_goal(node), -cost, seq, node) for cost, seq, node in forward_queue]
+    reverse_queue = [(cost + to_start(node), -cost, seq, node) for cost, seq, node in reverse_queue]
     heapq.heapify(forward_queue)
     heapq.heapify(reverse_queue)
 
@@ -910,24 +962,16 @@ def _bidirectional_connected_anchor_search(start_anchors, goal_anchors, stack, b
             right.append(cursor)
         return left + right, forward_anchor[start_root], reverse_anchor[cursor]
 
-    def pop_live(queue, distances):
-        while queue:
-            priority, queued_distance, _, node = heapq.heappop(queue)
-            if queued_distance <= distances.get(node, float("inf")) + 1e-9:
-                return priority, queued_distance, node
-        return None
-
     directions = [(x, y) for x in (-1, 0, 1) for y in (-1, 0, 1) if x or y]
     expanded, meeting = connector_states, None
     while forward_queue and reverse_queue and expanded < max_expanded_states:
         forward_turn = forward_queue[0][0] <= reverse_queue[0][0]
         queue = forward_queue if forward_turn else reverse_queue
         distances = forward_distance if forward_turn else reverse_distance
-        current = pop_live(queue, distances)
-        if current is None:
-            queue.clear()
+        _, neg_distance, _, node = heapq.heappop(queue)
+        current_distance = -neg_distance
+        if current_distance > distances[node] + 1e-9:
             continue
-        _, current_distance, node = current
         expanded += 1
         other = reverse_distance if forward_turn else forward_distance
         if node in other:
@@ -938,11 +982,13 @@ def _bidirectional_connected_anchor_search(start_anchors, goal_anchors, stack, b
         for dx, dy in directions:
             candidate = (node[0] + dx, node[1] + dy, node[2])
             target = coordinate(candidate)
+            cost = math.hypot(dx, dy) * step
             if (bounds[0] <= target[0] <= bounds[2] and bounds[1] <= target[1] <= bounds[3]
+                    and current_distance + cost + 1e-9 < distances.get(candidate, math.inf)
                     and clear_segment(point, target, stack[node[2]])):
-                neighbors.append((candidate, math.hypot(dx, dy) * step))
+                neighbors.append((candidate, cost))
         if can_change_layer(point):
-            neighbors.extend(((node[0], node[1], layer), 4.0)
+            neighbors.extend(((node[0], node[1], layer), _VIA_COST)
                              for layer in range(len(stack)) if layer != node[2])
         for candidate, cost in neighbors:
             score = current_distance + cost
@@ -951,11 +997,11 @@ def _bidirectional_connected_anchor_search(start_anchors, goal_anchors, stack, b
             distances[candidate] = score
             if forward_turn:
                 forward_previous[candidate] = node
-                heuristic = min(math.dist(coordinate(candidate), p) for p in forward_goal_points)
+                heuristic = to_goal(candidate)
             else:
                 reverse_next[candidate] = node
-                heuristic = min(math.dist(coordinate(candidate), p) for p in reverse_start_points)
-            heapq.heappush(queue, (score + heuristic, score, sequence, candidate))
+                heuristic = to_start(candidate)
+            heapq.heappush(queue, (score + heuristic, -score, sequence, candidate))
             sequence += 1
             if candidate in other:
                 meeting = candidate
@@ -983,9 +1029,9 @@ def _physical_connected_search_points(path, step, lattice_origin, start_anchor, 
     )
     for candidate in start_connector:
         append_unique(points, candidate)
-    for node in path:
-        candidate = ((lattice_origin[0] + node[0] * step,
-                      lattice_origin[1] + node[1] * step), stack[node[2]])
+    grid_points = [(node[:2], node[2]) for node in path]
+    for (x, y), layer in _collapse_collinear_points(grid_points):
+        candidate = ((lattice_origin[0] + x * step, lattice_origin[1] + y * step), stack[layer])
         append_unique(points, candidate)
     goal_connector = goal_anchor.get(
         "connector_path", [(goal_anchor["point"], goal_anchor["layer"])],
@@ -1286,10 +1332,21 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
         return True
 
     silk_obstacles, silk_clearance_iu = _native_silkscreen_obstacles(board, pcbnew, bbox)
-    holes = [
-        (point(t.GetPosition()), pcbnew.ToMM(t.GetDrillValue()) / 2) for t in items if type(t).__name__ == "PCB_VIA"
-    ]
+    silk_gap = pcbnew.ToMM(silk_clearance_iu)
+    silk_near = _via_obstacle_lookup(
+        (((box[0] - diameter / 2 - silk_gap, box[1] - diameter / 2 - silk_gap,
+           box[2] + diameter / 2 + silk_gap, box[3] + diameter / 2 + silk_gap), (layer, box, shape))
+         for layer, box, shape in silk_obstacles), cell_size,
+    )
     hole_gap = max(clearance, pcbnew.ToMM(int(board.GetDesignSettings().m_HoleToHoleMin)))
+    drill_envelopes = []
+    for item in items:
+        if type(item).__name__ == "PCB_VIA":
+            center = point(item.GetPosition())
+            x, y = center
+            gap = drill / 2 + pcbnew.ToMM(item.GetDrillValue()) / 2 + hole_gap
+            drill_envelopes.append(((x - gap, y - gap, x + gap, y + gap), (center, gap)))
+    drills_near = _via_obstacle_lookup(drill_envelopes, cell_size)
     through = [t for t in items if type(t).__name__ == "PCB_VIA" and int(t.GetNetCode()) == net]
     through += [
         p
@@ -1310,11 +1367,11 @@ def repair_one(board, pcbnew, drc_report, *, pair_index=0, max_expanded_states=1
             via_cache[key] = True
             return True
         if _collides_with_silkscreen(
-            p, via_query, silk_obstacles, diameter, silk_clearance_iu, pcbnew
+            p, via_query, silk_near(p), diameter, silk_clearance_iu, pcbnew
         ):
             via_cache[key] = False
             return False
-        if any(math.dist(p, c) < drill / 2 + r + hole_gap for c, r in holes):
+        if any(math.dist(p, center) < gap for center, gap in drills_near(p)):
             via_cache[key] = False
             return False
         okay = all(clear_segment(p, p, layer_id, diameter, avoid_pads=True) for layer_id in stack)

@@ -305,9 +305,28 @@ def test_connected_physical_reconstruction_retains_local_start_and_goal_escape_p
 
     assert physical == [
         ((0.12, 0.12), 0), ((0.2, 0.2), 0), ((1.0, 0.0), 0),
-        ((2.0, 0.0), 0), ((3.0, 0.0), 0), ((4.0, 0.0), 0),
+        ((3.0, 0.0), 0), ((4.0, 0.0), 0),
         ((4.2, 0.2), 0), ((4.12, 0.12), 0),
     ]
+
+
+def test_diagonal_cross_layer_search_closes_within_small_budget():
+    path, expanded, *_ = kernel._bidirectional_connected_anchor_search(
+        [{"uuid": "s", "point": (0, 0), "layer": 0}],
+        [{"uuid": "g", "point": (60, 20), "layer": 1}],
+        [0, 1], (-4, -4, 84, 50), 1, 100, lambda *_: True, lambda _: True,
+    )
+    assert path and expanded <= 100
+    assert path[0] == (0, 0, 0) and path[-1] == (60, 20, 1)
+    transitions = [(a, b) for a, b in zip(path, path[1:]) if a[2] != b[2]]
+    assert len(transitions) == 1 and transitions[0][0][:2] == transitions[0][1][:2]
+
+
+def test_layer_target_boxes_are_lower_bounds_including_sparse_layers():
+    estimate = kernel._grid_target_estimate({(x, 0, 0) for x in range(20)} | {(100, 0, 1)}, 0.5)
+    assert estimate((8, 0, 0)) == 0
+    assert estimate((8, 0, 1)) == 4
+    assert estimate((99, 1, 1)) == pytest.approx(0.5 * 2**0.5)
 
 
 def test_multiroot_search_escapes_blocked_nearest_anchor_and_returns_used_anchors():
