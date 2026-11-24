@@ -4,6 +4,8 @@
 
 ### Added
 
+- Assemble Slot16 firmware, verify its instruction traces and state isolation, and replay a periodic controller workload against PicoRV32.
+
 - Run the Slot16 embedded CPU prototype from the source checkout to evaluate fixed execution slots, private memory, and blocking communication in RTL.
 
 - Inspect local KiCad symbols, footprints, 3D models, and SPICE model bindings with the read-only library audit in the CLI, Python, and MCP.

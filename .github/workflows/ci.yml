@@ -20,9 +20,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install RTL tools
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends iverilog yosys
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends iverilog yosys binutils-riscv64-unknown-elf
       - name: Exercise architecture and synthesize the core
         run: sh asic/slot16/check.sh
+      - name: Compare controller firmware against pinned PicoRV32
+        run: |
+          curl --fail --silent --show-error --location --retry 3 -o "$RUNNER_TEMP/picorv32.v" \
+            https://raw.githubusercontent.com/YosysHQ/picorv32/ef203c2b0a3fb793280f5114941416c425c5b461/picorv32.v
+          python3 asic/slot16/benchmark.py "$RUNNER_TEMP/picorv32.v" --json "$RUNNER_TEMP/controller-trials.json"
+      - name: Save per-sample controller measurements
+        uses: actions/upload-artifact@v7
+        with:
+          name: slot16-controller-trials
+          path: ${{ runner.temp }}/controller-trials.json
 
   test:
     name: Python ${{ matrix.python-version }} / ${{ matrix.os }}

@@ -2,6 +2,8 @@
 
 Slot16 runs a control loop and a service task on one 16-bit integer datapath. Each task owns every second clock edge, a private data bank and one input/output stream. The core suits small, fixed firmware images such as a sampled-data controller that forwards selected readings to telemetry. An integrator supplies the program ROM, stream buffers and peripherals.
 
+The [ISA verification and controller report](validation.md) includes the assembler, independent simulator, formal properties and a measured filter/telemetry comparison with PicoRV32. Both met the 64-clock benchmark deadline.
+
 ## Design choices
 
 | Problem in a conventional small controller | Slot16 mechanism | Cost or limit |
@@ -98,8 +100,8 @@ The same command runs generic synthesis and `check -assert`. With Yosys 0.23 and
 | Stage | Work | Evidence needed to advance |
 |---|---|---|
 | Architecture prototype (in this directory) | Execute both firmware images, exercise every instruction class, sweep arrival phase, inject memory faults, fill/drain mailboxes and synthesize the core. | Reproduce the table above and pass the structural synthesis check. |
-| ISA and protocol verification | Build an independent reference interpreter. Differentially test random programs and randomized endpoint stalls. Formally check that faulted or waiting instructions have zero side effects, only the issuing data bank is written, and the peer slot always follows. | Matching retirement traces, passing assertions and coverage of every fault, reset and transfer transition. |
-| Representative controller | Replay a periodic sample/filter/output loop alongside a telemetry burst. Implement the same algorithm on an Ibex RV32I baseline with private firmware data, interrupts, local memories of equal capacity and identical stream buffering. | Report maximum and distribution of response clocks, deadline misses, code bytes and throughput on both. Sweep burst length and arrival phase. Set the deadline from the target peripheral before measurement. |
+| ISA and protocol verification | Assemble firmware, compare each edge against an independent interpreter and prove transition properties for arbitrary state. | 13,400 matching edge traces, all legal opcode retirements and blocking/fault outcomes observed, and passing SAT assertions. |
+| Representative controller | Run the two-tap filter and telemetry firmware on Slot16 and a control-priority PicoRV32 dispatcher with equivalent peripheral buffering. | Across 56 scenarios per core, Slot16 responded in 9–10 clocks and PicoRV32 in 30–64. Per-sample distributions, throughput and memory use are in the verification report. |
 | ASIC feasibility | Choose a PDK and clock target, supply ROM and scratchpad implementations, and close the fetch/decode/load path. Compare flop storage against available memory macros. A synchronous macro may require a new pipeline and timing contract. | Library-mapped area including memories and adapters, setup/hold slack at chosen corners, activity-based energy per sample, and replay-equivalent outputs and bounds after mapping. |
 | Physical prototype | Complete scan/reset strategy, I/O integration, floorplan, clock tree, routing and foundry signoff. Exercise stalls, resets and deadlines on hardware. | DRC/LVS and timing reports, test coverage, and measured response and energy before a silicon performance claim. |
 
