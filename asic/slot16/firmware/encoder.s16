@@ -1,0 +1,41 @@
+# Quadrature input A:B in bits 1:0. Output position modulo 65536.
+# r0 previous state, r1 sample, r2 position, r3/r4 temporaries.
+LDI r5, 1
+LDI r6, 3
+LDI r7, 2
+IN r1
+AND r1, r6
+BNZ r5, valid_report          # First sample establishes the origin.
+sample:
+IN r1
+AND r1, r6
+LDI r3, 0
+ADD r3, r0
+XOR r3, r1
+BNZ r3, changed
+BNZ r5, valid_report          # Stationary.
+changed:
+XOR r3, r6
+BNZ r3, adjacent
+LDI r4, 1                     # Both bits changed; resync to new state.
+BNZ r5, report
+adjacent:
+AND r0, r7                    # Compare old A with new B.
+LDI r3, 0
+ADD r3, r1
+AND r3, r5
+SHL r3
+XOR r3, r0
+BNZ r3, forward
+SUB r2, r5
+BNZ r5, valid_report
+forward:
+ADD r2, r5
+valid_report:
+LDI r4, 0
+report:
+LDI r0, 0
+ADD r0, r1
+OUT r2
+SEND r4                       # Diagnostic worker consumes one flag per sample.
+BNZ r5, sample
