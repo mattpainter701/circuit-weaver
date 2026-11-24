@@ -23,12 +23,17 @@ vvp pins
 librelane --manual-pdk --pdk-root "$PDK_ROOT" --pdk "$tech" --jobs 4 --hide-progress-bar \
     --skip Checker.MagicDRC --run-tag weftline config.json
 final="$out/src/runs/weftline/final"
+python3 - "$final/metrics.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+metrics = json.loads(Path(sys.argv[1]).read_text())
+if metrics["design__max_fanout_violation__count"]:
+    raise SystemExit("post-route fanout violations remain")
+PY
 python3 "$here/macro_drc.py" "$out/src/runs/weftline" "$PDK_ROOT/$tech"
 top=tt_um_weftline16
 iverilog -g2012 -DFUNCTIONAL -s pin_tb -o pins "$@" "$PDK_ROOT/$tech/libs.ref/sg13g2_stdcell/verilog/sg13g2_stdcell.v" "$final/nl/$top.nl.v" "$here/pin_tb.sv"
 vvp pins
-mkdir "$out/tt_submission"
-cp "$here/info.yaml" "$out/tt_submission/"
-cp "$final/gds/$top.gds" "$final/lef/$top.lef" "$final"/spef/*/*.spef "$out/tt_submission/"
-cp "$final/nl/$top.nl.v" "$out/tt_submission/$top.v"
-printf '{"PDK":"%s","revision":"%s"}\n' "$tech" "$version" > "$out/tt_submission/pdk.json"
+python3 "$here/export.py" "$out/src/runs/weftline" "$out/tt_submission"

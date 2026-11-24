@@ -16,6 +16,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/checkout@v7
         with:
           repository: TinyTapeout/tt-support-tools
@@ -25,6 +27,8 @@ jobs:
         run: |
           mkdir "$RUNNER_TEMP/weftline"
           docker run --rm -v "$PWD:/repo:ro" -v "$RUNNER_TEMP/weftline:/work" \
+            -e SOURCE_COMMIT="$(git rev-parse HEAD)" -e SOURCE_REPO="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            -e WORKFLOW_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             --entrypoint sh ghcr.io/librelane/librelane@sha256:f91b21d75f79871f9ccf37451020b5d2f7b3236881a997ff709c561e8280a30f \
             /repo/asic/slot16/silicon/harden.sh /work/build /repo/tt
       - name: Collect shuttle inputs
@@ -43,6 +47,7 @@ jobs:
           path: |
             ${{ runner.temp }}/weftline/build/src/runs/weftline/final/metrics.*
             ${{ runner.temp }}/weftline/build/src/runs/weftline/final/render/
+            ${{ runner.temp }}/weftline/build/src/runs/weftline/sram-control/comparison.json
             ${{ runner.temp }}/weftline/build/src/runs/weftline/*/reports/
             ${{ runner.temp }}/weftline/build/src/runs/weftline/*-openroad-stapostpnr/*/*.rpt
 

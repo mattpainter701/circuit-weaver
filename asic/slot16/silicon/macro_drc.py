@@ -43,28 +43,29 @@ def compare(run, pdk):
     if top.name != TOP:
         raise ValueError("unexpected top cell")
     instance, = [inst for inst in top.each_inst() if inst.cell.name == MACRO]
-    control = db.Layout()
-    control.read(str(pdk / "libs.ref/sg13g2_sram/gds" / f"{MACRO}.gds"))
-    if control.dbu != tile.dbu or instance.is_regular_array():
-        raise ValueError("unexpected macro units or array")
-    macro = control.cell(MACRO)
-    control.create_cell(TOP).insert(db.CellInstArray(macro.cell_index(), instance.cplx_trans))
-    control.write(str(dest / "control.gds"))
+    if instance.is_regular_array() or instance.dcplx_trans.mag != 1:
+        raise ValueError("unexpected SRAM array or magnification")
 
-    # Run the same DRC script, rules, flatglob settings and coordinate transform.
-    # Only the input layout and report destination differ from the integrated run.
+    # Check the byte-original vendor GDS in its native coordinates. Transform
+    # its marker boxes to chip coordinates only after DRC.
     config = dest / "control.tcl"
     config.write_text('source $::env(INTEGRATED_ENV)\n'
-                      'set ::env(CURRENT_GDS) [file join $::env(STEP_DIR) control.gds]\n')
+                      'set ::env(CURRENT_GDS) $::env(VENDOR_GDS)\n'
+                      'set ::env(DESIGN_NAME) $::env(VENDOR_CELL)\n')
     scripts = Path(librelane.__file__).parent / "scripts/magic"
     env = dict(os.environ, STEP_DIR=str(dest), INTEGRATED_ENV=str(step / "_env.tcl"),
+               VENDOR_CELL=MACRO, VENDOR_GDS=str(pdk / "libs.ref/sg13g2_sram/gds" / f"{MACRO}.gds"),
                _TCL_ENV_IN=str(config), _MAGIC_SCRIPT=str(scripts / "drc.tcl"))
     with (dest / "magic.log").open("w") as log:
         subprocess.run(["magic", "-dnull", "-noconsole", "-rcfile",
                         pdk / "libs.tech/magic/ihp-sg13g2.magicrc", scripts / "wrapper.tcl"],
                        cwd=dest, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
     actual = markers(step / "reports/drc.magic.rpt")
-    baseline = markers(dest / "reports/drc.magic.rpt")
+    baseline = Counter()
+    for (rule, *coords), count in markers(dest / "reports/drc.magic.rpt").items():
+        box = instance.dcplx_trans * db.DBox(*map(float, coords))
+        placed = (box.left, box.bottom, box.right, box.top)
+        baseline[(rule, *(f"{coordinate:.3f}" for coordinate in placed))] += count
     extra = actual - baseline
     summary = {"integrated": actual.total(), "vendor_control": baseline.total(),
                "unmatched": extra.total(), "first_unmatched": list(extra)[:10]}
