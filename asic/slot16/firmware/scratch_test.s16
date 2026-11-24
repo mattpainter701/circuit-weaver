@@ -1,0 +1,45 @@
+# The mask ROM supplies complementary lane seeds in r6 before entry.
+# Three sweeps write address XOR seed, verify/invert, then verify inverse.
+LDI r3, 1
+LDI r5, -1
+LDI r1, 64
+fill:
+LDI r2, 0
+ADD r2, r0
+XOR r2, r6
+ST r2, [r0]
+ADD r0, r3
+SUB r1, r3
+BNZ r1, fill
+LDI r1, 64
+invert:
+SUB r0, r3
+LDI r2, 0
+ADD r2, r0
+XOR r2, r6
+LD r4, [r0]
+XOR r4, r2
+BNZ r4, fail
+XOR r2, r5
+ST r2, [r0]
+SUB r1, r3
+BNZ r1, invert
+LDI r1, 64
+check:
+LDI r2, 0
+ADD r2, r0
+XOR r2, r6
+XOR r2, r5
+LD r4, [r0]
+XOR r4, r2
+BNZ r4, fail
+ADD r0, r3
+SUB r1, r3
+BNZ r1, check
+LDI r4, 165
+OUT r4
+HALT
+fail:
+LDI r4, -1
+OUT r4
+HALT

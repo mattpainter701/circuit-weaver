@@ -1,5 +1,6 @@
 """Boot a pair of Slot16 firmware images on the Weftline 16 virtual board."""
 import argparse
+import random
 import re
 from collections import deque
 from pathlib import Path
@@ -9,7 +10,12 @@ from reference import Machine
 
 FIRMWARE = Path(__file__).resolve().parent / "firmware"
 DEMO = (0, 1, 3, 2, 0, 0, 2, 1, 3)
-COMMANDS = "step [clocks] | input LANE WORD... | ready LANE 0|1 | status | reset | quit"
+COMMANDS = "step [clocks] | input LANE WORD... | ready LANE 0|1 | mem LANE ADDRESS [COUNT] | status | reset | quit"
+
+
+def scratch_test_banks() -> list[list[int]]:
+    diagnostic = (FIRMWARE / "scratch_test.s16").read_text(encoding="ascii")
+    return [assemble(f"LDI r6, {seed}\n" + diagnostic) for seed in (85, -86)]
 
 
 def load_bank(path: Path) -> list[int]:
@@ -32,8 +38,12 @@ def number(token: str, minimum: int, maximum: int | None = None) -> int:
 
 
 class Board:
-    def __init__(self, banks: list[list[int]]):
+    def __init__(self, banks: list[list[int]], scratch_seed: int | None = None):
         self.cpu = Machine(banks)
+        if scratch_seed is not None:
+            rng = random.Random(scratch_seed)
+            for context in self.cpu.contexts:
+                context.scratch[:] = [rng.getrandbits(16) for _ in context.scratch]
         self.inputs: list[deque[int]] = [deque(), deque()]
         self.reset()
 
@@ -41,6 +51,7 @@ class Board:
         self.cpu.step(True, 0, 0, 0)
         self.cycle = 0
         self.ready = [True, True]
+        self.last_output = [None, None]
         for queue in self.inputs:
             queue.clear()
 
@@ -57,7 +68,10 @@ class Board:
         if rx & valid:
             self.inputs[lane].popleft()
         self.cycle += 1
-        return (edge, lane, word) if tx & ready else None
+        if tx & ready:
+            self.last_output[lane] = word
+            return edge, lane, word
+        return None
 
     def describe(self, lane: int) -> str:
         ctx = self.cpu.contexts[lane]
@@ -120,6 +134,12 @@ def monitor(board: Board) -> None:
                     board.inputs[lane].extend(values)
                 case ["ready", target, state]:
                     board.ready[number(target, 0, 1)] = bool(number(state, 0, 1))
+                case ["mem", target, address] | ["mem", target, address, _]:
+                    lane = number(target, 0, 1)
+                    start = number(address, 0, 63)
+                    count = number(parts[3], 1, 64 - start) if len(parts) == 4 else 1
+                    words = board.cpu.contexts[lane].scratch[start:start + count]
+                    print(f"lane={lane} address={start} " + " ".join(f"{word:04x}" for word in words))
                 case _:
                     raise ValueError(COMMANDS)
         except ValueError as exc:
@@ -132,19 +152,27 @@ def main() -> int:
     parser.add_argument("--rom1", type=Path, help="lane 1 assembly or hex image")
     parser.add_argument("--input0", nargs="+", metavar="WORD", help="queue lane 0 input words")
     parser.add_argument("--input1", nargs="+", metavar="WORD", help="queue lane 1 input words")
-    parser.add_argument("--cycles", metavar="N", help="batch clock budget (default 512)")
+    parser.add_argument("--scratch-test", action="store_true", help="boot the two physical ROM memory-test images")
+    parser.add_argument("--scratch-seed", type=lambda value: int(value, 0),
+                        help="initialize cold SRAM to reproducible pseudorandom words (default zero)")
+    parser.add_argument("--cycles", metavar="N", help="batch clock budget (default 512, or 6000 for scratch test)")
     parser.add_argument("--monitor", action="store_true", help="open the interactive monitor")
     args = parser.parse_args()
     if args.monitor and args.cycles is not None:
         parser.error("--cycles applies to batch runs; use step in the monitor")
+    if args.scratch_test and (args.rom0 or args.rom1):
+        parser.error("--scratch-test selects both ROM banks")
     try:
-        clocks = number(args.cycles or "512", 0)
-        board = Board([load_bank(args.rom0 or FIRMWARE / "encoder.s16"),
-                       load_bank(args.rom1 or FIRMWARE / "encoder_diagnostics.s16")])
+        clocks = number(args.cycles or ("6000" if args.scratch_test else "512"), 0)
+        banks = scratch_test_banks() if args.scratch_test else [
+            load_bank(args.rom0 or FIRMWARE / "encoder.s16"),
+            load_bank(args.rom1 or FIRMWARE / "encoder_diagnostics.s16"),
+        ]
+        board = Board(banks, args.scratch_seed)
         for lane, words in enumerate([args.input0, args.input1]):
             if words:
                 board.inputs[lane].extend(number(word, 0, 65535) for word in words)
-        if not any([args.rom0, args.rom1, args.input0, args.input1, args.monitor]):
+        if not any([args.rom0, args.rom1, args.input0, args.input1, args.monitor, args.scratch_test]):
             board.inputs[0].extend(DEMO)
     except (ValueError, OSError) as exc:
         parser.error(str(exc))
@@ -153,6 +181,11 @@ def main() -> int:
     else:
         board.run(clocks)
     board.status()
+    if args.scratch_test and not args.monitor:
+        passed = board.last_output == [165, 165] and all(ctx.halted for ctx in board.cpu.contexts)
+        print("scratch test passed" if passed else "scratch test failed or incomplete")
+        if not passed:
+            return 1
     return int(any(ctx.faulted for ctx in board.cpu.contexts))
 
 

@@ -1,12 +1,17 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")"
-simulation=$(mktemp)
-trap 'rm -f "$simulation"' EXIT
+build=$(mktemp -d)
+simulation="$build/sim"
+trap 'rm -rf "$build"' EXIT
 iverilog -g2012 -Wall -s test_slot16 -o "$simulation" slot16.sv test_slot16.sv
 vvp "$simulation"
 python3 verify_isa.py
 python3 test_weftline.py
+python3 silicon/pin_vectors.py "$build"
+iverilog -g2012 -s pin_tb -o "$simulation" slot16.sv "$build/weftline_rom.v" \
+    silicon/tt_um_weftline16.v silicon/pin_tb.sv
+(cd "$build" && vvp "$simulation")
 # Newer frontends emit $check cells, which the SAT backend consumes after
 # chformal -lower. Older frontends emit $assert directly.
 lower_checks=''

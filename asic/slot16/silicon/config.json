@@ -1,0 +1,87 @@
+{
+  "DESIGN_NAME": "tt_um_weftline16",
+  "VERILOG_FILES": [
+    "dir::tt_um_weftline16.v",
+    "dir::slot16.sv",
+    "dir::weftline_rom.v"
+  ],
+  "VERILOG_DEFINES": [
+    "WEFTLINE_IHP_SRAM"
+  ],
+  "CLOCK_PORT": "clk",
+  "CLOCK_PERIOD": 40,
+  "DIE_AREA": "0 0 636.96 313.74",
+  "FP_SIZING": "absolute",
+  "FP_DEF_TEMPLATE": "dir::tile.def",
+  "RT_MAX_LAYER": "TopMetal1",
+  "VDD_PIN": "VPWR",
+  "GND_PIN": "VGND",
+  "TOP_MARGIN_MULT": 1,
+  "BOTTOM_MARGIN_MULT": 1,
+  "LEFT_MARGIN_MULT": 6,
+  "RIGHT_MARGIN_MULT": 6,
+  "PL_TARGET_DENSITY_PCT": 60,
+  "MAX_FANOUT_CONSTRAINT": 8,
+  "PNR_SDC_FILE": "dir::impl.sdc",
+  "SIGNOFF_SDC_FILE": "dir::signoff.sdc",
+  "CTS_SINK_CLUSTERING_SIZE": 4,
+  "RUN_POST_GRT_DESIGN_REPAIR": true,
+  "RUN_POST_GRT_RESIZER_TIMING": true,
+  "DESIGN_REPAIR_MAX_CAP_PCT": 30,
+  "GRT_DESIGN_REPAIR_MAX_CAP_PCT": 25,
+  "PL_RESIZER_HOLD_SLACK_MARGIN": 0.1,
+  "GRT_RESIZER_HOLD_SLACK_MARGIN": 0.05,
+  "DESIGN_REPAIR_BUFFER_OUTPUT_PORTS": false,
+  "PDN_MULTILAYER": false,
+  "PDN_CFG": "dir::pdn.tcl",
+  "PDN_MACRO_CONNECTIONS": [
+    "cpu.scratch_ram VPWR VGND VDD! VSS!",
+    "cpu.scratch_ram VPWR VGND VDDARRAY! VSS!"
+  ],
+  "PDN_VPITCH": 50,
+  "PDN_VWIDTH": 2.1,
+  "IO_PIN_H_LENGTH": 2,
+  "IO_PIN_V_LENGTH": 2,
+  "MAGIC_DEF_LABELS": false,
+  "PRIMARY_GDSII_STREAMOUT_TOOL": "klayout",
+  "MAGIC_GDS_FLATGLOB": ["lvsres_*", "*_CELL_SUB", "VIA_M1_*", "VIA_M2_*", "RSC_*", "*_CELL_CORNER"],
+  "MAGIC_WRITE_LEF_PINONLY": true,
+  "MAGIC_MACRO_STD_CELL_SOURCE": "PDK",
+  "MAGIC_EXT_ABSTRACT_CELLS": [
+    "RM_IHPSG13_1P_256x16_c2_bm_bist"
+  ],
+  "MACROS": {
+    "RM_IHPSG13_1P_256x16_c2_bm_bist": {
+      "vh": ["dir::ihp_sram.vh"],
+      "instances": {
+        "cpu.scratch_ram": {
+          "location": [
+            55,
+            38
+          ],
+          "orientation": "R90"
+        }
+      },
+      "gds": [
+        "pdk_dir::libs.ref/sg13g2_sram/gds/RM_IHPSG13_1P_256x16_c2_bm_bist.gds"
+      ],
+      "lef": [
+        "pdk_dir::libs.ref/sg13g2_sram/lef/RM_IHPSG13_1P_256x16_c2_bm_bist.lef"
+      ],
+      "spice": [
+        "pdk_dir::libs.ref/sg13g2_sram/cdl/RM_IHPSG13_1P_256x16_c2_bm_bist.cdl"
+      ],
+      "lib": {
+        "*_slow_1p08V_125C": [
+          "pdk_dir::libs.ref/sg13g2_sram/lib/RM_IHPSG13_1P_256x16_c2_bm_bist_slow_1p08V_125C.lib"
+        ],
+        "*_typ_1p20V_25C": [
+          "pdk_dir::libs.ref/sg13g2_sram/lib/RM_IHPSG13_1P_256x16_c2_bm_bist_typ_1p20V_25C.lib"
+        ],
+        "*_fast_1p32V_m40C": [
+          "pdk_dir::libs.ref/sg13g2_sram/lib/RM_IHPSG13_1P_256x16_c2_bm_bist_fast_1p32V_m55C.lib"
+        ]
+      }
+    }
+  }
+}

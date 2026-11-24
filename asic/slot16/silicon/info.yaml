@@ -1,0 +1,38 @@
+yaml_version: 6
+project:
+  title: "Weftline 16"
+  author: "Circuit Weaver contributors"
+  description: "Dual-lane deterministic controller with quadrature encoder firmware and SRAM diagnostics"
+  language: "Verilog"
+  clock_hz: 25000000
+  tiles: "3x2"
+  top_module: "tt_um_weftline16"
+  source_files:
+    - tt_um_weftline16.v
+    - slot16.sv
+    - weftline_rom.v
+pinout:
+  ui[0]: Encoder A
+  ui[1]: Encoder B
+  ui[2]: Sample valid
+  ui[3]: Select result high byte
+  ui[4]: Select lane 1 result
+  ui[5]: Select scratch self-test during reset
+  ui[6]: ""
+  ui[7]: ""
+  uo[0]: Result byte bit 0
+  uo[1]: Result byte bit 1
+  uo[2]: Result byte bit 2
+  uo[3]: Result byte bit 3
+  uo[4]: Result byte bit 4
+  uo[5]: Result byte bit 5
+  uo[6]: Result byte bit 6
+  uo[7]: Result byte bit 7
+  uio[0]: Lane 0 input ready
+  uio[1]: Lane 0 result valid
+  uio[2]: Lane 1 result valid
+  uio[3]: Lane 0 halted
+  uio[4]: Lane 1 halted
+  uio[5]: Lane 0 faulted
+  uio[6]: Lane 1 faulted
+  uio[7]: Latched test mode

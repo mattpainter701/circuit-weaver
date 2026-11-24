@@ -22,8 +22,15 @@ module slot16 (
 
     reg slot;
     reg [7:0] pc [0:1];
-    reg [15:0] regs [0:15];
-    reg [15:0] scratch [0:127];
+    reg [15:0] register_file [0:15];
+    wire [15:0] regs [0:15]; // Architectural view includes the latest synchronous LD.
+    reg load_pending;
+    reg [2:0] load_reg;
+    wire [3:0] writeback_reg = {!slot, load_reg};
+    wire [15:0] load_data;
+    for (genvar r = 0; r < 16; r = r + 1) begin : architectural_register
+        assign regs[r] = load_pending && writeback_reg == r ? load_data : register_file[r];
+    end
     reg [1:0] mail_full;
     reg [15:0] mail [0:1]; // Indexed by recipient.
 
@@ -31,8 +38,10 @@ module slot16 (
     wire [3:0] op = imem_data[15:12];
     wire [3:0] dst = {slot, imem_data[11:9]};
     wire [3:0] src = {slot, imem_data[8:6]};
-    wire [15:0] dval = regs[dst];
-    wire [15:0] sval = regs[src];
+    // The pending load belongs to the other lane. Its bypass is only
+    // needed for the between-edges architectural observation above.
+    wire [15:0] dval = register_file[dst];
+    wire [15:0] sval = register_file[src];
     // Unsigned base plus signed displacement, before narrowing to a bank index.
     wire [16:0] address = {1'b0, sval} + {{11{imem_data[5]}}, imem_data[5:0]};
     wire [6:0] bank_addr = {slot, address[5:0]};
@@ -57,18 +66,45 @@ module slot16 (
     wire illegal = op == 4'hf || bad_address;
     assign retire = active && !waiting && !illegal;
 
+    wire read_word = retire && op == LD;
+    wire write_word = retire && op == ST;
+`ifdef WEFTLINE_IHP_SRAM
+    // Rows 0..63 and 64..127 belong to separate lanes. Upper rows are unreachable.
+    RM_IHPSG13_1P_256x16_c2_bm_bist scratch_ram (
+        .A_CLK(clk), .A_MEN(read_word || write_word), .A_WEN(write_word), .A_REN(read_word),
+        .A_ADDR({1'b0, bank_addr}), .A_DIN(dval),
+        .A_BM(16'hffff), .A_DOUT(load_data), .A_DLY(1'b1),
+        .A_BIST_CLK(1'b0), .A_BIST_EN(1'b0), .A_BIST_MEN(1'b0), .A_BIST_WEN(1'b0),
+        .A_BIST_REN(1'b0), .A_BIST_ADDR(8'b0), .A_BIST_DIN(16'b0), .A_BIST_BM(16'b0)
+    );
+`else
+    reg [15:0] scratch [0:127];
+    reg [15:0] read_q;
+    always @(posedge clk) begin
+        if (write_word) scratch[bank_addr] <= dval;
+        if (read_word) read_q <= scratch[bank_addr];
+    end
+    assign load_data = read_q;
+`endif
+
     integer i;
     always @(posedge clk) begin
         if (reset) begin
             slot <= 0;
+            load_pending <= 0;
             pc[0] <= 0;
             pc[1] <= 0;
             halted <= 0;
             faulted <= 0;
             mail_full <= 0;
             for (i = 0; i < 16; i = i + 1)
-                regs[i] <= 0;
+                register_file[i] <= 0;
         end else begin
+            // SRAM samples the request on the retiring edge. Commit its result
+            // during the peer's slot, before this lane can use the register.
+            load_pending <= read_word;
+            if (read_word) load_reg <= dst[2:0];
+            if (load_pending) register_file[writeback_reg] <= load_data;
             slot <= peer;
             if (active && illegal)
                 faulted[slot] <= 1'b1;
@@ -76,12 +112,10 @@ module slot16 (
                 pc[slot] <= pc[slot] + 8'd1;
                 case (op)
                     HALT: halted[slot] <= 1'b1;
-                    LDI: regs[dst] <= {{7{imem_data[8]}}, imem_data[8:0]};
-                    ADD: regs[dst] <= dval + sval;
-                    SUB: regs[dst] <= dval - sval;
-                    XOR_R: regs[dst] <= dval ^ sval;
-                    LD: regs[dst] <= scratch[bank_addr];
-                    ST: scratch[bank_addr] <= dval;
+                    LDI: register_file[dst] <= {{7{imem_data[8]}}, imem_data[8:0]};
+                    ADD: register_file[dst] <= dval + sval;
+                    SUB: register_file[dst] <= dval - sval;
+                    XOR_R: register_file[dst] <= dval ^ sval;
                     BNZ: if (dval != 0)
                              pc[slot] <= pc[slot] + 8'd1 + imem_data[7:0];
                     SEND: begin
@@ -89,14 +123,14 @@ module slot16 (
                         mail_full[peer] <= 1'b1;
                     end
                     RECV: begin
-                        regs[dst] <= mail[slot];
+                        register_file[dst] <= mail[slot];
                         mail_full[slot] <= 1'b0;
                     end
-                    IN: regs[dst] <= slot ? in_data[31:16] : in_data[15:0];
+                    IN: register_file[dst] <= slot ? in_data[31:16] : in_data[15:0];
                     OUT: ; // The edge transfers dval to the selected endpoint.
-                    VALID: regs[dst] <= {15'b0, in_valid[slot]};
-                    SHL: regs[dst] <= dval << 1;
-                    AND_R: regs[dst] <= dval & sval;
+                    VALID: register_file[dst] <= {15'b0, in_valid[slot]};
+                    SHL: register_file[dst] <= dval << 1;
+                    AND_R: register_file[dst] <= dval & sval;
                 endcase
             end
         end
