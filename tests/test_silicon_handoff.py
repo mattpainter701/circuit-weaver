@@ -66,6 +66,7 @@ def test_complete_manifest_is_reviewable_and_bundle_is_deterministic(tmp_path, m
     assert set(one["report_modes"].values()) == {"attested"}
     assert one["bundle_sha256"] == two["bundle_sha256"]
     with zipfile.ZipFile(tmp_path / "review.zip") as archive:
+        assert all(entry.create_system == 3 for entry in archive.infolist())
         assert "handoff_manifest.json" in archive.namelist()
         assert archive.read("chip.gds") == (tmp_path / "chip.gds").read_bytes()
     assert first == (tmp_path / "review.zip").read_bytes()

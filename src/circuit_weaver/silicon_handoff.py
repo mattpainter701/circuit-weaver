@@ -25,6 +25,14 @@ _SHA = re.compile(r"^[0-9a-f]{64}$")
 _ZIP_TIME = (2020, 1, 1, 0, 0, 0)
 
 
+def _zip_entry(name: str) -> zipfile.ZipInfo:
+    info = zipfile.ZipInfo(name, _ZIP_TIME)
+    info.create_system = 3  # Use the same POSIX attribute encoding on every build host.
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.external_attr = 0o100644 << 16
+    return info
+
+
 def _artifact_path(raw: Any, role: str, root: Path) -> tuple[str, Path]:
     if not isinstance(raw, str) or not raw:
         raise ValueError(f"role {role!r} must have a non-empty relative path")
@@ -285,9 +293,7 @@ def review_silicon_handoff(
     try:
         with zipfile.ZipFile(temp_name, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
             for name, source, expected_digest in sorted(members, key=lambda item: item[0].casefold()):
-                info = zipfile.ZipInfo(name, _ZIP_TIME)
-                info.compress_type = zipfile.ZIP_DEFLATED
-                info.external_attr = 0o100644 << 16
+                info = _zip_entry(name)
                 digest = hashlib.sha256()
                 with source.open("rb") as stream, archive.open(info, "w") as target:
                     for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -295,10 +301,7 @@ def review_silicon_handoff(
                         target.write(chunk)
                 if digest.hexdigest() != expected_digest:
                     raise ValueError(f"artifact changed while packaging: {name}")
-            info = zipfile.ZipInfo("handoff_manifest.json", _ZIP_TIME)
-            info.compress_type = zipfile.ZIP_DEFLATED
-            info.external_attr = 0o100644 << 16
-            archive.writestr(info, manifest_bytes)
+            archive.writestr(_zip_entry("handoff_manifest.json"), manifest_bytes)
         os.replace(temp_name, destination)
     except Exception:
         try:
