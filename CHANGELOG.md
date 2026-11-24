@@ -4,6 +4,8 @@
 
 ### Added
 
+- Run the Slot16 embedded CPU prototype from the source checkout to evaluate fixed execution slots, private memory, and blocking communication in RTL.
+
 - Inspect local KiCad symbols, footprints, 3D models, and SPICE model bindings with the read-only library audit in the CLI, Python, and MCP.
 - Start, open, plan, run, and resume a project through the CLI, Python, or MCP. Saved checkpoints verify inputs and outputs before resuming work.
 

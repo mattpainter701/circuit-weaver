@@ -23,6 +23,8 @@
 
 ## How It Works
 
+The repository also hosts [Slot16](asic/slot16/README.md), an experimental embedded CPU with an executable RTL design and timing benchmarks.
+
 <p align="center">
   <img src="assets/workflow.svg" alt="Circuit Weaver full pipeline — from install to KiCad export" width="100%">
 </p>
