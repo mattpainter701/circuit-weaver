@@ -101,4 +101,7 @@ module slot16 (
             end
         end
     end
+`ifdef SLOT16_FORMAL
+`include "properties.svh"
+`endif
 endmodule

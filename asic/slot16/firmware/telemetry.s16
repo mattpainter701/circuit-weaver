@@ -1,0 +1,7 @@
+LDI r7, 1
+LDI r2, 85
+packet:
+IN r0
+XOR r0, r2
+OUT r0
+BNZ r7, packet

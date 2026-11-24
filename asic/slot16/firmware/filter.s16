@@ -1,0 +1,10 @@
+# r6 is the zero base; word zero holds the preceding sample.
+LDI r7, 1
+ST r0, [r6]
+sample:
+IN r0
+LD r1, [r6]
+ST r0, [r6]
+ADD r0, r1
+OUT r0
+BNZ r7, sample
