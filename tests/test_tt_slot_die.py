@@ -12,7 +12,9 @@ from circuit_weaver.tt_slot_die import TTSlotDieError, render_tt_slot
 
 
 def _kdb():
-    return pytest.importorskip("klayout.db")
+    import klayout.db as kdb
+
+    return kdb
 
 
 def _assert_orange_marker(path: Path) -> None:
@@ -83,6 +85,7 @@ def test_macro_in_library_but_not_instantiated_fails_closed(tmp_path: Path):
         render_tt_slot(source, tmp_path / "incomplete.png", macro="tt_um_synthetic", top="chip_top")
 
 
+@pytest.mark.skip_category("network")
 def test_official_index_record_and_real_ttsky26d_layout(tmp_path: Path):
     _kdb()
     layout_value = os.environ.get("TT_SLOT_DIE_OAS")
