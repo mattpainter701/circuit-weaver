@@ -34,6 +34,8 @@ if metrics["design__max_fanout_violation__count"]:
 PY
 python3 "$here/macro_drc.py" "$out/src/runs/weftline" "$PDK_ROOT/$tech"
 top=tt_um_weftline16
-iverilog -g2012 -DFUNCTIONAL -s pin_tb -o pins "$@" "$PDK_ROOT/$tech/libs.ref/sg13g2_stdcell/verilog/sg13g2_stdcell.v" "$final/nl/$top.nl.v" "$here/pin_tb.sv"
+cells="$PDK_ROOT/$tech/libs.ref/sg13g2_stdcell/verilog"
+iverilog -g2012 -DFUNCTIONAL -s pin_tb -o pins "$@" "$cells/sg13g2_udp.v" "$cells/sg13g2_stdcell.v" \
+    "$final/nl/$top.nl.v" "$here/pin_tb.sv"
 vvp pins
 python3 "$here/export.py" "$out/src/runs/weftline" "$out/tt_submission"

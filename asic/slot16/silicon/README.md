@@ -5,6 +5,15 @@ SRAM, and a synchronous pin interface for a 3×2 Tiny Tapeout SG13G2 slot. The
 target is 25 MHz in a 636.96 × 313.74 µm boundary. The shuttle supplies the
 pads, clock, reset, power and package. [Carrier memory guidance](https://tinytapeout.com/specs/memory/)
 
+![Routed tile with SRAM on the left and controller logic in the center](layout.png)
+
+The extracted layout met the 40 ns clock constraint at all three characterized
+corners. Worst setup slack was +20.550 ns and worst hold slack was +0.131 ns.
+The post-route timing reports had zero slew, capacitance and fanout violations.
+The pin replay matched the virtual board for 4,809 clocks on the routed
+gate netlist. Timing comes from extracted static analysis. The replay uses
+the functional standard-cell and SRAM models.
+
 ## Scratchpad
 
 The two lanes each own 64 × 16 bits. A load or store presents one address on
@@ -66,8 +75,8 @@ docker run --rm -v "$PWD:/repo:ro" -v "$work:/work" --entrypoint sh \
   /repo/asic/slot16/silicon/harden.sh /work/build /work/tt
 ```
 
-The `tt_submission` directory contains GDS, LEF, gate Verilog, extracted
-parasitics, PDK revision and pin metadata. The run directory contains timing,
+The `tt_submission` directory contains GDS, OASIS, LEF, gate Verilog, extracted
+parasitics, PDK revision, build metadata and pin assignments. The run directory contains timing,
 antenna, LVS, both DRC reports and an image streamed from the layout. Hierarchical
 LVS treats the vendor SRAM as a macro. Magic's full-chip report is compared
 rule by rule and coordinate by coordinate with the original vendor GDS at the
