@@ -43,6 +43,24 @@ quit
 
 ## Boot other firmware
 
+To exercise both scratch banks from an arbitrary reproducible cold state, boot
+the same two memory-test images as the silicon tile. Each lane writes and checks
+all 64 words. A successful run prints `out0=0x00a5`, `out1=0x00a5` and
+`scratch test passed`. A mismatch emits `0xffff` on the affected lane. A
+short batch that expires before completion also exits with status 1.
+
+```sh
+python asic/slot16/weftline.py --scratch-test --scratch-seed 42
+python asic/slot16/weftline.py --scratch-test --scratch-seed 42 --monitor
+```
+
+In the monitor, enter `mem 0 0 8`, `step 6000`, then `mem 0 0 8` to inspect
+the first eight words before and after the diagnostic. `reset` retains both
+banks. Changing the seed changes both lanes' initial contents. Each physical
+SRAM word has unspecified power-up data.
+
+### Custom programs
+
 Each lane accepts a `.s16` assembly file or a `.hex` file with up to 256 whitespace-separated 16-bit hexadecimal words. Unused ROM words contain HALT. To boot the existing filter and telemetry programs with independent inputs, run this command from the repository root.
 
 ```sh

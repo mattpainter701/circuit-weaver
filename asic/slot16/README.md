@@ -2,7 +2,7 @@
 
 ![Concept rendering of the Weftline 16 processor package](weftline-16-concept.png)
 
-Weftline 16 is the product name for the Slot16 processor. The two threads in the emblem represent its alternating execution slots. The image shows a proposed package appearance. Physical packaging and pin assignment are open design decisions.
+Weftline 16 is the product name for the Slot16 processor. The image shows a proposed package appearance. The [IHP silicon implementation](silicon/README.md) defines the shared-carrier pinout, SRAM, boot modes and physical verification flow.
 
 Run `python asic/slot16/weftline.py` from the repository root to boot the quadrature encoder and diagnostic firmware on the [virtual board](virtual-board.md).
 
@@ -99,7 +99,7 @@ vvp "$benchdir/echo"
 
 ### Synthesis result
 
-The same command runs generic synthesis and `check -assert`. With Yosys 0.23 and its default ABC mapping, the core produced 8,081 generic cells, including scratchpad storage implemented in flip-flops. Instruction ROM and stream adapters are external to this count. Cell counts depend on tools and mapping. This result establishes logic synthesizability. A standard-cell area or frequency estimate requires a technology library and timing constraints.
+The same command runs generic synthesis and `check -assert`. The original asynchronous-read prototype produced 8,081 generic cells with Yosys 0.23 and its default ABC mapping. The current synchronous port can use inferred storage or the IHP SRAM. The [silicon implementation](silicon/README.md) gives the technology-mapped area comparison including ROM and pin adapters.
 
 ## Implementation plan and decision gates
 

@@ -2,3 +2,4 @@
 src/circuit_weaver/model_assets/*.step -text
 src/circuit_weaver/model_assets/*.yaml -text
 asic/slot16/check.sh text eol=lf
+asic/slot16/silicon/harden.sh text eol=lf

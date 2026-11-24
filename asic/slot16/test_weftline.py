@@ -6,12 +6,45 @@ import unittest
 from pathlib import Path
 
 from asm16 import assemble, write_image
-from weftline import Board, FIRMWARE, load_bank
+from weftline import Board, FIRMWARE, load_bank, scratch_test_banks
 
 HERE = Path(__file__).resolve().parent
 
 
 class VirtualBoardTests(unittest.TestCase):
+    def test_scratch_diagnostic_detects_a_corrupt_word(self):
+        board = Board(scratch_test_banks(), scratch_seed=42)
+        self.assertEqual(board.cpu.contexts[0].scratch,
+                         Board(scratch_test_banks(), scratch_seed=42).cpu.contexts[0].scratch)
+        self.assertNotEqual(board.cpu.contexts[0].scratch, board.cpu.contexts[1].scratch)
+        for _ in range(6000):
+            if board.cpu.rom[0][board.cpu.contexts[0].pc] >> 12 == 5:
+                break
+            board.tick()
+        else:
+            self.fail("firmware never reached its first read")
+        board.cpu.contexts[0].scratch[31] ^= 1 << 15
+        for _ in range(6000):
+            board.tick()
+        self.assertEqual(board.last_output, [0xffff, 0x00a5])
+        self.assertTrue(all(ctx.halted for ctx in board.cpu.contexts))
+        contents = [ctx.scratch[:] for ctx in board.cpu.contexts]
+        board.reset()
+        self.assertEqual([ctx.scratch for ctx in board.cpu.contexts], contents)
+
+    def test_scratch_monitor_and_batch_status(self):
+        command = [sys.executable, str(HERE / "weftline.py"), "--scratch-test", "--scratch-seed", "0xcafe"]
+        result = subprocess.run(command, text=True, capture_output=True, check=True)
+        self.assertIn("scratch test passed", result.stdout)
+        short = subprocess.run([*command, "--cycles", "12"], text=True, capture_output=True)
+        self.assertEqual(short.returncode, 1)
+        self.assertIn("incomplete", short.stdout)
+        result = subprocess.run([*command, "--monitor"], text=True, capture_output=True, check=True,
+                                input="step 6000\nmem 0 62 2\nmem 1 62 2\nmem 1 63 2\nquit\n")
+        self.assertIn("lane=0 address=62 ff94 ff95", result.stdout)
+        self.assertIn("lane=1 address=62 006b 006a", result.stdout)
+        self.assertIn("error: value out of range", result.stdout)
+
     def test_public_cli(self):
         command = [sys.executable, str(HERE / "weftline.py")]
         demo = subprocess.run(command, capture_output=True, text=True, check=True)

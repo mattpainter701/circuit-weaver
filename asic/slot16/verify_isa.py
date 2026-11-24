@@ -1,4 +1,5 @@
 """Compare complete RTL transitions against the independent interpreter."""
+import argparse
 import random
 import subprocess
 import tempfile
@@ -85,13 +86,21 @@ def trial(directory: Path, banks: list[list[int]], seed: int, cycles: int, cover
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--ihp-models", type=Path, help="PDK sg13g2_sram/verilog directory")
+    models = parser.parse_args().ihp_models
+    backend = []
+    if models:
+        backend = ["-DWEFTLINE_IHP_SRAM", "-DFUNCTIONAL",
+                   models / "RM_IHPSG13_1P_core_behavioral_bm_bist.v",
+                   models / "RM_IHPSG13_1P_256x16_c2_bm_bist.v"]
     assembler_checks()
     rng = random.Random(934)
     coverage = set()
     with tempfile.TemporaryDirectory() as tmp:
         directory = Path(tmp)
         subprocess.run(["iverilog", "-g2012", "-s", "trace_tb", "-o", directory / "trace",
-                        HERE / "slot16.sv", HERE / "trace_tb.sv"], check=True)
+                        *backend, HERE / "slot16.sv", HERE / "trace_tb.sv"], check=True)
         total = 0
         for seed in range(12):
             trial(directory, [randomized_bank(rng), randomized_bank(rng)], seed, 1000, coverage)

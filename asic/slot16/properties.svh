@@ -7,6 +7,9 @@ reg history = 0;
 reg was_reset, was_slot, was_stopped, was_blocked, was_fault, was_retire;
 reg [3:0] was_op;
 reg [15:0] old_word, old_reg, old_mail;
+reg [15:0] store_data;
+reg watched_access;
+reg [3:0] accessed_reg;
 reg [7:0] old_pc;
 reg old_full, old_halted, old_faulted;
 
@@ -31,6 +34,9 @@ always @(posedge clk) begin
     was_blocked <= running && unavailable;
     was_retire <= retire;
     old_word <= scratch[watched_word];
+    watched_access <= watched_word == {slot, full_address[5:0]};
+    accessed_reg <= {slot, imem_data[11:9]};
+    store_data <= regs[{slot, imem_data[11:9]}];
     old_reg <= regs[watched_reg];
     old_pc <= pc[watched_lane];
     old_full <= mail_full[watched_lane];
@@ -45,8 +51,10 @@ always @* begin
     assert((out_valid & out_ready) == ((retire && instruction == 11) ? (2'b01 << slot) : 0));
     if (history) begin
         assert(slot == (was_reset ? 0 : !was_slot));
-        if (!was_retire || was_op != 6 || watched_word[6] != was_slot)
-            assert(scratch[watched_word] == old_word);
+        assert(scratch[watched_word] ==
+               ((was_retire && was_op == 6 && watched_access) ? store_data : old_word));
+        if (was_retire && was_op == 5 && watched_access)
+            assert(regs[accessed_reg] == old_word);
         if (was_reset) begin
             assert(pc[watched_lane] == 0 && regs[watched_reg] == 0);
             assert(!mail_full[watched_lane] && !halted[watched_lane] && !faulted[watched_lane]);
