@@ -29,6 +29,38 @@ instead use `~/.freerouting/freerouting.jar` and `~/.freerouting/runtime/bin/jav
 (`java.exe` on Windows). CI pins Freerouting 2.4.1 for the general corpus and
 2.5.0 for unseen scale workflows, using Java 25.
 
+## Placement scoring
+
+From the source checkout, install the native companion into the Python environment
+that runs Circuit Weaver. Building from source requires a stable Rust toolchain.
+Linux and Windows wheels are also available in the pull request CI artifacts
+named `placement-wheel-ubuntu-latest` and `placement-wheel-windows-latest`.
+
+```sh
+python -m pip install ./native/placement
+```
+
+Placement uses the companion automatically when installed. To select an engine
+explicitly, set `CIRCUIT_WEAVER_PLACEMENT_BACKEND` to `rust` or `python`.
+Python callers can also supply `PlacementConfig(scoring_backend="rust")`.
+An explicit Rust selection requires the companion. The result's
+`placement.search.scoring` records the engine and, for Rust, the number of
+evaluations, topology snapshots and footprint poses transferred. Geometry,
+rotated pad endpoints, pair overlaps and label space persist across candidate
+moves. Both engines use the same move generator, legalization, hard-defect
+ranking, and native KiCad placement and routing gates.
+
+To reproduce a paired end-to-end measurement, supply a saved general-scale
+case directory containing the unplaced board, design, project settings and
+`native-contracts.json`. Each engine places the same input with seed 7 and
+6,000 iterations, then routes its saved board independently. The comparison
+reports wall time, exact footprint and reference-label poses, saved copper
+length, vias, design-rule checks, and verified paths.
+
+```sh
+python benchmarks/general_scale/compare_placement.py runs/distributed_facility_gateway --output placement-study
+```
+
 ## Supported scope
 
 `place-pcb` currently accepts unrouted rectangular boards without copper zones.

@@ -63,6 +63,21 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[test]"
 
+      - name: Build and exercise the native placement wheel
+        if: matrix.python-version == '3.10' || matrix.python-version == '3.13'
+        run: |
+          python -m pip wheel --no-deps ./native/placement --wheel-dir placement-wheel
+          python -m pip install --no-index --find-links placement-wheel circuit-weaver-placement
+          python -c "from circuit_weaver.placement_scoring import select_scorer; select_scorer('rust')"
+
+      - name: Save native placement wheel
+        if: matrix.python-version == '3.13'
+        uses: actions/upload-artifact@v7
+        with:
+          name: placement-wheel-${{ matrix.os }}
+          path: placement-wheel/*.whl
+          if-no-files-found: error
+
       - name: Ruff
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.14'
         run: python -m ruff check src tests
@@ -395,6 +410,15 @@ jobs:
           test -n "$wheel"
           python -m pip install "${wheel}[mcp]"
 
+      - name: Install the tested native placement wheel
+        uses: actions/download-artifact@v8
+        with:
+          name: placement-wheel-ubuntu-latest
+          path: placement-wheel
+
+      - name: Enable Rust placement scoring
+        run: python -m pip install --no-index --find-links placement-wheel circuit-weaver-placement
+
       - name: Set up routing runtime
         uses: actions/setup-java@v5
         with:
@@ -404,6 +428,7 @@ jobs:
       - name: Verify pinned recovery router and run every prototype stage
         shell: bash
         env:
+          CIRCUIT_WEAVER_PLACEMENT_BACKEND: rust
           CIRCUIT_WEAVER_KICAD_PYTHON: /usr/bin/python3
           CIRCUIT_WEAVER_FREEROUTING: /tmp/freerouting-2.5.0.jar
         run: |
