@@ -130,16 +130,18 @@ def review_silicon_handoff(
         if role in role_items:
             raise ValueError(f"duplicate role: {role}")
         role_items[role] = item
+        raw_path = item.get("path")
+        if isinstance(raw_path, str):
+            folded = raw_path.casefold()
+            if folded in paths:
+                raise ValueError(f"duplicate or case-colliding artifact paths: {paths[folded]!r} and {raw_path!r}")
+            paths[folded] = raw_path
         try:
-            name, path = _artifact_path(item.get("path"), role, manifest_dir)
+            name, path = _artifact_path(raw_path, role, manifest_dir)
         except FileNotFoundError:
             blockers.append(f"role {role}: artifact file is missing: {item.get('path')!r}")
             unavailable.add(role)
             continue
-        folded = name.casefold()
-        if folded in paths:
-            raise ValueError(f"duplicate or case-colliding artifact paths: {paths[folded]!r} and {name!r}")
-        paths[folded] = name
         expected = item.get("sha256")
         if not isinstance(expected, str) or not _SHA.fullmatch(expected):
             blockers.append(f"role {role}: missing or invalid SHA-256")

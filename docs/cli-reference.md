@@ -26,7 +26,7 @@ Install the `silicon` extra to use KLayout's native geometry engine. Both comman
 
 ```sh
 python -m pip install '.[silicon]'
-circuit-weaver silicon preview carrier.gds --top chip_top --layers process.lyp -o carrier.png
+circuit-weaver silicon preview carrier.gds --top chip_top -o carrier.png
 circuit-weaver silicon handoff handoff.json
 circuit-weaver silicon handoff handoff.json --bundle provider-review.zip
 ```

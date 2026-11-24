@@ -6,6 +6,8 @@ Use `circuit-weaver silicon handoff` to review the files for **one provider, run
 
 ## Review manifest
 
+For a process-specific rendering, pass the provider's native layer-properties file with `circuit-weaver silicon preview carrier.oas --top chip_top --layers process.lyp -o carrier.png`.
+
 The schema-1 JSON file is the root of the input package. Use paths relative to its directory. Each file needs a role and the SHA-256 of its exact bytes. The following deliberately incomplete example names two roles. Replace the illustrative hashes with measured values.
 
 ```json
