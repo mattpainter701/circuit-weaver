@@ -32,6 +32,17 @@ def add_parsers(subparsers) -> None:
     handoff = silicon_actions.add_parser("handoff", help="Review a silicon evidence manifest and optionally package it")
     handoff.add_argument("manifest", help="Path to the JSON manifest")
     handoff.add_argument("--bundle", help="Destination review ZIP for a complete manifest")
+    slot = silicon_actions.add_parser("slot-map", help="Locate a Tiny Tapeout project and map its demo-board pins")
+    slot.add_argument("macro", help="Exact tt_um_ top module")
+    slot.add_argument("--shuttle", default="ttsky26d")
+    slot.add_argument("--board", default="tt-etr-v3p3-sky130")
+    slot.add_argument("--info", help="Local Tiny Tapeout info.yaml for planning or comparison")
+    slot.add_argument("--expected-repo", help="Require this GitHub project repository when a slot is found")
+    slot.add_argument("--report", help="Write a self-contained HTML sheet with the located die view")
+    slot.add_argument("--index", help="Use a local shuttle_index.json instead of querying the provider")
+    slot.add_argument("--layout", help="Full-chip layout for an offline report")
+    slot.add_argument("--layout-commit", help="Provider shuttle commit recorded for the local layout")
+    slot.add_argument("--layout-sha256", help="Independent file SHA-256 for the local layout")
     start = subparsers.add_parser("start", help="Create a draft project without replacing existing files")
     start.add_argument("project", nargs="?", default=".")
     start.add_argument("--spec", help="Existing YAML/JSON design to copy into the new project")
@@ -83,6 +94,12 @@ def dispatch(args) -> dict[str, Any] | None:
     from . import project_workflow as workflow
 
     if args.command == "silicon":
+        if args.silicon_action == "slot-map":
+            from .tt_slot import map_tt_slot
+
+            return map_tt_slot(args.macro, shuttle=args.shuttle, board=args.board, info=args.info,
+                               expected_repo=args.expected_repo, index=args.index, layout=args.layout,
+                               layout_commit=args.layout_commit, layout_sha256=args.layout_sha256, report=args.report)
         if args.silicon_action == "preview":
             from .silicon_preview import render_silicon_preview
 

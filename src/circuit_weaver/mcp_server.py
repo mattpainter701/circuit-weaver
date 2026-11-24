@@ -508,6 +508,27 @@ def _create_app() -> Any:
         except (OSError, ValueError) as exc:
             return _as_mcp_tool_result(_error_json("silicon_preview_failed", str(exc)))
 
+    @mcp.tool(annotations=ToolAnnotations(openWorldHint=True))
+    async def silicon_slot_map(
+        macro: str, shuttle: str = "ttsky26d", board: str = "tt-etr-v3p3-sky130",
+        info: str = "", expected_repo: str = "", index: str = "", layout: str = "",
+        layout_commit: str = "", layout_sha256: str = "", report: str = "",
+    ) -> Any:
+        """Look up a Tiny Tapeout project. Use absolute local paths. A local index enables offline review."""
+        from .tt_slot import map_tt_slot
+
+        try:
+            paths = {key: _absolute_workflow_path(value, key) if value else None
+                     for key, value in (("info", info), ("index", index), ("layout", layout), ("report", report))}
+            result = await asyncio.to_thread(
+                _call_without_stdout, map_tt_slot, macro, shuttle=shuttle, board=board, **paths,
+                expected_repo=expected_repo or None, layout_commit=layout_commit or None,
+                layout_sha256=layout_sha256 or None,
+            )
+            return _as_mcp_tool_result(json.dumps(result, default=str))
+        except (OSError, ValueError) as exc:
+            return _as_mcp_tool_result(_error_json("silicon_slot_map_failed", str(exc)))
+
     @mcp.tool(annotations=ToolAnnotations(openWorldHint=False))
     async def silicon_handoff(manifest: str, bundle: str = "") -> Any:
         """Review local fabrication evidence. Supply an absolute ZIP path to package a complete review."""

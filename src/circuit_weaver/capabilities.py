@@ -461,6 +461,11 @@ CAPABILITIES: Final[tuple[CapabilityRecord, ...]] = (
         python="circuit_weaver.silicon_handoff:review_silicon_handoff", mcp="silicon_handoff",
         evidence_kinds=("command-contract", "external-tool", "user-supplied"),
     ),
+    _record(
+        "silicon-slot-map", "silicon slot-map", maturity="review_only", since_version="unreleased",
+        python="circuit_weaver.tt_slot:map_tt_slot", mcp="silicon_slot_map",
+        evidence_kinds=("command-contract", "external-tool", "user-supplied"),
+    ),
     _record("save-research", "save-research", maturity="experimental", skill="circuit-weaver"),
     _record(
         "log-event",
