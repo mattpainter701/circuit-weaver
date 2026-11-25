@@ -1,0 +1,10 @@
+[build-system]
+requires = ["maturin>=1.12,<2"]
+build-backend = "maturin"
+
+[project]
+name = "circuit-weaver-placement"
+version = "0.1.0"
+description = "Stateful native placement scoring for Circuit Weaver"
+requires-python = ">=3.10"
+license = "MIT"

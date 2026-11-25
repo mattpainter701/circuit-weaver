@@ -181,6 +181,7 @@ class PlacementConfig:
     seed: int | None = None
     restarts: int = 3
     refinement_passes: int = 2
+    scoring_backend: str | None = None
 
 
 @dataclass
@@ -2854,9 +2855,10 @@ def _placement_rank(
     config: PlacementConfig,
     pairs: dict[tuple[str, str], float],
     plan: _ConstraintPlan,
+    scorer=None,
 ) -> tuple[int, float]:
     """Hard defects outrank every weighted placement preference."""
-    return _placement_hard_defects(state, config, plan), _total_cost(state, config, pairs, plan)
+    return _placement_hard_defects(state, config, plan), (scorer or _total_cost)(state, config, pairs, plan)
 
 
 def _placement_hard_defects(
@@ -3445,6 +3447,7 @@ def _refine_placement(
     pairs: dict[tuple[str, str], float],
     plan: _ConstraintPlan,
     *,
+    scorer=None,
     skip_worse_hard_defects: bool = True,
     evaluation_budget: int | None = None,
 ) -> tuple[list[ComponentPlacement], int]:
@@ -3453,7 +3456,7 @@ def _refine_placement(
         isinstance(evaluation_budget, bool) or not isinstance(evaluation_budget, int) or evaluation_budget < 0
     ):
         raise ValueError("evaluation_budget must be a non-negative integer or None")
-    rank = _placement_rank(state, config, pairs, plan)
+    rank = _placement_rank(state, config, pairs, plan, scorer)
     evaluations = 0
     budget_exhausted = False
 
@@ -3461,7 +3464,7 @@ def _refine_placement(
         defects = _placement_hard_defects(candidate, config, plan)
         if skip_worse_hard_defects and defects > rank[0]:
             return None
-        return defects, _total_cost(candidate, config, pairs, plan)
+        return defects, (scorer or _total_cost)(candidate, config, pairs, plan)
 
     for pass_index in range(config.refinement_passes):
         step = 1.0 / (2**pass_index)
@@ -3828,6 +3831,7 @@ def _refine_interchangeable_connector_slots(
     pairs: dict[tuple[str, str], float],
     plan: _ConstraintPlan,
     *,
+    scorer=None,
     max_group_size: int = _CONNECTOR_SLOT_REFINEMENT_MAX_GROUP_SIZE,
 ) -> tuple[list[ComponentPlacement], dict[str, Any]]:
     """Assign eligible native connector references to existing equivalent slots.
@@ -4051,8 +4055,8 @@ def _refine_interchangeable_connector_slots(
         metadata["accepted"] = False
         metadata["rejected_reason"] = "slot_geometry_multiset_changed"
         return state, metadata
-    baseline_rank = _placement_rank(state, config, pairs, plan)
-    candidate_rank = _placement_rank(candidate, config, pairs, plan)
+    baseline_rank = _placement_rank(state, config, pairs, plan, scorer)
+    candidate_rank = _placement_rank(candidate, config, pairs, plan, scorer)
     metadata["baseline_rank"] = {"hard_defects": baseline_rank[0], "cost": baseline_rank[1]}
     metadata["candidate_rank"] = {"hard_defects": candidate_rank[0], "cost": candidate_rank[1]}
     metadata["moved_refs"] = sorted(row["ref"] for row in assignment_rows)
@@ -4154,23 +4158,27 @@ def optimize_placement(
 
     # Keep the legal initial layout as a fallback. Every trial is compared
     # after legalization, so a cheaper but physically worse layout cannot win.
+    from .placement_scoring import select_scorer
+
+    native_scorer = select_scorer(config.scoring_backend)
+    score = native_scorer or _total_cost
     initial_state = state
     original_baseline, original_baseline_moves = _legalize_overlaps(
         _quantize_state(state), config, constraint_plan
     )
     original_baseline = _quantize_state(original_baseline)
-    original_baseline_rank = _placement_rank(original_baseline, config, connectivity_pairs, constraint_plan)
+    original_baseline_rank = _placement_rank(original_baseline, config, connectivity_pairs, constraint_plan, score)
     relaxed, relaxed_counts = _topology_relaxed_seed(
         original_baseline, connectivity_pairs, config, constraint_plan, passes=4, blend=0.5
     )
     relaxed, relaxed_moves = _legalize_overlaps(_quantize_state(relaxed), config, constraint_plan)
     relaxed = _quantize_state(relaxed)
-    relaxed_rank = _placement_rank(relaxed, config, connectivity_pairs, constraint_plan)
+    relaxed_rank = _placement_rank(relaxed, config, connectivity_pairs, constraint_plan, score)
     topology_seed_accepted = relaxed_rank < original_baseline_rank
     baseline = relaxed if topology_seed_accepted else original_baseline
     baseline_moves = relaxed_moves if topology_seed_accepted else original_baseline_moves
     baseline_rank = relaxed_rank if topology_seed_accepted else original_baseline_rank
-    initial_cost = _total_cost(initial_state, config, connectivity_pairs, constraint_plan)
+    initial_cost = score(initial_state, config, connectivity_pairs, constraint_plan)
     winner = baseline
     winner_rank = baseline_rank
     winner_index, winner_moves = 0, baseline_moves
@@ -4192,13 +4200,13 @@ def optimize_placement(
         trial_seed = config.seed if restart == 0 else seed_rng.getrandbits(63)
         rng = random.Random(trial_seed)
         state = [replace(p) for p in baseline]
-        current_cost = _total_cost(state, config, connectivity_pairs, constraint_plan)
+        current_cost = score(state, config, connectivity_pairs, constraint_plan)
         best_state, best_cost = state, current_cost
         temp = config.initial_temp
         for i in range(budget):
             scale = max(0.1, 1.0 - i / max(1, budget))
             candidate = _perturb(state, config, rng, move_scale=scale)
-            candidate_cost = _total_cost(candidate, config, connectivity_pairs, constraint_plan)
+            candidate_cost = score(candidate, config, connectivity_pairs, constraint_plan)
             delta = candidate_cost - current_cost
             if delta < 0 or rng.random() < math.exp(-delta / max(temp, 0.001)):
                 state, current_cost = candidate, candidate_cost
@@ -4212,11 +4220,12 @@ def optimize_placement(
             config,
             connectivity_pairs,
             constraint_plan,
+            scorer=score,
             evaluation_budget=refinement_budget,
         )
         refinement_evaluation_budgets.append(refinement_budget)
         refinement_evaluations += evaluations
-        rank = _placement_rank(candidate, config, connectivity_pairs, constraint_plan)
+        rank = _placement_rank(candidate, config, connectivity_pairs, constraint_plan, score)
         trials.append(
             {
                 "candidate": restart + 1,
@@ -4233,11 +4242,11 @@ def optimize_placement(
             winner, winner_rank = candidate, rank
             winner_index, winner_moves = restart + 1, moved
     slot_refined, slot_metadata = _refine_interchangeable_connector_slots(
-        components, winner, config, connectivity_pairs, constraint_plan,
+        components, winner, config, connectivity_pairs, constraint_plan, scorer=score,
     )
     if slot_metadata["accepted"]:
         winner = slot_refined
-        winner_rank = _placement_rank(winner, config, connectivity_pairs, constraint_plan)
+        winner_rank = _placement_rank(winner, config, connectivity_pairs, constraint_plan, score)
         winner_index = len(trials)
         trials.append({"candidate": winner_index, "kind": "native_connector_slot_refinement",
                        "defects": winner_rank[0], "cost": round(winner_rank[1], 2), "iterations": 0})
@@ -4251,6 +4260,11 @@ def optimize_placement(
         constraint_plan=constraint_plan,
     )
     result["search"] = {
+        "scoring": (
+            {"backend": "rust", "evaluations": native_scorer.evaluations,
+             "snapshots": native_scorer.snapshots, "pose_updates": native_scorer.pose_updates}
+            if native_scorer else {"backend": "python"}
+        ),
         "selected_candidate": winner_index,
         "restarts": restarts,
         "iteration_budget": config.iterations,

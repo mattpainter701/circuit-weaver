@@ -1,0 +1,14 @@
+[package]
+name = "circuit-weaver-placement"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "circuit_weaver_placement"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.29", features = ["abi3-py310"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }

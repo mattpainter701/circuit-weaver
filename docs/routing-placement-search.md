@@ -29,6 +29,64 @@ instead use `~/.freerouting/freerouting.jar` and `~/.freerouting/runtime/bin/jav
 (`java.exe` on Windows). CI pins Freerouting 2.4.1 for the general corpus and
 2.5.0 for unseen scale workflows, using Java 25.
 
+## Placement scoring
+
+From the source checkout, install the native companion into the Python environment
+that runs Circuit Weaver. Building from source requires a stable Rust toolchain.
+Linux and Windows wheels are also available in the pull request CI artifacts
+named `placement-wheel-ubuntu-latest` and `placement-wheel-windows-latest`.
+
+```sh
+python -m pip install ./native/placement
+```
+
+Placement uses the companion automatically when installed. To select an engine
+explicitly, set `CIRCUIT_WEAVER_PLACEMENT_BACKEND` to `rust` or `python`.
+Python callers can also supply `PlacementConfig(scoring_backend="rust")`.
+An explicit Rust selection requires the companion. The result's
+`placement.search.scoring` records the engine and, for Rust, the number of
+evaluations, topology snapshots and footprint poses transferred. Geometry,
+rotated pad endpoints, pair overlaps and label space persist across candidate
+moves. Both engines use the same move generator, legalization, hard-defect
+ranking, and native KiCad placement and routing gates.
+
+To reproduce a paired end-to-end measurement, supply a saved general-scale
+case directory containing the unplaced board, design, project settings and
+`native-contracts.json`. Each engine places the same input with seed 7 and
+6,000 iterations, then routes its saved board independently. The comparison
+reports wall time, exact footprint and reference-label poses, saved copper
+length, vias, design-rule checks, and verified paths.
+
+```sh
+python benchmarks/general_scale/compare_placement.py runs/distributed_facility_gateway --output placement-study
+```
+
+### Larger-board measurements
+
+On Windows with Python 3.13 and KiCad 10.0.4, a serial repeat alternated
+engine order by board. Each time covers the full placement command, including
+reference tidying and KiCad checks. Each board used seed 7 and 6,000 iterations.
+The unplaced boards, project rules, designs and signal contracts came from
+[CI run 45445836930](https://github.com/mattpainter701/circuit-weaver/actions/runs/45445836930).
+
+| Board | Footprints | Python placement | Rust placement | Speedup | Routed copper, Python → Rust | Vias, Python → Rust |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Distributed facility gateway | 187 | 79.98 s | 29.25 s | 2.73× | 10,328.81 → 10,328.81 mm | 214 → 214 |
+| Serial relay output card | 268 | 132.58 s | 37.35 s | 3.55× | 27,705.68 → 27,708.91 mm | 833 → 839 |
+| Multichannel analog setpoint card | 438 | 181.47 s | 62.36 s | 2.91× | 20,555.50 → 20,321.30 mm | 532 → 530 |
+
+All 893 footprint poses and reference-label poses matched in the saved boards.
+At 1,800 pixels wide, the three pairs of front placement plots also matched
+pixel for pixel. Rust loaded one topology snapshot per board and updated an
+average of 2.2–4.4 poses per evaluation.
+
+The copper measurements come from the first paired end-to-end runs, which
+executed board jobs concurrently and routed every placement independently
+with Freerouting 2.5.0. All six routed boards passed native DRC and the
+43 Gateway, 160 Relay, and 110 Setpoint signal-path contracts. Gateway's
+track and via geometry matched exactly. The Relay and Setpoint route differences
+show the variation between router runs on identical placements.
+
 ## Supported scope
 
 `place-pcb` currently accepts unrouted rectangular boards without copper zones.
@@ -460,8 +518,8 @@ layouts, 119 with positive overlap. Over that batch the Python overlap scorer
 took 3.67 ms, the upstream Rust scorer including array preparation took
 2.47 ms, and the same Rust call with prepacked arrays took 0.21 ms. The largest
 absolute score difference was below 0.00000000001. Those are median timings for
-one scoring term on 10–30-part boards. Prototype a persistent Rust placement
-state with batched moves, then compare complete placement time, constraint
-violations and downstream routing on larger boards. The
+one scoring term on 10–30-part boards. The companion described above now scores
+the full objective with a persistent board model. The paired larger-board
+benchmark measures saved placement and routed copper. The
 [upstream placement kernels](https://github.com/drandyhaas/KiCadRoutingTools/blob/v0.24.2/rust_router/src/placement_kernels.rs)
-provide a reference for that experiment.
+informed the original overlap experiment.
