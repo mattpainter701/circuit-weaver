@@ -22,19 +22,22 @@ for native-stage options, cancellation and the shared Python/MCP interfaces.
 
 ## Silicon layout and fabrication review
 
-Install the `silicon` extra to use KLayout's native geometry engine. Both commands print JSON.
+Install the `silicon` extra to use KLayout's native geometry engine. These commands print JSON.
 
 ```sh
 python -m pip install '.[silicon]'
 circuit-weaver silicon preview carrier.gds --top chip_top -o carrier.png
 circuit-weaver silicon handoff handoff.json
 circuit-weaver silicon handoff handoff.json --bundle provider-review.zip
+circuit-weaver silicon slot-map tt_um_factory_test --report factory-test.html
 ```
 
 The preview draws the selected cell and its hierarchy. Use the provider's layer-properties file for process-specific
 colors and visibility. The handoff checks the submitted files and the evidence bound to them. An incomplete review
 returns exit code 3 and lists the missing items. A complete manifest can produce a local ZIP for provider review.
 The operator separately submits a revision and records its acceptance. [Manifest and integration guide](silicon-handoff.md)
+
+The slot map links a TTSKY26d selector address to a physical die placement and the numbered contacts on an ETR v3.3 demo board. [Slot lookup, offline inputs and exit codes](tiny-tapeout-slot-map.md)
 
 ## library-access
 

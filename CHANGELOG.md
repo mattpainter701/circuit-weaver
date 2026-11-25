@@ -4,6 +4,8 @@
 
 ### Added
 
+- Look up a Tiny Tapeout SKY26d project selector, highlight its physical tile on the shuttle die, and print its ETR demo-board pin map. [Slot mapping](docs/tiny-tapeout-slot-map.md)
+
 - Boot Weftline 16 encoder and diagnostic firmware on a desktop virtual board, load custom Slot16 ROMs, and step the two contexts through stream transfers and stalls.
 
 - Assemble Slot16 firmware, verify its instruction traces and state isolation, and replay a periodic controller workload against PicoRV32.
