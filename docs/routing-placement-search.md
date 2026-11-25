@@ -71,7 +71,7 @@ The unplaced boards, project rules, designs and signal contracts came from
 
 | Board | Footprints | Python placement | Rust placement | Speedup | Routed copper, Python → Rust | Vias, Python → Rust |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Distributed facility gateway | 187 | 79.98 s | 29.25 s | 2.74× | 10,328.81 → 10,328.81 mm | 214 → 214 |
+| Distributed facility gateway | 187 | 79.98 s | 29.25 s | 2.73× | 10,328.81 → 10,328.81 mm | 214 → 214 |
 | Serial relay output card | 268 | 132.58 s | 37.35 s | 3.55× | 27,705.68 → 27,708.91 mm | 833 → 839 |
 | Multichannel analog setpoint card | 438 | 181.47 s | 62.36 s | 2.91× | 20,555.50 → 20,321.30 mm | 532 → 530 |
 
