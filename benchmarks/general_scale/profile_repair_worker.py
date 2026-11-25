@@ -1,7 +1,8 @@
-"""Time one standard repair proposal inside KiCad Python. Invoked by replay_routing_repair.py."""
+"""Time one repair proposal inside KiCad Python. Invoked by replay_routing_repair.py."""
 
 from __future__ import annotations
 
+import inspect
 import json
 import sys
 import time
@@ -25,7 +26,13 @@ def probe(request):
 
     metrics = {"init_s": time.perf_counter() - started, "load_s": 0.0, "setup_s": None,
                "search_s": None, "segment_s": 0.0, "via_s": 0.0, "segment_calls": 0, "via_calls": 0}
-    load_board, repair_one, search = pcbnew.LoadBoard, repair.repair_one, repair._search_with_fallback
+    if request.get("connected_endpoints"):
+        search_name = "_bidirectional_connected_anchor_search"
+    elif request.get("search_mode") == "bidirectional":
+        search_name = "_bidirectional_astar_search"
+    else:
+        search_name = "_search_with_fallback"
+    load_board, repair_one, search = pcbnew.LoadBoard, repair.repair_one, getattr(repair, search_name)
     repair_start = None
 
     def timed_load(*args, **kwargs):
@@ -50,19 +57,21 @@ def probe(request):
                 metrics[kind + "_calls"] += 1
         return check
 
-    def timed_search(start, goal, layer_count, layers, origins, bounds, step, budget, clear, via):
+    def timed_search(*args, **kwargs):
         before = time.perf_counter()
         metrics["setup_s"] = before - repair_start
         try:
-            result = search(start, goal, layer_count, layers, origins, bounds, step, budget,
-                            timed_check(clear, "segment"), timed_check(via, "via"))
-            metrics["expanded_states"] = result[2]
+            call = inspect.signature(search).bind(*args, **kwargs)
+            for key, kind in (("clear_segment", "segment"), ("can_change_layer", "via")):
+                call.arguments[key] = timed_check(call.arguments[key], kind)
+            result = search(*call.args, **call.kwargs)
+            metrics["expanded_states"] = result[2] if search_name == "_search_with_fallback" else result[1]
             return result
         finally:
             metrics["search_s"] = time.perf_counter() - before
 
     with patch.object(pcbnew, "LoadBoard", timed_load), patch.object(repair, "repair_one", timed_repair), \
-            patch.object(repair, "_search_with_fallback", timed_search):
+            patch.object(repair, search_name, timed_search):
         try:
             response = worker.execute(request)
             status, detail = "candidate", response["route_repair"]

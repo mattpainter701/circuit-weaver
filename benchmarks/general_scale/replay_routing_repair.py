@@ -89,7 +89,8 @@ def probe_pair(board, report, index, endpoints, args, python, initial_findings):
         snapshots = _prepare_settings(board, source)
         request = {"operation": "repair_open", "board": str(source), "output": str(candidate),
                    "drc_report": str(report), "pair_index": index, "max_expanded_states": args.states,
-                   "grid_step_mm": 0.25}
+                   "grid_step_mm": args.grid_step, "connected_endpoints": args.search_mode == "connected",
+                   "search_mode": "standard" if args.search_mode == "standard" else "bidirectional"}
         worker = Path(__file__).with_name("profile_repair_worker.py")
         response = folder / "probe.json"
         started = time.perf_counter()
@@ -143,7 +144,7 @@ def replay(args):
                "initial_findings": dict(Counter(row["type"] for row in before.raw_report["violations"])),
                "recovery_eligible": eligible, "input_copper": inventory(python, partial),
                "pair_state_budget": args.states, "pair_wall_limit_s": args.pair_timeout,
-               "pair_grid_mm": 0.25, "recovery_budget_s": args.recovery_seconds}
+               "pair_grid_mm": args.grid_step, "pair_mode": args.search_mode, "recovery_budget_s": args.recovery_seconds}
     if eligible and args.recovery_seconds:
         destination = args.output / "recovered.kicad_pcb"
         recovery, times = timed_recovery(partial, destination, args.recovery_seconds, python)
@@ -181,6 +182,9 @@ def main():
     p.add_argument("--output", type=Path, required=True, help="New output directory")
     p.add_argument("--kicad-python")
     p.add_argument("--states", type=int, default=4000, help="Expansion budget for each independent pair probe")
+    p.add_argument("--search-mode", choices=("standard", "bidirectional", "connected"), default="standard",
+                   help="Pair search strategy; connected uses multiple verified native copper anchors")
+    p.add_argument("--grid-step", type=float, default=0.25, help="Initial pair search grid in mm")
     p.add_argument("--pair-limit", type=int, help="Sample N pairs across production distance order (default all)")
     p.add_argument("--pair-timeout", type=float, default=30)
     p.add_argument("--recovery-seconds", type=float, default=0,
@@ -188,6 +192,8 @@ def main():
     args = p.parse_args()
     if args.states <= 0 or (args.pair_limit is not None and args.pair_limit < 0):
         p.error("Use positive states and a nonnegative pair limit")
+    if not math.isfinite(args.grid_step) or args.grid_step <= 0:
+        p.error("Use a finite positive grid step")
     if (not math.isfinite(args.pair_timeout) or args.pair_timeout <= 0
             or not math.isfinite(args.recovery_seconds) or args.recovery_seconds < 0):
         p.error("Use a positive pair timeout and a nonnegative recovery budget")

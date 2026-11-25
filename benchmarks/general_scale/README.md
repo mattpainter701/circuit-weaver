@@ -87,6 +87,8 @@ independently checks the published board and measures its copper.
 Separate pair probes always start from the same frozen copper. They use the
 standard search, 0.25 mm starting grid, 4,000-state budget and 30-second wall
 limit by default. Set `--states` and `--pair-timeout` for a different budget.
+Use `--search-mode connected` to replay a bidirectional search from the real
+copper component at each endpoint. `--grid-step` sets the starting grid in mm.
 Omit `--pair-limit` to include every open, or use it to sample evenly across
 the native worker's distance ordering. A limit of zero runs only the board
 measurement. Each candidate gets a fresh DRC, including when the starting board
