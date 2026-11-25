@@ -4,6 +4,8 @@
 
 ### Added
 
+- Stop a multi-attempt PCB route at the first independently verified clean KiCad board with `autoroute --stop-at-first-clean --routed-board`.
+
 - Speed up PCB placement with an optional Rust scoring engine that keeps board and pad geometry across moves. The search report identifies the selected engine.
 
 - Look up a Tiny Tapeout SKY26d project selector, highlight its physical tile on the shuttle die, and print its ETR demo-board pin map. [Slot mapping](docs/tiny-tapeout-slot-map.md)

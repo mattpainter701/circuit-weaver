@@ -178,20 +178,23 @@ def _require_modern_project_settings(source: Path) -> None:
         )
 
 
-def _prepare_settings(source: Path, staged: Path, project_context: str | Path | None = None) -> dict[Path, str | None]:
-    _require_modern_project_settings(source)
-    snapshots = {source: _hash(source)}
-    context_root = Path(project_context).resolve() if project_context is not None else source.resolve().parent
-    if context_root.is_file():
-        context_root = context_root.parent
-    context_inventory = inspect_project_footprint_context(context_root)
-    snapshots.update({Path(path): digest for path, digest in context_inventory.get("source_hashes", {}).items()})
+def _footprint_snapshots(context_inventory: dict) -> dict[Path, str | None]:
+    snapshots = {Path(path): digest for path, digest in context_inventory.get("source_hashes", {}).items()}
     snapshots.update({
         Path(path): digest
         for path, digest in context_inventory.get("library_manifest_sha256", {}).items()
     })
     for path in context_inventory.get("watch_paths", []):
         snapshots.setdefault(Path(path), None)
+    return snapshots
+
+
+def _prepare_settings(source: Path, staged: Path, project_context: str | Path | None = None) -> dict[Path, str | None]:
+    _require_modern_project_settings(source)
+    context_root = Path(project_context).resolve() if project_context is not None else source.resolve().parent
+    if context_root.is_file():
+        context_root = context_root.parent
+    snapshots = {source: _hash(source), **_footprint_snapshots(inspect_project_footprint_context(context_root))}
     stage_project_footprint_context(context_root, staged.parent)
     for suffix in (".kicad_pro", ".kicad_dru"):
         origin = source.with_suffix(suffix)
@@ -744,11 +747,37 @@ def _clean_plane_repair_drc(drc: Any) -> bool:
                     and row.get("severity") == "warning" for row in raw["violations"]))
 
 
+def _publish_checked_route(
+    source: Path, imported: dict[str, Any], destination: Path, expected_hashes: dict[Path, str | None],
+    *, overwrite: bool,
+) -> dict[str, Any]:
+    """Publish the DRC-checked board bytes alongside the frozen source rules."""
+    checked = Path(imported["output_path"])
+    digest = imported["drc"]["board_sha256"]
+    with tempfile.TemporaryDirectory(prefix=".cw-checked-", dir=destination.parent) as folder:
+        staged = Path(folder) / destination.name
+        snapshots = _prepare_settings(source, staged)
+        snapshots.update(expected_hashes)
+        shutil.copyfile(checked, staged)
+        snapshots.update({checked: digest, staged: digest})
+        for suffix in (".kicad_pro", ".kicad_dru"):
+            rule_hash = snapshots[source.with_suffix(suffix)]
+            snapshots[checked.with_suffix(suffix)] = rule_hash
+            snapshots[staged.with_suffix(suffix)] = rule_hash
+        _publish(staged, destination, snapshots, overwrite)
+    return {
+        "status": "ok", "output_kind": "routed_kicad_board", "output_path": str(destination),
+        "drc": {**imported["drc"], "board": str(destination)},
+        **({"zone_refill": imported["zone_refill"]} if "zone_refill" in imported else {}),
+        "routing_complete": True, "fabrication_ready": False,
+    }
+
+
 def import_routing_session(
     board_path: str | Path, session_path: str | Path, output_path: str | Path, *,
     overwrite: bool = False, kicad_python_path: str | Path | None = None,
     expected_hashes: dict[Path, str | None] | None = None,
-    repair_plane_thermals: bool = False,
+    repair_plane_thermals: bool = False, deadline: float | None = None,
 ) -> dict[str, Any]:
     """Import routes into a separate PCB and publish only after native KiCad DRC."""
     source, session, destination = Path(board_path).resolve(), Path(session_path).resolve(), Path(output_path).resolve()
@@ -769,8 +798,9 @@ def import_routing_session(
             snapshots = _prepare_settings(source, staged)
             snapshots.update(expected_hashes or {})
             snapshots[session] = _hash(session)
+            bounded = {"deadline": deadline} if deadline is not None else {}
             imported = run_kicad("import_ses", board=str(source), session=str(session), output=str(staged),
-                                 python_path=kicad_python_path)
+                                 python_path=kicad_python_path, **bounded)
             if imported["status"] != "ok":
                 return imported
             zone_refill = imported.get("zone_refill")
@@ -780,7 +810,7 @@ def import_routing_session(
             ):
                 return {"status": "error", "message": "Imported routing lacks verified fresh zone fills"}
             _restore_settings(source, staged, snapshots)
-            drc = run_drc(staged, evidence_ledger=EvidenceLedger(), project_context=source.parent)
+            drc = run_drc(staged, evidence_ledger=EvidenceLedger(), project_context=source.parent, **bounded)
             stitching = {"status": "not_needed", "used": False} if repair_plane_thermals else None
             if repair_plane_thermals and not drc.passed:
                 violations = _thermal_only_violations(drc, staged)

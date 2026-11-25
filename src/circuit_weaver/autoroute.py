@@ -23,6 +23,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -2457,6 +2458,22 @@ def _native_continuation_candidate(
     }
 
 
+@dataclass(frozen=True)
+class _FirstCleanTarget:
+    source: Path
+    destination: Path
+    source_hashes: dict[Path, str | None]
+    python: str | Path | None
+
+    def check(self, session: Path, board: Path, deadline: float) -> dict[str, Any]:
+        from .pcb_layout import import_routing_session
+
+        return import_routing_session(
+            self.source, session, board, kicad_python_path=self.python,
+            expected_hashes=self.source_hashes, deadline=deadline,
+        )
+
+
 def _route_candidates(
     dsn_path: Path,
     ses_path: Path,
@@ -2469,6 +2486,7 @@ def _route_candidates(
     native_placement_portfolio: bool = False,
     native_fanout_profile: bool = False,
     logs_root: Path | None = None,
+    first_clean: _FirstCleanTarget | None = None,
     **options: Any,
 ) -> dict[str, Any]:
     """Run an isolated portfolio and atomically publish its best valid session."""
@@ -2496,6 +2514,7 @@ def _route_candidates(
     winner: dict[str, Any] | None = None
     winner_path: Path | None = None
     winner_index: int | None = None
+    checked_import = None
     supports_seed = bool((options.get("capability_probe") or {}).get("seed"))
     use_fanout_profile = bool(
         native_fanout_profile and native_placement_portfolio and attempts >= 3
@@ -2756,6 +2775,29 @@ def _route_candidates(
                     winner is None or _routing_rank(result["stats"]) < _routing_rank(winner["stats"])
                 ):
                     winner, winner_path, winner_index = result, path, index + 1
+                if first_clean is not None and measured_incomplete == 0:
+                    expected_session = result["artifact"]["sha256"]
+                    if file_sha256(path) != expected_session:
+                        return _result_error("Session changed before native verification", attempts=attempt_rows)
+                    started = time.perf_counter()
+                    checked = first_clean.check(
+                        path, Path(temporary) / f"checked-{index + 1}" / first_clean.destination.name,
+                        time.monotonic() + max(0.0, deadline - started),
+                    )
+                    drc = checked.get("drc", {})
+                    clean = (
+                        checked["status"] == "ok" and drc.get("passed") is True
+                        and drc.get("diagnostics_complete") is True and drc.get("findings") == []
+                    )
+                    row["native_check"] = {
+                        "clean": clean, "seconds": time.perf_counter() - started,
+                        "session_sha256": expected_session, "board_sha256": drc.get("board_sha256"),
+                        "message": checked.get("message"), "blockers": drc.get("blocker_count"),
+                    }
+                    if clean:
+                        winner, winner_path, winner_index = result, path, index + 1
+                        checked_import = checked
+                        break
             search = {
                 "routing_profile": (
                     attempt_rows[winner_index - 1]["routing_profile"] if winner_index else "standard"
@@ -2769,6 +2811,11 @@ def _route_candidates(
             }
             if native_dsn_canonicalization is not None:
                 search["native_dsn_canonicalization"] = native_dsn_canonicalization
+            if first_clean is not None:
+                search["stop_reason"] = (
+                    "native_drc_clean" if checked_import is not None
+                    else "attempt_limit" if len(attempt_rows) == attempts else "routing_deadline"
+                )
             if options.get("cooperative_partial_timeout"):
                 search["timeout_budget"] = {
                     "overall_host_timeout_seconds": timeout_seconds,
@@ -2794,6 +2841,13 @@ def _route_candidates(
             if error:
                 return _result_error(error, search=search)
             winner["artifact"]["path"] = str(ses_path)
+            if checked_import is not None:
+                from .pcb_layout import _publish_checked_route
+
+                winner["checked_import"] = _publish_checked_route(
+                    first_clean.source, checked_import, first_clean.destination,
+                    {**first_clean.source_hashes, ses_path.resolve(): winner_sha}, overwrite=overwrite,
+                )
             return {**winner, "search": search, "routing_profile": search["routing_profile"]}
     except (ValueError, UnicodeDecodeError) as exc:
         return _result_error(f"Cannot prepare native routing-order variant: {exc}", attempts=attempt_rows)
@@ -2822,6 +2876,7 @@ def autoroute_pcb(
     kicad_python_path: str | Path | None = None,
     routed_board_path: str | Path | None = None,
     repair_open_connections: bool = False,
+    stop_at_first_clean: bool = False,
     recovery_timeout_seconds: float = 600,
     max_repair_links: int = 256,
     _allow_partial_nets: bool = False,
@@ -2834,6 +2889,10 @@ def autoroute_pcb(
     the session and require native DRC before publishing the routed PCB.
     A non-zero incomplete count returns ``status="partial"``.
     """
+    if not isinstance(stop_at_first_clean, bool):
+        return _result_error("stop_at_first_clean must be a boolean")
+    if stop_at_first_clean and routed_board_path is None:
+        return _result_error("Stopping at the first clean route requires --routed-board for native KiCad verification")
     if not isinstance(repair_open_connections, bool):
         return _result_error("repair_open_connections must be a boolean")
     if not isinstance(_native_fanout_profile, bool):
@@ -2851,6 +2910,7 @@ def autoroute_pcb(
             optimizer_improvement_threshold=optimizer_improvement_threshold, seed=seed,
             attempts=attempts, freerouting_path=freerouting_path,
             kicad_cli_path=kicad_cli_path, kicad_python_path=kicad_python_path,
+            **({"stop_at_first_clean": True} if stop_at_first_clean else {}),
         )
     if _allow_partial_nets and (routed_board_path is None or Path(pcb_path).suffix.lower() != ".kicad_pcb"):
         return _result_error("Partial-net recovery requires an isolated native board destination")
@@ -3036,6 +3096,13 @@ def autoroute_pcb(
             kicad_python_path=kicad_python_path,
             timeout_seconds=timeout_seconds,
         )
+    first_clean = None
+    if stop_at_first_clean:
+        from .kicad_project_context import inspect_project_footprint_context
+        from .pcb_layout import _footprint_snapshots
+
+        source_hashes.update(_footprint_snapshots(inspect_project_footprint_context(source.resolve().parent)))
+        first_clean = _FirstCleanTarget(source.resolve(), destination, source_hashes, kicad_python_path)
     route_result = _route_candidates(
         dsn_path,
         ses_path,
@@ -3067,6 +3134,7 @@ def autoroute_pcb(
         capability_probe=capability_probe,
         clearance_baseline=clearance_baseline,
         native_edge_clearance=native_edge_clearance,
+        **({"first_clean": first_clean} if first_clean is not None else {}),
         **({"allow_partial_nets": True} if _allow_partial_nets else {}),
         **({"cooperative_partial_timeout": True} if _allow_partial_nets else {}),
     )
@@ -3134,7 +3202,7 @@ def autoroute_pcb(
     if routed_board_path is not None and not incomplete:
         from .pcb_layout import import_routing_session
 
-        imported = import_routing_session(
+        imported = route_result.get("checked_import") or import_routing_session(
             source,
             ses_path,
             routed_board_path,
