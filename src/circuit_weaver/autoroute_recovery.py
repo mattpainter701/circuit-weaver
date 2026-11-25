@@ -1010,6 +1010,10 @@ def autoroute_with_recovery(
             for path in (source, source.with_suffix(".kicad_pro"), source.with_suffix(".kicad_dru"))
         }
         library = inspect_project_footprint_context(source.parent)
+        if router_options.get("stop_at_first_clean"):
+            from .pcb_layout import _footprint_snapshots
+
+            snapshots.update(_footprint_snapshots(library))
         work = Path(tempfile.mkdtemp(prefix=".cw-route-recovery-", dir=destination.parent))
         initial_session = work / "initial.ses"
         python = router_options.get("kicad_python_path")
@@ -1245,14 +1249,18 @@ def autoroute_with_recovery(
         error = _publish_staged_file(completed_session, session, overwrite=overwrite)
         if error:
             raise ValueError(error)
-        accepted = import_routing_session(
-            source,
-            session,
-            destination,
-            overwrite=overwrite,
-            kicad_python_path=python,
-            expected_hashes=snapshots,
-        )
+        search = initial.get("search", {})
+        if repair.get("used") is False and search.get("stop_reason") == "native_drc_clean":
+            from .pcb_layout import _publish_checked_route
+
+            accepted = _publish_checked_route(
+                source, initial, destination, {**snapshots, session: initial["session_artifact"]["sha256"]},
+                overwrite=overwrite,
+            )
+        else:
+            accepted = import_routing_session(
+                source, session, destination, overwrite=overwrite, kicad_python_path=python, expected_hashes=snapshots,
+            )
         if accepted.get("status") != "ok":
             return {**accepted, "routing_complete": False, "recovery": repair,
                     "serialization": serialization if repair.get("used") is not False else None,
@@ -1263,6 +1271,7 @@ def autoroute_with_recovery(
         return {
             **accepted,
             "session_path": str(session),
+            **({"search": search} if router_options.get("stop_at_first_clean") else {}),
             "recovery": repair,
             "router_dangling_cleanup": dangling_cleanup,
             "generated_route_repair": generated_route_repair,

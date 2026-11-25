@@ -15,6 +15,13 @@ unchanged. Project settings and custom rules travel with the output, and changin
 the source or settings during routing prevents board publication. Existing output
 requires `--overwrite`.
 
+Use `--stop-at-first-clean` with `--routed-board` to finish as soon as a
+zero-open router candidate passes a complete native KiCad DRC with no findings.
+Failed checks leave the remaining search and recovery available. The default
+search compares all attempts within the time budget for copper length and vias.
+The JSON search report records the selected attempt, native check times and
+stopping reason. This option also works with `--repair-open-connections`.
+
 ## Tool setup
 
 Install KiCad with its Python API and standard footprint libraries. Windows

@@ -474,7 +474,8 @@ def _normalize_options(options: dict[str, Any] | None) -> dict[str, Any]:
             normalized["ground_plane"] = _validate_plan(normalized["ground_plane"])
         except (TypeError, ValueError) as exc:
             raise WorkflowError("invalid_options", str(exc)) from exc
-    for key in ("route_repair_open_connections", "ground_plane_after_route", "ground_plane_repair_thermals"):
+    for key in ("route_repair_open_connections", "route_stop_at_first_clean",
+                "ground_plane_after_route", "ground_plane_repair_thermals"):
         if key in normalized and not isinstance(normalized[key], bool):
             raise WorkflowError("invalid_options", f"{key} must be a boolean")
     if normalized.get("ground_plane_repair_thermals") and (
@@ -955,6 +956,8 @@ def _execute_stage(
                 if key in options:
                     args.extend([flag, str(options[key])])
             recovery_seconds = 0
+            if options.get("route_stop_at_first_clean"):
+                args.append("--stop-at-first-clean")
             if options.get("route_repair_open_connections", False):
                 args.append("--repair-open-connections")
                 recovery_seconds = float(options.get("route_recovery_timeout", 600))

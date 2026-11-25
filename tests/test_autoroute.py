@@ -1839,6 +1839,110 @@ def test_current_router_final_scores_and_geometry_counts(tmp_path):
     assert not list(tmp_path.glob(".cw-router-*"))
 
 
+@pytest.mark.parametrize(
+    ("opens", "verdicts", "selected"),
+    [([3, 0, 0], ["clean"], 2), ([0, 0, 0], ["error", "warning", "clean"], 3),
+     ([0, 0], ["truncated", "clean"], 2)],
+)
+def test_first_clean_checks_exact_board_and_continues_after_native_rejection(
+    tmp_path, monkeypatch, opens, verdicts, selected,
+):
+    import time
+
+    from circuit_weaver import pcb_layout
+
+    source = _write_routable_board(tmp_path)
+    dsn = _write_dsn(tmp_path)
+    destination = tmp_path / "routed.kicad_pcb"
+    ses = tmp_path / "published.ses"
+    checks = iter(verdicts)
+    launches = []
+
+    def route(_dsn, path, _command, **_options):
+        index = len(launches)
+        launches.append(path)
+        path.write_bytes(f"candidate {index + 1}".encode())
+        return {"status": "ok", "artifact": {"sha256": autoroute_module.file_sha256(path)},
+                "stats": {"incomplete": opens[index], "clearance_violations": 0, "vias": index, "traces": 5}}
+
+    def native(_source, session, board, *, deadline, **_options):
+        assert deadline > time.monotonic()
+        assert not destination.exists() and not ses.exists()
+        verdict = next(checks)
+        board.parent.mkdir()
+        board.write_bytes(b"imported " + session.read_bytes())
+        return {"status": "error" if verdict == "error" else "ok", "output_path": str(board),
+                "drc": {"board_sha256": autoroute_module.file_sha256(board), "passed": verdict != "error",
+                        "diagnostics_complete": verdict != "truncated",
+                        "findings": ["warning"] if verdict == "warning" else []}}
+
+    monkeypatch.setattr(autoroute_module, "_route_specctra", route)
+    monkeypatch.setattr(pcb_layout, "import_routing_session", native)
+    target = autoroute_module._FirstCleanTarget(source, destination, {}, None)
+    result = autoroute_module._route_candidates(
+        dsn, ses, [], attempts=len(opens), timeout_seconds=30, overwrite=False, seed=None, first_clean=target,
+    )
+    assert result["status"] == "ok"
+    assert len(launches) == result["search"]["selected_attempt"] == selected
+    assert result["search"]["stop_reason"] == "native_drc_clean"
+    assert destination.read_bytes() == b"imported " + ses.read_bytes()
+    assert result["checked_import"]["drc"]["board_sha256"] == autoroute_module.file_sha256(destination)
+
+
+def test_stop_at_first_clean_requires_board_output(tmp_path):
+    result = autoroute_pcb(_write_dsn(tmp_path), stop_at_first_clean=True)
+    assert result["status"] == "error" and "--routed-board" in result["message"]
+
+
+def test_first_clean_rejects_missing_native_open_inventory(tmp_path, monkeypatch):
+    import time
+
+    from circuit_weaver import pcb_layout
+    from circuit_weaver.drc_runner import DrcResult
+
+    board = _write_routable_board(tmp_path)
+    session = tmp_path / "candidate.ses"
+    session.write_text(VALID_SES)
+    checked = tmp_path / "checked.kicad_pcb"
+
+    def native(_operation, *, output, **_kw):
+        Path(output).write_bytes(board.read_bytes())
+        return {"status": "ok"}
+
+    def drc(staged, **_kw):
+        return DrcResult(status="ok", board=str(staged), board_sha256=autoroute_module.file_sha256(staged),
+                         raw_report={"violations": [], "schematic_parity": []})
+
+    monkeypatch.setattr(pcb_layout, "run_kicad", native)
+    monkeypatch.setattr(pcb_layout, "run_drc", drc)
+    target = autoroute_module._FirstCleanTarget(board, checked, {}, None)
+    result = target.check(session, checked, time.monotonic() + 30)
+    assert result["status"] == "error"
+    assert not checked.exists()
+
+
+@pytest.mark.parametrize("change", ["board", "session", "rules"])
+def test_checked_board_publication_binds_exact_bytes_and_rules(tmp_path, change):
+    from circuit_weaver.pcb_layout import _publish_checked_route
+
+    source = _write_routable_board(tmp_path)
+    checked = tmp_path / "checked.kicad_pcb"
+    session = tmp_path / "published.ses"
+    rules = source.with_suffix(".kicad_dru")
+    checked.write_bytes(b"checked copper")
+    session.write_text(VALID_SES)
+    rules.write_bytes(b"rules")
+    checked.with_suffix(".kicad_dru").write_bytes(rules.read_bytes())
+    destination = tmp_path / "destination.kicad_pcb"
+    destination.write_bytes(b"prior board")
+    hashes = {path: autoroute_module.file_sha256(path) for path in (source, session, rules)}
+    imported = {"output_path": str(checked), "drc": {"board_sha256": autoroute_module.file_sha256(checked)}}
+    {"board": checked, "session": session, "rules": rules}[change].write_bytes(b"changed")
+    with pytest.raises(ValueError, match="changed"):
+        _publish_checked_route(source, imported, destination, hashes, overwrite=True)
+    assert destination.read_bytes() == b"prior board"
+
+
 class TestFreerouting25CompatibilityProposal:
     def test_bounded_native_fanout_profile_is_opt_in_and_v25_only(self, tmp_path):
         dsn = _write_dsn(tmp_path)

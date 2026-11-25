@@ -13,6 +13,7 @@ from circuit_weaver import project_workflow as workflow
     [
         {"route_repair_open_connections": 1},
         {"route_repair_open_connections": "true"},
+        {"route_stop_at_first_clean": "true"},
         {"ground_plane_after_route": 1},
         {"route_recovery_timeout": 0},
         {"route_recovery_timeout": 1801},
@@ -66,6 +67,7 @@ def test_route_recovery_flags_forward_and_parent_budget_covers_both_phases(tmp_p
         "route",
         {
             "route_timeout": 1800,
+            "route_stop_at_first_clean": True,
             "route_repair_open_connections": True,
             "route_recovery_timeout": 1800,
             "route_max_repair_links": 512,
@@ -77,6 +79,7 @@ def test_route_recovery_flags_forward_and_parent_budget_covers_both_phases(tmp_p
     )
 
     args = observed["args"]
+    assert "--stop-at-first-clean" in args
     assert "--repair-open-connections" in args
     for flag, expected in (
         ("--recovery-timeout", "1800"),
