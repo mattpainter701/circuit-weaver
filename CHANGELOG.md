@@ -4,6 +4,8 @@
 
 ### Added
 
+- Speed up PCB placement with an optional Rust scoring engine that keeps board and pad geometry across moves. The search report identifies the selected engine.
+
 - Boot Weftline 16 encoder and diagnostic firmware on a desktop virtual board, load custom Slot16 ROMs, and step the two contexts through stream transfers and stalls.
 
 - Assemble Slot16 firmware, verify its instruction traces and state isolation, and replay a periodic controller workload against PicoRV32.
