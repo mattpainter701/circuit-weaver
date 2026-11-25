@@ -38,4 +38,3 @@ def test_probes_require_complete_native_report_on_current_board(monkeypatch, tmp
     monkeypatch.setattr(replay, "run_drc", lambda *args, **kwargs: result)
     with pytest.raises(RuntimeError, match="Incomplete native DRC"):
         replay.checked_drc(board)
-

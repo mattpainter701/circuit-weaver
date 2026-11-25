@@ -72,7 +72,14 @@ def inventory(python, board):
     return {key: result[key] for key in ("copper_mm", "vias", "tracks", "track_via_sha256")}
 
 
-def probe_pair(board, report, index, endpoints, args, python):
+def physical_findings(raw):
+    return Counter(
+        (group, row["type"], row["severity"], tuple(sorted(item["uuid"] for item in row["items"])))
+        for group in ("violations", "schematic_parity") for row in raw[group]
+    )
+
+
+def probe_pair(board, report, index, endpoints, args, python, initial_findings):
     checked = {"index": index, "items": endpoints}
     with tempfile.TemporaryDirectory(prefix="pair-", dir=args.output) as temporary:
         folder = Path(temporary)
@@ -102,7 +109,8 @@ def probe_pair(board, report, index, endpoints, args, python):
             after, duration = checked_drc(candidate)
             checked.update(drc_s=duration, opens_after=len(after.raw_report["unconnected_items"]),
                            findings_after=dict(Counter(row["type"] for row in after.raw_report["violations"])),
-                           board_sha256=after.board_sha256)
+                           new_physical_findings=sum((physical_findings(after.raw_report) - initial_findings).values()),
+                           board_sha256=after.board_sha256, output_copper=inventory(python, candidate))
     return checked
 
 
@@ -152,13 +160,15 @@ def replay(args):
     summary_path = args.output / "summary.json"
     write(summary_path, summary)
     selected = sample_indices(len(pairs), args.pair_limit)
+    initial_findings = physical_findings(before.raw_report)
+    frozen = {partial: before.board_sha256, raw_path: file_sha256(raw_path)}
     with (args.output / "pairs.jsonl").open("x", encoding="utf-8") as out:
         for index in selected:
-            row = probe_pair(partial, raw_path, index, pairs[index]["items"], args, python)
+            _check_snapshots(frozen)
+            row = probe_pair(partial, raw_path, index, pairs[index]["items"], args, python, initial_findings)
             out.write(json.dumps(row) + "\n")
             out.flush()
-    if before.board_sha256 != file_sha256(partial):
-        raise RuntimeError("Frozen partial board changed during replay")
+    _check_snapshots(frozen)
     _check_snapshots(snapshots)
     summary["pairs_finished"] = len(selected)
     write(summary_path, summary)
@@ -186,4 +196,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

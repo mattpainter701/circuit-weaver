@@ -75,5 +75,3 @@ def probe(request):
 if __name__ == "__main__":
     response = probe(json.loads(sys.stdin.read()))
     Path(sys.argv[1]).write_text(json.dumps(response), encoding="utf-8")
-
-
