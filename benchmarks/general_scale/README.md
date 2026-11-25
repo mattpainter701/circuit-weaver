@@ -65,3 +65,37 @@ limited to 1 or 2. `--route-timeout` is forwarded to the workflow validator;
 that validator budgets it across routing attempts. `--timeout` bounds the
 entire case. Results are validation evidence for prototype workflow behavior,
 not a fabrication-readiness or electrical-certification claim.
+
+## Replay routing repair
+
+Run the stock repair workflow on a saved partial PCB, or supply the original
+placed PCB and a partial Specctra session. Keep the board's `.kicad_pro`,
+custom rules and referenced footprint libraries alongside the input.
+
+```sh
+python benchmarks/general_scale/replay_routing_repair.py placed.kicad_pcb \
+  --session candidate-2.ses --output replay --recovery-seconds 120 --pair-limit 12
+```
+
+The runner freezes the input in a new directory and records its SHA-256, native
+DRC, copper length and via count. Set the recovery budget to the measured time
+until the next clean full-board route to compare alternatives. Stock recovery
+runs only on boards whose complete DRC contains exclusively open connections.
+`recovery.json` retains the outcome and evidence directory. On success the runner
+independently checks the published board and measures its copper.
+
+Separate pair probes always start from the same frozen copper. They use the
+standard search, 0.25 mm starting grid, 4,000-state budget and 30-second wall
+limit by default. Set `--states` and `--pair-timeout` for a different budget.
+Omit `--pair-limit` to include every open, or use it to sample evenly across
+the native worker's distance ordering. A limit of zero runs only the board
+measurement. Each candidate gets a fresh DRC, including when the starting board
+has unrelated violations.
+
+`pairs.jsonl` records the selected endpoint UUIDs, outcome, worker wall time,
+interpreter initialization, board loading, rules and obstacle-index setup,
+search, and final DRC. Direct segment and via checks are timed inside search.
+The via time includes any segment checks made by the via predicate. The
+remaining worker time covers process overhead, geometry preservation checks,
+saving, and serialization. Timeouts are censored at the configured limit.
+Use the separately measured stock recovery wall time for end-to-end comparisons.
