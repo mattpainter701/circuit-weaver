@@ -20,6 +20,16 @@ def test_samples_cover_distance_range(count, limit, expected):
     assert list(replay.sample_indices(count, limit)) == expected
 
 
+def test_new_violation_is_visible_even_if_the_old_count_is_unchanged():
+    def finding(uuid):
+        return {"violations": [{"type": "clearance", "severity": "error", "items": [{"uuid": uuid}]}],
+                "schematic_parity": []}
+
+    before = replay.physical_findings(finding("old-track"))
+    after = replay.physical_findings(finding("new-track"))
+    assert sum((after - before).values()) == 1
+
+
 @pytest.mark.parametrize("defect", ["stale", "incomplete", "missing_inventory"])
 def test_probes_require_complete_native_report_on_current_board(monkeypatch, tmp_path, defect):
     board = tmp_path / "input.kicad_pcb"

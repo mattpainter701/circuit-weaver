@@ -144,7 +144,8 @@ def replay(args):
                "initial_findings": dict(Counter(row["type"] for row in before.raw_report["violations"])),
                "recovery_eligible": eligible, "input_copper": inventory(python, partial),
                "pair_state_budget": args.states, "pair_wall_limit_s": args.pair_timeout,
-               "pair_grid_mm": args.grid_step, "pair_mode": args.search_mode, "recovery_budget_s": args.recovery_seconds}
+               "pair_grid_mm": args.grid_step, "pair_mode": args.search_mode,
+               "recovery_budget_s": args.recovery_seconds}
     if eligible and args.recovery_seconds:
         destination = args.output / "recovered.kicad_pcb"
         recovery, times = timed_recovery(partial, destination, args.recovery_seconds, python)
