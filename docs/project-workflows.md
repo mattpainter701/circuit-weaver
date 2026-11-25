@@ -141,6 +141,7 @@ files, and differently named JSON designs remain supported.
 | `route_max_passes` | `--max-passes` | Integer 0–9,999; 0 leaves the pass count unlimited |
 | `route_optimization_threads` | `--optimization-threads` | Integer 0–1,024; 0 disables optimization threads |
 | `route_attempts` | `--attempts` | Integer 1–32 |
+| `route_stop_at_first_clean` | `--stop-at-first-clean` | Boolean, default `false`. Finish at the first complete, finding-free native KiCad check. |
 | `route_effort` | `--effort` | `fast`, `medium` or `high` |
 
 For a bounded exploratory run, use `route_timeout: 300`,
