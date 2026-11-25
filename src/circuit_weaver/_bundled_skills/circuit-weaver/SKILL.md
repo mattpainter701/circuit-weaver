@@ -23,6 +23,14 @@ All platforms follow the same design flow — just different UI for user input.
 
 ## Domain Routing
 
+For a Tiny Tapeout SKY 26d digital project's shuttle slot or ETR v3.3 bring-up pins,
+use `circuit-weaver silicon slot-map <tt_um_top> --report bringup.html` or the MCP
+tool `silicon_slot_map`. Supply the project's `info.yaml` for provisional wiring
+and its expected repository to verify identity on assignment. Report the shuttle
+revision, selector address and physical header contacts. An unassigned result
+leaves the address and die position pending. A partial result lists the evidence
+still needed. The repository guide is `docs/tiny-tapeout-slot-map.md`.
+
 ## Start, Open, and Resume Projects (First Route)
 
 Use `circuit-weaver library-access <part> --project-root <directory> --json`

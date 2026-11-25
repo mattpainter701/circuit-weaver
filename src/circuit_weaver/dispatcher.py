@@ -4668,6 +4668,8 @@ def main() -> None:
         _print_json(result)
         if args.command == "silicon" and result.get("status") == "incomplete":
             raise SystemExit(3)
+        if args.command == "silicon" and args.silicon_action == "slot-map" and result.get("issues"):
+            raise SystemExit(3)
         if args.command == "review-pcb":
             raise SystemExit({"verified": 0, "review_required": 3, "unverified": 2}.get(result.get("status"), 1))
         raise SystemExit(0 if result.get("ok", result.get("status") != "error") else 1)

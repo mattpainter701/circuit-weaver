@@ -133,6 +133,7 @@ Verification is conservative: a capability only claims the evidence level its pu
 | `silicon` | review_only | CLI: `silicon` | not applicable (operational) | `command-contract` | unreleased |
 | `silicon preview` | review_only | CLI: `silicon preview`; Python: `circuit_weaver.silicon_preview:render_silicon_preview`; MCP: `silicon_preview` | `static-parse` → `static-parse` | `command-contract`, `external-tool`, `user-supplied` | unreleased |
 | `silicon handoff` | review_only | CLI: `silicon handoff`; Python: `circuit_weaver.silicon_handoff:review_silicon_handoff`; MCP: `silicon_handoff` | `static-parse` → `static-parse` | `command-contract`, `external-tool`, `user-supplied` | unreleased |
+| `silicon slot-map` | review_only | CLI: `silicon slot-map`; Python: `circuit_weaver.tt_slot:map_tt_slot`; MCP: `silicon_slot_map` | `static-parse` → `static-parse` | `command-contract`, `external-tool`, `user-supplied` | unreleased |
 | `save-research` | experimental | CLI: `save-research`; Skill: `circuit-weaver` | `static-parse` → `static-parse` | `command-contract`, `static-parse` | 0.32.1 |
 | `log-event` | beta | CLI: `log-event` | not applicable (operational) | `command-contract` | 0.32.1 |
 <!-- capability-registry:end -->

@@ -2,6 +2,8 @@
 
 Use `circuit-weaver silicon preview` to inspect the geometry in a core, integrated shuttle wrapper or full die. Select the intended top cell explicitly when a library has multiple roots. A reference padframe can show the bond-pad locations and the space reserved for the design. Only an integrated revision can establish that the design is wired to those pads.
 
+For a Tiny Tapeout SKY 26d project, use the [slot map and demo-board wiring sheet](tiny-tapeout-slot-map.md) to check its published selector address and locate the placed macro.
+
 Use `circuit-weaver silicon handoff` to review the files for **one provider, run and revision of the layout**. The provider defines the submission boundary. A shared shuttle may accept a project wrapper and assemble the full die itself. A standalone die typically also needs a pad ring, power domains, ESD, a seal ring and a package/bond map. Select the provider's rules, PDK and integration contract for that run. [Caravel wrapper requirements](https://github.com/efabless/caravel_user_project/blob/f534826abc72af4f9d467446b8b82c9471df68da/docs/source/index.md) · [Tiny Tapeout submission procedure](https://tinytapeout.com/guides/advanced-workshop/submit-your-design/)
 
 ## Review manifest
