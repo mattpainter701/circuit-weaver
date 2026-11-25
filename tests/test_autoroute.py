@@ -1894,6 +1894,33 @@ def test_stop_at_first_clean_requires_board_output(tmp_path):
     assert result["status"] == "error" and "--routed-board" in result["message"]
 
 
+def test_first_clean_rejects_missing_native_open_inventory(tmp_path, monkeypatch):
+    import time
+
+    from circuit_weaver import pcb_layout
+    from circuit_weaver.drc_runner import DrcResult
+
+    board = _write_routable_board(tmp_path)
+    session = tmp_path / "candidate.ses"
+    session.write_text(VALID_SES)
+    checked = tmp_path / "checked.kicad_pcb"
+
+    def native(_operation, *, output, **_kw):
+        Path(output).write_bytes(board.read_bytes())
+        return {"status": "ok"}
+
+    def drc(staged, **_kw):
+        return DrcResult(status="ok", board=str(staged), board_sha256=autoroute_module.file_sha256(staged),
+                         raw_report={"violations": [], "schematic_parity": []})
+
+    monkeypatch.setattr(pcb_layout, "run_kicad", native)
+    monkeypatch.setattr(pcb_layout, "run_drc", drc)
+    target = autoroute_module._FirstCleanTarget(board, checked, {}, None)
+    result = target.check(session, checked, time.monotonic() + 30)
+    assert result["status"] == "error"
+    assert not checked.exists()
+
+
 @pytest.mark.parametrize("change", ["board", "session", "rules"])
 def test_checked_board_publication_binds_exact_bytes_and_rules(tmp_path, change):
     from circuit_weaver.pcb_layout import _publish_checked_route

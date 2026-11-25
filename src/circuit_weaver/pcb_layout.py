@@ -777,7 +777,7 @@ def import_routing_session(
     board_path: str | Path, session_path: str | Path, output_path: str | Path, *,
     overwrite: bool = False, kicad_python_path: str | Path | None = None,
     expected_hashes: dict[Path, str | None] | None = None,
-    repair_plane_thermals: bool = False, deadline: float | None = None,
+    repair_plane_thermals: bool = False, deadline: float | None = None, _require_clean: bool = False,
 ) -> dict[str, Any]:
     """Import routes into a separate PCB and publish only after native KiCad DRC."""
     source, session, destination = Path(board_path).resolve(), Path(session_path).resolve(), Path(output_path).resolve()
@@ -811,6 +811,12 @@ def import_routing_session(
                 return {"status": "error", "message": "Imported routing lacks verified fresh zone fills"}
             _restore_settings(source, staged, snapshots)
             drc = run_drc(staged, evidence_ledger=EvidenceLedger(), project_context=source.parent, **bounded)
+            if _require_clean:
+                from .autoroute_recovery import _strict_native_route_drc
+
+                if not (drc.passed and _strict_native_route_drc(drc)):
+                    return {"status": "error", "message": "First-clean candidate lacks a complete zero-finding DRC",
+                            "drc": drc.to_dict()}
             stitching = {"status": "not_needed", "used": False} if repair_plane_thermals else None
             if repair_plane_thermals and not drc.passed:
                 violations = _thermal_only_violations(drc, staged)

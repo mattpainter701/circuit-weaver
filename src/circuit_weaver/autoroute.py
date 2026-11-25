@@ -2470,7 +2470,7 @@ class _FirstCleanTarget:
 
         return import_routing_session(
             self.source, session, board, kicad_python_path=self.python,
-            expected_hashes=self.source_hashes, deadline=deadline,
+            expected_hashes=self.source_hashes, deadline=deadline, _require_clean=True,
         )
 
 
