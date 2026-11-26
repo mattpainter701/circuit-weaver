@@ -33,6 +33,8 @@ Circuit Weaver supports **describe the design → validate → generate KiCad ar
 
 ### Validated scope
 
+Explore the [interactive routing demos](https://circuit-weaver.com/routing-demos/) to switch between placement and routed copper on three industrial prototype boards, then download the native KiCad files. The pictured Gateway, Relay and Setpoint routes passed KiCad 10.0.4 DRC with zero findings across boards ranging from 187 to 438 footprints.
+
 Circuit Weaver is an **alpha tool for engineering prototypes**. The 0.37.0 workflow corpus covers 13 compact design-spec samples and three connected mixed-signal boards with 149, 155 and 145 physical parts. Each passes 16 stages, including native routing, DRC, assembled model previews and a real MCP session. These are finite regression fixtures; passing them does not establish arbitrary-circuit electrical correctness or fabrication readiness.
 
 Claude Code, Codex and OpenCode can use the packaged agent skills, CLI and optional MCP server. MCP retains its five focused validation and discovery tools and adds runtime inspection plus checkpointed project lifecycle tools. Workflow execution is a synchronous request/response operation; cancellation is observed at stage boundaries. Installer and MCP tests do not constitute a fresh end-to-end test inside every agent client; see [agent platform support](docs/agent-platforms.md).
