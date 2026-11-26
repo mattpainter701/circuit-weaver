@@ -2,7 +2,11 @@
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-11-25
+
 ### Added
+
+- Open the [Gateway, Relay and Setpoint routing samples](samples/routing/README.md) in KiCad to inspect their placed and routed boards or replay Setpoint's last open connection.
 
 - Stop a multi-attempt PCB route at the first independently verified clean KiCad board with `autoroute --stop-at-first-clean --routed-board`.
 
