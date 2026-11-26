@@ -33,7 +33,7 @@ Circuit Weaver supports **describe the design → validate → generate KiCad ar
 
 ### Validated scope
 
-Circuit Weaver is an **alpha tool for engineering prototypes**. The 0.37.0 workflow corpus covers all 13 shipped samples and three connected mixed-signal boards with 149, 155 and 145 physical parts. Each passes 16 stages, including native routing, DRC, assembled model previews and a real MCP session. These are finite regression fixtures; passing them does not establish arbitrary-circuit electrical correctness or fabrication readiness.
+Circuit Weaver is an **alpha tool for engineering prototypes**. The 0.37.0 workflow corpus covers 13 compact design-spec samples and three connected mixed-signal boards with 149, 155 and 145 physical parts. Each passes 16 stages, including native routing, DRC, assembled model previews and a real MCP session. These are finite regression fixtures; passing them does not establish arbitrary-circuit electrical correctness or fabrication readiness.
 
 Claude Code, Codex and OpenCode can use the packaged agent skills, CLI and optional MCP server. MCP retains its five focused validation and discovery tools and adds runtime inspection plus checkpointed project lifecycle tools. Workflow execution is a synchronous request/response operation; cancellation is observed at stage boundaries. Installer and MCP tests do not constitute a fresh end-to-end test inside every agent client; see [agent platform support](docs/agent-platforms.md).
 
@@ -835,6 +835,9 @@ circuit-weaver export-jlcpcb iot_sensor_example/design.yaml \
 ```
 
 A source checkout also includes the larger reference gallery under `samples/`.
+Open the [KiCad routing samples](samples/routing/README.md) to compare frozen
+placements with verified copper on the 187-part Gateway, 268-part Relay, and
+438-part Setpoint boards. Setpoint includes a one-open repair exercise.
 
 ---
 

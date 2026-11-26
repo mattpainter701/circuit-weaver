@@ -22,6 +22,9 @@ search compares all attempts within the time budget for copper length and vias.
 The JSON search report records the selected attempt, native check times and
 stopping reason. This option also works with `--repair-open-connections`.
 
+The [routing sample gallery](../samples/routing/README.md) includes frozen
+inputs and verified outputs for running the two routing policies on the same placement.
+
 ## Tool setup
 
 Install KiCad with its Python API and standard footprint libraries. Windows

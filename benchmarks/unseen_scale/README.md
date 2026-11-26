@@ -1,5 +1,9 @@
 # Unseen scale fixtures
 
+The [routing sample gallery](../../samples/routing/README.md) contains the
+placed and routed KiCad boards from the first-clean study on these fixtures,
+with instructions for replaying the route and inspecting Setpoint's last open.
+
 This suite contains three connected Circuit Weaver designs with expanded physical counts of 187, 268, and 438 parts. The gateway retains eight analog acquisition channels; the relay card exercises 160 output paths; and the analog card exercises 72 DAC setpoint outputs through generated output-filter capacitors. Counts are measured after compiler expansion, including generated straps and bypass capacitors.
 
 `distributed_facility_gateway` is an explicitly disclosed scale derivative of the existing `field_io_gateway`, not a wholly new architecture. It retains eight differential input channels, the three original RS-485 links, CAN, and adds four independently wired RS-485 trunks with dedicated protected field connectors. Its expanded count is 187 physical parts. The extra trunks use GPIO pins whose firmware operation assumes JTAG is disabled while SWD remains available. Each added software UART is intended for sequential polling at 9600 baud; throughput and simultaneous-channel timing are not claimed or measured.

@@ -4,6 +4,8 @@
 
 ### Added
 
+- Open the [Gateway, Relay and Setpoint routing samples](samples/routing/README.md) in KiCad to inspect their placed and routed boards or replay Setpoint's last open connection.
+
 - Stop a multi-attempt PCB route at the first independently verified clean KiCad board with `autoroute --stop-at-first-clean --routed-board`.
 
 - Speed up PCB placement with an optional Rust scoring engine that keeps board and pad geometry across moves. The search report identifies the selected engine.
