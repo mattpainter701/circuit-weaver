@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "CircuitWeaver")(type "KiCad")(uri "${KIPRJMOD}/CircuitWeaver.kicad_sym")(options "")(descr "Circuit Weaver generated symbols"))
+)

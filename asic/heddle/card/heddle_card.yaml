@@ -1,0 +1,453 @@
+# Heddle PCIe x1 host card (review draft).
+#
+# A commodity PCI Express bridge gives the PC an SPI master and four GPIOs.
+# SPI reaches the tile's uio[3:0] port through the Tiny Tapeout IHP breakout
+# headers; the GPIOs drive the shuttle's project-select mux and the tile
+# reset. A 25 MHz oscillator supplies the tile clock. Part pin data lives in
+# components.json beside this file. README.md lists the items that still need
+# the vendor reference schematic or a mechanical check before layout.
+project: Heddle_PCIe_Card
+company: Circuit Weaver contributors
+# Resolved against the working directory: run Circuit Weaver from the repository root.
+components_db: asic/heddle/card/components.json
+description: 'PCI Express x1 host card for the Heddle Tiny Tapeout tile: bridge to SPI and mux-control GPIO, breakout headers,
+  tile clock'
+# Every part and net below is explicit. The tool must not add or guess any.
+auto_repair: false
+pcb_constraints:
+- kind: placement
+  target: board
+  width_mm: 120
+  height_mm: 64
+connectors:
+- ic: PCIE_X1_CARD_EDGE
+  ref: J1
+  pin_nets_extra:
+    A11: PCIE_PERST_N
+    A13: PCIE_REFCLK_P
+    A14: PCIE_REFCLK_N
+    A16: PCIE_PER_P
+    A17: PCIE_PER_N
+    B14: PCIE_PET_P
+    B15: PCIE_PET_N
+    B11: PCIE_WAKE_N
+    B12: PCIE_CLKREQ_N
+    A1: PCIE_PRSNT1_N
+    B17: PCIE_PRSNT2_N
+  power_pins_extra:
+    A4: GND
+    B4: GND
+    B7: GND
+    A12: GND
+    B13: GND
+    A15: GND
+    B16: GND
+    A18: GND
+    B18: GND
+    A9: VDD_3P3
+    A10: VDD_3P3
+    B8: VDD_3P3
+  no_connects:
+  - A2
+  - A3
+  - B1
+  - B2
+  - B3
+  - B10
+  - B5
+  - B6
+  - A5
+  - A6
+  - A7
+  - A8
+  - B9
+- ic: DF12NB(5.0)-60DP-0.5V
+  ref: J2
+  pin_nets_extra:
+    '5': HEDDLE_CS_N
+    '7': HEDDLE_MOSI
+    '9': HEDDLE_MISO
+    '13': HEDDLE_SCK
+    '53': TT_RST_N
+    '57': TT_CLK
+  power_pins_extra:
+    '1': VDD_3P3
+    '2': GND
+    '3': GND
+    '8': GND
+    '11': GND
+    '12': GND
+    '16': GND
+    '19': GND
+    '20': GND
+    '24': GND
+    '27': GND
+    '30': GND
+    '32': GND
+    '35': GND
+    '36': GND
+    '40': GND
+    '43': GND
+    '44': GND
+    '48': GND
+    '51': GND
+    '55': GND
+    '56': GND
+    '59': GND
+    '15': GND
+    '17': GND
+    '21': GND
+    '23': GND
+    '31': GND
+    '33': GND
+    '37': GND
+    '39': GND
+    '41': GND
+    '45': GND
+    '47': GND
+    '49': GND
+  no_connects:
+  - '4'
+  - '6'
+  - '10'
+  - '14'
+  - '18'
+  - '22'
+  - '26'
+  - '28'
+  - '34'
+  - '38'
+  - '42'
+  - '46'
+  - '50'
+  - '52'
+  - '54'
+  - '58'
+  - '60'
+  - '25'
+  - '29'
+- ic: DF12NB(5.0)-50DP-0.5V
+  ref: J3
+  pin_nets_extra:
+    '43': TT_CTRL_SEL_RST_N
+    '46': TT_CTRL_ENA
+    '47': TT_CTRL_SEL_INC
+  power_pins_extra:
+    '8': VDD_3P3
+    '10': VDD_3P3
+    '1': GND
+    '6': GND
+    '11': GND
+    '12': GND
+    '20': GND
+    '21': GND
+    '28': GND
+    '33': GND
+    '38': GND
+    '41': GND
+    '44': GND
+    '45': GND
+    '48': GND
+  no_connects:
+  - '2'
+  - '4'
+  - '3'
+  - '5'
+  - '7'
+  - '9'
+  - '13'
+  - '15'
+  - '17'
+  - '19'
+  - '42'
+  - '40'
+  - '36'
+  - '30'
+  - '26'
+  - '22'
+  - '18'
+  - '16'
+  - '39'
+  - '37'
+  - '35'
+  - '31'
+  - '29'
+  - '14'
+  - '23'
+  - '24'
+  - '25'
+  - '27'
+  - '32'
+  - '34'
+  - '49'
+  - '50'
+digital:
+- ic: AX99100AQI
+  ref: U1
+  pin_nets_extra:
+    '11': PCIE_TX_P
+    '12': PCIE_TX_N
+    '15': PCIE_PET_P
+    '16': PCIE_PET_N
+    '19': PCIE_REFCLK_P
+    '20': PCIE_REFCLK_N
+    '21': PCIE_WAKE_N
+    '23': PCIE_CLKREQ_N
+    '24': PCIE_PERST_N
+    '17': BRIDGE_REXT
+    '27': CFG_SCL
+    '30': CFG_SDA
+    '29': BRIDGE_EXTCLK_PD_N
+    '31': HEDDLE_SCK
+    '32': HEDDLE_MOSI
+    '33': HEDDLE_MISO
+    '34': HEDDLE_CS_N
+    '51': TT_CTRL_ENA
+    '52': TT_CTRL_SEL_INC
+    '59': TT_CTRL_SEL_RST_N
+    '60': TT_RST_N
+    '53': BRIDGE_AUX_DETECT
+    '54': BRIDGE_CHIP_MODE0
+  power_pins_extra:
+    '6': VDD_3P3
+    '26': VDD_3P3
+    '39': VDD_3P3
+    '55': VDD_3P3
+    '36': VDD_3P3
+    '10': VDD_1P0
+    '22': VDD_1P0
+    '37': VDD_1P0
+    '57': VDD_1P0
+    '14': VDD_1P0
+    '18': VDD_1P0
+    '35': VDD_1P0
+    '69': GND
+    '1': GND
+    '2': GND
+    '3': GND
+    '4': GND
+    '61': GND
+    '62': GND
+    '63': GND
+    '64': GND
+    '25': GND
+    '28': GND
+  no_connects:
+  - '5'
+  - '7'
+  - '8'
+  - '9'
+  - '13'
+  - '38'
+  - '40'
+  - '41'
+  - '42'
+  - '43'
+  - '44'
+  - '45'
+  - '46'
+  - '47'
+  - '48'
+  - '49'
+  - '50'
+  - '56'
+  - '58'
+  - '65'
+  - '66'
+  - '67'
+  - '68'
+- ic: AT24C02D-SSHM
+  ref: U2
+  pin_nets_extra:
+    '5': CFG_SDA
+    '6': CFG_SCL
+  power_pins_extra:
+    '1': GND
+    '2': GND
+    '3': GND
+    '4': GND
+    '7': GND
+    '8': VDD_3P3
+  no_connects: []
+- ic: OSC_CMOS_3V3_3225
+  ref: X1
+  pin_nets_extra:
+    '3': OSC_OUT
+  power_pins_extra:
+    '1': VDD_3P3
+    '2': GND
+    '4': VDD_3P3
+  no_connects: []
+passives:
+- ref: C1
+  value: 100nF
+  footprint: Capacitor_SMD:C_0402_1005Metric
+  pin_nets_extra:
+    '1': PCIE_TX_P
+    '2': PCIE_PER_P
+- ref: C2
+  value: 100nF
+  footprint: Capacitor_SMD:C_0402_1005Metric
+  pin_nets_extra:
+    '1': PCIE_TX_N
+    '2': PCIE_PER_N
+- ref: R1
+  value: 20k 1%
+  footprint: Resistor_SMD:R_0402_1005Metric
+  pin_nets_extra:
+    '1': BRIDGE_REXT
+    '2': GND
+- ref: R2
+  value: 4.7k
+  footprint: Resistor_SMD:R_0402_1005Metric
+  pin_nets_extra:
+    '1': BRIDGE_CHIP_MODE0
+    '2': GND
+- ref: R3
+  value: 10k
+  footprint: Resistor_SMD:R_0402_1005Metric
+  pin_nets_extra:
+    '1': BRIDGE_EXTCLK_PD_N
+    '2': VDD_3P3
+- ref: R4
+  value: 10k
+  footprint: Resistor_SMD:R_0402_1005Metric
+  pin_nets_extra:
+    '1': BRIDGE_AUX_DETECT
+    '2': GND
+- ref: R7
+  value: 10k
+  footprint: Resistor_SMD:R_0402_1005Metric
+  pin_nets_extra:
+    '1': HEDDLE_CS_N
+    '2': VDD_3P3
+- ref: R8
+  value: 10k
+  footprint: Resistor_SMD:R_0402_1005Metric
+  pin_nets_extra:
+    '1': HEDDLE_SCK
+    '2': GND
+- ref: R9
+  value: '33'
+  footprint: Resistor_SMD:R_0402_1005Metric
+  pin_nets_extra:
+    '1': OSC_OUT
+    '2': TT_CLK
+- ref: R10
+  value: 10k
+  footprint: Resistor_SMD:R_0402_1005Metric
+  pin_nets_extra:
+    '1': TT_RST_N
+    '2': GND
+- ref: C3
+  value: 4.7uF
+  footprint: Capacitor_SMD:C_0603_1608Metric
+  pin_nets_extra:
+    '1': VDD_1P0
+    '2': GND
+- ref: C4
+  value: 1uF
+  footprint: Capacitor_SMD:C_0402_1005Metric
+  pin_nets_extra:
+    '1': VDD_1P0
+    '2': GND
+- ref: C5
+  value: 10uF
+  footprint: Capacitor_SMD:C_0603_1608Metric
+  pin_nets_extra:
+    '1': VDD_3P3
+    '2': GND
+- ref: C6
+  value: 100nF
+  footprint: Capacitor_SMD:C_0402_1005Metric
+  pin_nets_extra:
+    '1': VDD_3P3
+    '2': GND
+- ref: C7
+  value: 100nF
+  footprint: Capacitor_SMD:C_0402_1005Metric
+  pin_nets_extra:
+    '1': VDD_3P3
+    '2': GND
+- ref: C8
+  value: 100nF
+  footprint: Capacitor_SMD:C_0402_1005Metric
+  pin_nets_extra:
+    '1': VDD_3P3
+    '2': GND
+- ref: C9
+  value: 100nF
+  footprint: Capacitor_SMD:C_0402_1005Metric
+  pin_nets_extra:
+    '1': VDD_3P3
+    '2': GND
+- ref: C10
+  value: 100nF
+  footprint: Capacitor_SMD:C_0402_1005Metric
+  pin_nets_extra:
+    '1': VDD_3P3
+    '2': GND
+- ref: C11
+  value: 100nF
+  footprint: Capacitor_SMD:C_0402_1005Metric
+  pin_nets_extra:
+    '1': VDD_1P0
+    '2': GND
+- ref: C12
+  value: 100nF
+  footprint: Capacitor_SMD:C_0402_1005Metric
+  pin_nets_extra:
+    '1': VDD_1P0
+    '2': GND
+- ref: C13
+  value: 100nF
+  footprint: Capacitor_SMD:C_0402_1005Metric
+  pin_nets_extra:
+    '1': VDD_1P0
+    '2': GND
+- ref: C14
+  value: 100nF
+  footprint: Capacitor_SMD:C_0402_1005Metric
+  pin_nets_extra:
+    '1': VDD_1P0
+    '2': GND
+- ref: C15
+  value: 100nF
+  footprint: Capacitor_SMD:C_0402_1005Metric
+  pin_nets_extra:
+    '1': VDD_1P0
+    '2': GND
+- ref: C16
+  value: 100nF
+  footprint: Capacitor_SMD:C_0402_1005Metric
+  pin_nets_extra:
+    '1': VDD_1P0
+    '2': GND
+- ref: C17
+  value: 100nF
+  footprint: Capacitor_SMD:C_0402_1005Metric
+  pin_nets_extra:
+    '1': VDD_3P3
+    '2': GND
+- ref: C18
+  value: 100nF
+  footprint: Capacitor_SMD:C_0402_1005Metric
+  pin_nets_extra:
+    '1': VDD_3P3
+    '2': GND
+- ref: R11
+  value: '0'
+  footprint: Resistor_SMD:R_0402_1005Metric
+  pin_nets_extra:
+    '1': PCIE_PRSNT1_N
+    '2': PCIE_PRSNT2_N
+buses:
+- type: i2c_bus
+  ref: RP1
+  ic: PULLUPS_ONLY
+  vdd: 3.3
+  speed: 100000
+  c_bus: 2.0e-11
+  vdd_net: VDD_3P3
+  sda_net: CFG_SDA
+  scl_net: CFG_SCL

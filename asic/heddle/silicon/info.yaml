@@ -1,0 +1,38 @@
+yaml_version: 6
+project:
+  title: "Heddle"
+  author: "Circuit Weaver contributors"
+  description: "Character language model with its weights hardwired as logic, SPI and parallel host ports"
+  language: "Verilog"
+  clock_hz: 25000000
+  tiles: "4x2"
+  top_module: "tt_um_heddle"
+  source_files:
+    - tt_um_heddle.v
+    - heddle_core.v
+    - heddle_model.v
+pinout:
+  ui[0]: Token in bit 0
+  ui[1]: Token in bit 1
+  ui[2]: Token in bit 2
+  ui[3]: Token in bit 3
+  ui[4]: Token in bit 4
+  ui[5]: Go strobe, rising edge starts a request
+  ui[6]: High pushes the token in, low feeds the last result back
+  ui[7]: Enable the on-chip sampler
+  uo[0]: Token out bit 0
+  uo[1]: Token out bit 1
+  uo[2]: Token out bit 2
+  uo[3]: Token out bit 3
+  uo[4]: Token out bit 4
+  uo[5]: Result valid
+  uo[6]: Busy
+  uo[7]: Toggles once per completed result
+  uio[0]: SPI chip select, active low
+  uio[1]: SPI MOSI
+  uio[2]: SPI MISO, driven only while selected
+  uio[3]: SPI clock, mode 0
+  uio[4]: ""
+  uio[5]: ""
+  uio[6]: ""
+  uio[7]: ""

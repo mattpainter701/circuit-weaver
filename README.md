@@ -25,6 +25,8 @@
 
 The repository also hosts [Weftline 16](asic/slot16/README.md), an experimental embedded processor built on the Slot16 ISA. Its [virtual board](asic/slot16/virtual-board.md) runs the encoder firmware on a desktop with Python.
 
+[Heddle](asic/heddle/README.md) is a second experimental tile: a character language model whose weights are hardwired as logic, with a PCI Express host-card draft and a study of what a much larger hardwired model would need.
+
 <p align="center">
   <img src="assets/workflow.svg" alt="Circuit Weaver full pipeline — from install to KiCad export" width="100%">
 </p>

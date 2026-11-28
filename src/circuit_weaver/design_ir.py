@@ -87,6 +87,11 @@ def _normalize_metadata(spec: dict[str, Any]) -> dict[str, Any]:
     }
     if profile != "default":
         result["presentation_profile"] = profile
+    # A design may name the registry holding its project-owned part data. The
+    # resolver needs it after normalization, so it travels with the metadata.
+    components_db = str(spec.get("components_db") or "").strip()
+    if components_db:
+        result["components_db"] = components_db
     return result
 
 
@@ -531,6 +536,8 @@ def design_ir_to_engine_spec(ir: DesignIR) -> dict[str, Any]:
         "version": ir.metadata.get("version", ""),
         "description": ir.metadata.get("description", ""),
     }
+    if ir.metadata.get("components_db"):
+        spec["components_db"] = ir.metadata["components_db"]
     grouped: dict[str, list[dict[str, Any]]] = {}
     for block in ir.blocks:
         item: dict[str, Any]

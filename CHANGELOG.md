@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- Generate text with Heddle, an experimental Tiny Tapeout tile whose character language model is hardwired as logic, and check that logic bit for bit against its integer reference. [Heddle](asic/heddle/README.md)
+- Size a 16-billion-parameter hardwired model against the tile's measurements, and validate a PCI Express x1 host card for the tile. [Sizing study](asic/heddle/scaling.md) · [Host card](asic/heddle/card/README.md)
+
+### Fixed
+
+- `validate` and `generate` load the project-owned parts file named by a spec's `components_db` field.
+
 ## [0.38.0] - 2026-11-25
 
 ### Added

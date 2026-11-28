@@ -34,6 +34,17 @@ jobs:
           name: slot16-controller-trials
           path: ${{ runner.temp }}/controller-trials.json
 
+  heddle:
+    name: Heddle RTL, weight logic and gate replay
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install RTL tools
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends iverilog yosys
+      - name: Check the hardwired model against its reference
+        run: sh asic/heddle/check.sh
+
   test:
     name: Python ${{ matrix.python-version }} / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

@@ -1,0 +1,43 @@
+{
+  "DESIGN_NAME": "tt_um_heddle",
+  "VERILOG_FILES": [
+    "dir::tt_um_heddle.v",
+    "dir::heddle_core.v",
+    "dir::heddle_model.v"
+  ],
+  "VERILOG_INCLUDE_DIRS": [
+    "dir::."
+  ],
+  "CLOCK_PORT": "clk",
+  "CLOCK_PERIOD": 40,
+  "FP_SIZING": "absolute",
+  "FP_DEF_TEMPLATE": "dir::tile.def",
+  "RT_MAX_LAYER": "TopMetal1",
+  "VDD_PIN": "VPWR",
+  "GND_PIN": "VGND",
+  "TOP_MARGIN_MULT": 1,
+  "BOTTOM_MARGIN_MULT": 1,
+  "LEFT_MARGIN_MULT": 6,
+  "RIGHT_MARGIN_MULT": 6,
+  "PL_TARGET_DENSITY_PCT": 60,
+  "PNR_SDC_FILE": "dir::impl.sdc",
+  "SIGNOFF_SDC_FILE": "dir::signoff.sdc",
+  "MAX_SLEW_VIOLATION_CORNERS": [
+    "*"
+  ],
+  "MAX_CAP_VIOLATION_CORNERS": [
+    "*"
+  ],
+  "RUN_POST_GRT_DESIGN_REPAIR": true,
+  "RUN_POST_GRT_RESIZER_TIMING": true,
+  "PL_RESIZER_HOLD_SLACK_MARGIN": 0.1,
+  "GRT_RESIZER_HOLD_SLACK_MARGIN": 0.05,
+  "DESIGN_REPAIR_BUFFER_OUTPUT_PORTS": false,
+  "PDN_MULTILAYER": false,
+  "IO_PIN_H_LENGTH": 2,
+  "IO_PIN_V_LENGTH": 2,
+  "MAGIC_DEF_LABELS": false,
+  "PRIMARY_GDSII_STREAMOUT_TOOL": "klayout",
+  "MAGIC_WRITE_LEF_PINONLY": true,
+  "SYNTH_HIERARCHY_MODE": "deferred_flatten"
+}

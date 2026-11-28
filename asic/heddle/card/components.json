@@ -1,0 +1,1425 @@
+[
+ {
+  "mpn": "PCIE_X1_CARD_EDGE",
+  "ref_prefix": "J",
+  "value": "PCIe x1 edge",
+  "category": "connector",
+  "footprint": "Connector_PCBEdge:BUS_PCIexpress_x1",
+  "description": "PCI Express x1 add-in card edge fingers, sides A (solder) and B (component), 18 positions each",
+  "pins": [
+   {
+    "number": "B1",
+    "name": "+12V",
+    "electrical_type": "power_out",
+    "side": "L"
+   },
+   {
+    "number": "B2",
+    "name": "+12V",
+    "electrical_type": "power_out",
+    "side": "L"
+   },
+   {
+    "number": "B3",
+    "name": "+12V",
+    "electrical_type": "power_out",
+    "side": "L"
+   },
+   {
+    "number": "B4",
+    "name": "GND",
+    "electrical_type": "power_in",
+    "side": "L"
+   },
+   {
+    "number": "B5",
+    "name": "SMCLK",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "B6",
+    "name": "SMDAT",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "B7",
+    "name": "GND",
+    "electrical_type": "power_in",
+    "side": "L"
+   },
+   {
+    "number": "B8",
+    "name": "+3.3V",
+    "electrical_type": "power_out",
+    "side": "L"
+   },
+   {
+    "number": "B9",
+    "name": "JTAG_TRST#",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "B10",
+    "name": "+3.3VAUX",
+    "electrical_type": "power_out",
+    "side": "L"
+   },
+   {
+    "number": "B11",
+    "name": "WAKE#",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "B12",
+    "name": "CLKREQ#",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "B13",
+    "name": "GND",
+    "electrical_type": "power_in",
+    "side": "L"
+   },
+   {
+    "number": "B14",
+    "name": "PETP0",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "B15",
+    "name": "PETN0",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "B16",
+    "name": "GND",
+    "electrical_type": "power_in",
+    "side": "L"
+   },
+   {
+    "number": "B17",
+    "name": "PRSNT2#",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "B18",
+    "name": "GND",
+    "electrical_type": "power_in",
+    "side": "L"
+   },
+   {
+    "number": "A1",
+    "name": "PRSNT1#",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "A2",
+    "name": "+12V",
+    "electrical_type": "power_out",
+    "side": "R"
+   },
+   {
+    "number": "A3",
+    "name": "+12V",
+    "electrical_type": "power_out",
+    "side": "R"
+   },
+   {
+    "number": "A4",
+    "name": "GND",
+    "electrical_type": "power_in",
+    "side": "R"
+   },
+   {
+    "number": "A5",
+    "name": "JTAG_TCK",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "A6",
+    "name": "JTAG_TDI",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "A7",
+    "name": "JTAG_TDO",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "A8",
+    "name": "JTAG_TMS",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "A9",
+    "name": "+3.3V",
+    "electrical_type": "power_out",
+    "side": "R"
+   },
+   {
+    "number": "A10",
+    "name": "+3.3V",
+    "electrical_type": "power_out",
+    "side": "R"
+   },
+   {
+    "number": "A11",
+    "name": "PERST#",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "A12",
+    "name": "GND",
+    "electrical_type": "power_in",
+    "side": "R"
+   },
+   {
+    "number": "A13",
+    "name": "REFCLK+",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "A14",
+    "name": "REFCLK-",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "A15",
+    "name": "GND",
+    "electrical_type": "power_in",
+    "side": "R"
+   },
+   {
+    "number": "A16",
+    "name": "PERP0",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "A17",
+    "name": "PERN0",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "A18",
+    "name": "GND",
+    "electrical_type": "power_in",
+    "side": "R"
+   }
+  ]
+ },
+ {
+  "mpn": "AX99100AQI",
+  "ref_prefix": "U",
+  "value": "AX99100A",
+  "category": "digital",
+  "footprint": "Package_DFN_QFN:QFN-68-1EP_8x8mm_P0.4mm_EP5.2x5.2mm",
+  "description": "PCI Express x1 Gen1 bridge to SPI master, serial ports and GPIO, QFN-68 8x8 mm 0.4 mm pitch",
+  "datasheet_url": "https://www.asix.com.tw/en/support/download/file/1861",
+  "pins": [
+   {
+    "number": "1",
+    "name": "CTS1",
+    "electrical_type": "input",
+    "side": "L"
+   },
+   {
+    "number": "2",
+    "name": "DCD1",
+    "electrical_type": "input",
+    "side": "L"
+   },
+   {
+    "number": "3",
+    "name": "RI1",
+    "electrical_type": "input",
+    "side": "L"
+   },
+   {
+    "number": "4",
+    "name": "DSR1",
+    "electrical_type": "input",
+    "side": "L"
+   },
+   {
+    "number": "5",
+    "name": "RXD1",
+    "electrical_type": "input",
+    "side": "L"
+   },
+   {
+    "number": "6",
+    "name": "VCCIO",
+    "electrical_type": "power_in",
+    "side": "T"
+   },
+   {
+    "number": "7",
+    "name": "RTS1",
+    "electrical_type": "output",
+    "side": "L"
+   },
+   {
+    "number": "8",
+    "name": "DTR1",
+    "electrical_type": "bidirectional",
+    "side": "L"
+   },
+   {
+    "number": "9",
+    "name": "TXD1",
+    "electrical_type": "output",
+    "side": "L"
+   },
+   {
+    "number": "10",
+    "name": "VCCK",
+    "electrical_type": "power_in",
+    "side": "T"
+   },
+   {
+    "number": "11",
+    "name": "DOP",
+    "electrical_type": "output",
+    "side": "L"
+   },
+   {
+    "number": "12",
+    "name": "DON",
+    "electrical_type": "output",
+    "side": "L"
+   },
+   {
+    "number": "13",
+    "name": "NC",
+    "electrical_type": "no_connect",
+    "side": "L"
+   },
+   {
+    "number": "14",
+    "name": "VCC10A_AUX",
+    "electrical_type": "power_in",
+    "side": "T"
+   },
+   {
+    "number": "15",
+    "name": "DIP",
+    "electrical_type": "input",
+    "side": "L"
+   },
+   {
+    "number": "16",
+    "name": "DIN",
+    "electrical_type": "input",
+    "side": "L"
+   },
+   {
+    "number": "17",
+    "name": "REXT",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "18",
+    "name": "VCC10A_AUX",
+    "electrical_type": "power_in",
+    "side": "T"
+   },
+   {
+    "number": "19",
+    "name": "CLKP",
+    "electrical_type": "input",
+    "side": "L"
+   },
+   {
+    "number": "20",
+    "name": "CLKN",
+    "electrical_type": "input",
+    "side": "L"
+   },
+   {
+    "number": "21",
+    "name": "WAKEn",
+    "electrical_type": "open_collector",
+    "side": "L"
+   },
+   {
+    "number": "22",
+    "name": "VCCK",
+    "electrical_type": "power_in",
+    "side": "T"
+   },
+   {
+    "number": "23",
+    "name": "CLKREQn",
+    "electrical_type": "open_collector",
+    "side": "L"
+   },
+   {
+    "number": "24",
+    "name": "RSTn",
+    "electrical_type": "input",
+    "side": "L"
+   },
+   {
+    "number": "25",
+    "name": "EXT_CLK",
+    "electrical_type": "input",
+    "side": "L"
+   },
+   {
+    "number": "26",
+    "name": "VCCIO",
+    "electrical_type": "power_in",
+    "side": "T"
+   },
+   {
+    "number": "27",
+    "name": "SCL",
+    "electrical_type": "output",
+    "side": "L"
+   },
+   {
+    "number": "28",
+    "name": "TEST_MODE",
+    "electrical_type": "input",
+    "side": "L"
+   },
+   {
+    "number": "29",
+    "name": "EXT_CLK_PDn",
+    "electrical_type": "bidirectional",
+    "side": "L"
+   },
+   {
+    "number": "30",
+    "name": "SDA",
+    "electrical_type": "bidirectional",
+    "side": "L"
+   },
+   {
+    "number": "31",
+    "name": "SPI_SCLK",
+    "electrical_type": "output",
+    "side": "L"
+   },
+   {
+    "number": "32",
+    "name": "SPI_MOSI",
+    "electrical_type": "output",
+    "side": "L"
+   },
+   {
+    "number": "33",
+    "name": "SPI_MISO",
+    "electrical_type": "input",
+    "side": "L"
+   },
+   {
+    "number": "34",
+    "name": "SPI_SS0",
+    "electrical_type": "output",
+    "side": "L"
+   },
+   {
+    "number": "35",
+    "name": "VO10",
+    "electrical_type": "power_out",
+    "side": "T"
+   },
+   {
+    "number": "36",
+    "name": "VCC33A_REG",
+    "electrical_type": "power_in",
+    "side": "T"
+   },
+   {
+    "number": "37",
+    "name": "VCCK",
+    "electrical_type": "power_in",
+    "side": "T"
+   },
+   {
+    "number": "38",
+    "name": "SWAKEn",
+    "electrical_type": "input",
+    "side": "R"
+   },
+   {
+    "number": "39",
+    "name": "VCCIO",
+    "electrical_type": "power_in",
+    "side": "T"
+   },
+   {
+    "number": "40",
+    "name": "SPI_SS1",
+    "electrical_type": "output",
+    "side": "R"
+   },
+   {
+    "number": "41",
+    "name": "SPI_SS2",
+    "electrical_type": "output",
+    "side": "R"
+   },
+   {
+    "number": "42",
+    "name": "SPI_SS3",
+    "electrical_type": "output",
+    "side": "R"
+   },
+   {
+    "number": "43",
+    "name": "P3_DATA7",
+    "electrical_type": "bidirectional",
+    "side": "R"
+   },
+   {
+    "number": "44",
+    "name": "P3_DATA6",
+    "electrical_type": "bidirectional",
+    "side": "R"
+   },
+   {
+    "number": "45",
+    "name": "P3_DATA5",
+    "electrical_type": "bidirectional",
+    "side": "R"
+   },
+   {
+    "number": "46",
+    "name": "P3_DATA4",
+    "electrical_type": "bidirectional",
+    "side": "R"
+   },
+   {
+    "number": "47",
+    "name": "P3_DATA3",
+    "electrical_type": "bidirectional",
+    "side": "R"
+   },
+   {
+    "number": "48",
+    "name": "P3_DATA2",
+    "electrical_type": "bidirectional",
+    "side": "R"
+   },
+   {
+    "number": "49",
+    "name": "P3_DATA1",
+    "electrical_type": "bidirectional",
+    "side": "R"
+   },
+   {
+    "number": "50",
+    "name": "P3_DATA0",
+    "electrical_type": "bidirectional",
+    "side": "R"
+   },
+   {
+    "number": "51",
+    "name": "GPIO0",
+    "electrical_type": "bidirectional",
+    "side": "R"
+   },
+   {
+    "number": "52",
+    "name": "GPIO1",
+    "electrical_type": "bidirectional",
+    "side": "R"
+   },
+   {
+    "number": "53",
+    "name": "GPIO2",
+    "electrical_type": "output",
+    "side": "R"
+   },
+   {
+    "number": "54",
+    "name": "GPIO3_CHIP_MODE0",
+    "electrical_type": "output",
+    "side": "R"
+   },
+   {
+    "number": "55",
+    "name": "VCCIO",
+    "electrical_type": "power_in",
+    "side": "T"
+   },
+   {
+    "number": "56",
+    "name": "GPIO4_CHIP_MODE1",
+    "electrical_type": "output",
+    "side": "R"
+   },
+   {
+    "number": "57",
+    "name": "VCCK",
+    "electrical_type": "power_in",
+    "side": "T"
+   },
+   {
+    "number": "58",
+    "name": "GPIO5_CHIP_MODE2",
+    "electrical_type": "output",
+    "side": "R"
+   },
+   {
+    "number": "59",
+    "name": "GPIO6",
+    "electrical_type": "bidirectional",
+    "side": "R"
+   },
+   {
+    "number": "60",
+    "name": "GPIO7",
+    "electrical_type": "bidirectional",
+    "side": "R"
+   },
+   {
+    "number": "61",
+    "name": "CTS2",
+    "electrical_type": "input",
+    "side": "R"
+   },
+   {
+    "number": "62",
+    "name": "DCD2",
+    "electrical_type": "input",
+    "side": "R"
+   },
+   {
+    "number": "63",
+    "name": "DSR2",
+    "electrical_type": "input",
+    "side": "R"
+   },
+   {
+    "number": "64",
+    "name": "RI2",
+    "electrical_type": "input",
+    "side": "R"
+   },
+   {
+    "number": "65",
+    "name": "RXD2",
+    "electrical_type": "input",
+    "side": "R"
+   },
+   {
+    "number": "66",
+    "name": "RTS2",
+    "electrical_type": "output",
+    "side": "R"
+   },
+   {
+    "number": "67",
+    "name": "DTR2",
+    "electrical_type": "bidirectional",
+    "side": "R"
+   },
+   {
+    "number": "68",
+    "name": "TXD2",
+    "electrical_type": "output",
+    "side": "R"
+   },
+   {
+    "number": "69",
+    "name": "EPAD",
+    "electrical_type": "power_in",
+    "side": "B"
+   }
+  ]
+ },
+ {
+  "mpn": "AT24C02D-SSHM",
+  "ref_prefix": "U",
+  "value": "24C02",
+  "category": "digital",
+  "footprint": "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
+  "description": "2 Kbit I2C EEPROM with 8-bit word addressing, SOIC-8",
+  "pins": [
+   {
+    "number": "1",
+    "name": "A0",
+    "electrical_type": "input",
+    "side": "L"
+   },
+   {
+    "number": "2",
+    "name": "A1",
+    "electrical_type": "input",
+    "side": "L"
+   },
+   {
+    "number": "3",
+    "name": "A2",
+    "electrical_type": "input",
+    "side": "L"
+   },
+   {
+    "number": "4",
+    "name": "GND",
+    "electrical_type": "power_in",
+    "side": "B"
+   },
+   {
+    "number": "5",
+    "name": "SDA",
+    "electrical_type": "bidirectional",
+    "side": "R"
+   },
+   {
+    "number": "6",
+    "name": "SCL",
+    "electrical_type": "input",
+    "side": "R"
+   },
+   {
+    "number": "7",
+    "name": "WP",
+    "electrical_type": "input",
+    "side": "R"
+   },
+   {
+    "number": "8",
+    "name": "VCC",
+    "electrical_type": "power_in",
+    "side": "T"
+   }
+  ]
+ },
+ {
+  "mpn": "OSC_CMOS_3V3_3225",
+  "ref_prefix": "X",
+  "value": "25MHz",
+  "category": "digital",
+  "footprint": "Oscillator:Oscillator_SMD_Abracon_ASE-4Pin_3.2x2.5mm",
+  "description": "25 MHz 3.3 V CMOS clock oscillator, 4-pad 3.2 x 2.5 mm",
+  "pins": [
+   {
+    "number": "1",
+    "name": "EN",
+    "electrical_type": "input",
+    "side": "L"
+   },
+   {
+    "number": "2",
+    "name": "GND",
+    "electrical_type": "power_in",
+    "side": "B"
+   },
+   {
+    "number": "3",
+    "name": "OUT",
+    "electrical_type": "output",
+    "side": "R"
+   },
+   {
+    "number": "4",
+    "name": "VDD",
+    "electrical_type": "power_in",
+    "side": "T"
+   }
+  ]
+ },
+ {
+  "mpn": "DF12NB(5.0)-60DP-0.5V",
+  "ref_prefix": "J",
+  "value": "DF12NB(5.0)-60DP-0.5V",
+  "category": "connector",
+  "footprint": "Connector_Hirose:Hirose_DF12_DF12E5.0-60DP-0.5V_2x30_P0.50mm_Vertical",
+  "description": "60-position 0.5 mm board-to-board header, 5 mm stack, mates with the Tiny Tapeout IHP breakout",
+  "pins": [
+   {
+    "number": "1",
+    "name": "P1",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "2",
+    "name": "P2",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "3",
+    "name": "P3",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "4",
+    "name": "P4",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "5",
+    "name": "P5",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "6",
+    "name": "P6",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "7",
+    "name": "P7",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "8",
+    "name": "P8",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "9",
+    "name": "P9",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "10",
+    "name": "P10",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "11",
+    "name": "P11",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "12",
+    "name": "P12",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "13",
+    "name": "P13",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "14",
+    "name": "P14",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "15",
+    "name": "P15",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "16",
+    "name": "P16",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "17",
+    "name": "P17",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "18",
+    "name": "P18",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "19",
+    "name": "P19",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "20",
+    "name": "P20",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "21",
+    "name": "P21",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "22",
+    "name": "P22",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "23",
+    "name": "P23",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "24",
+    "name": "P24",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "25",
+    "name": "P25",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "26",
+    "name": "P26",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "27",
+    "name": "P27",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "28",
+    "name": "P28",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "29",
+    "name": "P29",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "30",
+    "name": "P30",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "31",
+    "name": "P31",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "32",
+    "name": "P32",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "33",
+    "name": "P33",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "34",
+    "name": "P34",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "35",
+    "name": "P35",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "36",
+    "name": "P36",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "37",
+    "name": "P37",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "38",
+    "name": "P38",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "39",
+    "name": "P39",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "40",
+    "name": "P40",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "41",
+    "name": "P41",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "42",
+    "name": "P42",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "43",
+    "name": "P43",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "44",
+    "name": "P44",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "45",
+    "name": "P45",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "46",
+    "name": "P46",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "47",
+    "name": "P47",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "48",
+    "name": "P48",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "49",
+    "name": "P49",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "50",
+    "name": "P50",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "51",
+    "name": "P51",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "52",
+    "name": "P52",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "53",
+    "name": "P53",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "54",
+    "name": "P54",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "55",
+    "name": "P55",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "56",
+    "name": "P56",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "57",
+    "name": "P57",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "58",
+    "name": "P58",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "59",
+    "name": "P59",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "60",
+    "name": "P60",
+    "electrical_type": "passive",
+    "side": "R"
+   }
+  ]
+ },
+ {
+  "mpn": "DF12NB(5.0)-50DP-0.5V",
+  "ref_prefix": "J",
+  "value": "DF12NB(5.0)-50DP-0.5V",
+  "category": "connector",
+  "footprint": "Connector_Hirose:Hirose_DF12_DF12E5.0-50DP-0.5V_2x25_P0.50mm_Vertical",
+  "description": "50-position 0.5 mm board-to-board header, 5 mm stack, mates with the Tiny Tapeout IHP breakout",
+  "pins": [
+   {
+    "number": "1",
+    "name": "P1",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "2",
+    "name": "P2",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "3",
+    "name": "P3",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "4",
+    "name": "P4",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "5",
+    "name": "P5",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "6",
+    "name": "P6",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "7",
+    "name": "P7",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "8",
+    "name": "P8",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "9",
+    "name": "P9",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "10",
+    "name": "P10",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "11",
+    "name": "P11",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "12",
+    "name": "P12",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "13",
+    "name": "P13",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "14",
+    "name": "P14",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "15",
+    "name": "P15",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "16",
+    "name": "P16",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "17",
+    "name": "P17",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "18",
+    "name": "P18",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "19",
+    "name": "P19",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "20",
+    "name": "P20",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "21",
+    "name": "P21",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "22",
+    "name": "P22",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "23",
+    "name": "P23",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "24",
+    "name": "P24",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "25",
+    "name": "P25",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "26",
+    "name": "P26",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "27",
+    "name": "P27",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "28",
+    "name": "P28",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "29",
+    "name": "P29",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "30",
+    "name": "P30",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "31",
+    "name": "P31",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "32",
+    "name": "P32",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "33",
+    "name": "P33",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "34",
+    "name": "P34",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "35",
+    "name": "P35",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "36",
+    "name": "P36",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "37",
+    "name": "P37",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "38",
+    "name": "P38",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "39",
+    "name": "P39",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "40",
+    "name": "P40",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "41",
+    "name": "P41",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "42",
+    "name": "P42",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "43",
+    "name": "P43",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "44",
+    "name": "P44",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "45",
+    "name": "P45",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "46",
+    "name": "P46",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "47",
+    "name": "P47",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "48",
+    "name": "P48",
+    "electrical_type": "passive",
+    "side": "R"
+   },
+   {
+    "number": "49",
+    "name": "P49",
+    "electrical_type": "passive",
+    "side": "L"
+   },
+   {
+    "number": "50",
+    "name": "P50",
+    "electrical_type": "passive",
+    "side": "R"
+   }
+  ]
+ }
+]
